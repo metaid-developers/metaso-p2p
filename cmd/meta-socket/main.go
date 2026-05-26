@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/meta-socket/internal/aggregator/groupchat"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
 	"github.com/metaid-developers/meta-socket/internal/api"
@@ -54,6 +55,9 @@ func main() {
 		}
 		if err := aggRegistry.Register(&userinfo.Aggregator{}); err != nil {
 			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
+		}
+		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
+			log.Printf("WARNING: groupchat aggregator init failed: %v", err)
 		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
