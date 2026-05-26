@@ -1,0 +1,311 @@
+# meta-socket configuration (TOML)
+#
+# All settings can also be set via META_SOCKET_* environment variables.
+# Environment variables take precedence over values in this file.
+#
+# Default values shown below are the built-in defaults used when
+# neither the TOML file nor an env var provides a value.
+
+# ---------------------------------------------------------------------------
+# [service]  HTTP server settings
+# ---------------------------------------------------------------------------
+[service]
+# Address the HTTP server listens on.
+# Env: META_SOCKET_HTTP_ADDR
+httpAddr = ":8080"
+
+# Health check endpoint path (must start with "/").
+# Env: META_SOCKET_HEALTH_PATH
+healthPath = "/healthz"
+
+# Maximum time to wait for in-flight requests during graceful shutdown.
+# Format: Go duration string (e.g. "10s", "30s").
+# Env: META_SOCKET_SHUTDOWN_TIMEOUT
+shutdownTimeout = "10s"
+
+# ---------------------------------------------------------------------------
+# [socket]  Socket.IO server settings
+# ---------------------------------------------------------------------------
+[socket]
+# Enable the Socket.IO server. When disabled, no real-time push or
+# connection handling is started.
+# Env: META_SOCKET_SOCKET_ENABLED
+enabled = true
+
+# Primary Socket.IO path (must start with "/").
+# Env: META_SOCKET_SOCKET_PATH
+primaryPath = "/socket/socket.io"
+
+# Legacy compatibility path (must start with "/").
+# Env: META_SOCKET_SOCKET_LEGACY_PATH
+legacyPath = "/socket.io"
+
+# When true, group-chat room broadcast events (join/leave) are emitted.
+# Env: META_SOCKET_SOCKET_ROOM_BROADCAST_ENABLED
+roomBroadcastEnabled = true
+
+# Maximum concurrent Socket.IO connections.
+# Env: META_SOCKET_SOCKET_MAX_CONNECTIONS
+maxConnections = 10000
+
+# Maximum "pc" type connections per user (metaid).
+# Env: META_SOCKET_SOCKET_MAX_PC_PER_USER
+maxPcPerUser = 3
+
+# Maximum "app" type connections per user (metaid).
+# Env: META_SOCKET_SOCKET_MAX_APP_PER_USER
+maxAppPerUser = 3
+
+# Interval between server-to-client pings.
+# Format: Go duration string (e.g. "2s").
+# Env: META_SOCKET_SOCKET_PING_INTERVAL
+pingInterval = "2s"
+
+# How long the server waits for a pong before disconnecting.
+# Format: Go duration string (e.g. "5s").
+# Env: META_SOCKET_SOCKET_PING_TIMEOUT
+pingTimeout = "5s"
+
+# Allow Engine.IO v3 clients to connect (needed by idchat).
+# Env: META_SOCKET_SOCKET_ALLOW_EIO3
+allowEio3 = true
+
+# Optional extra auth key for push endpoints.
+# When set, the X-Signature header on push endpoints must match
+# SHA256("metaso.network") and X-Public-Key must match this value.
+# Leave empty to skip push auth verification (test/development mode).
+# Env: META_SOCKET_SOCKET_EXTRA_PUSH_AUTH_KEY
+extraPushAuthKey = ""
+
+# ---------------------------------------------------------------------------
+# [pebble]  PebbleDB embedded storage
+# ---------------------------------------------------------------------------
+[pebble]
+# Enable PebbleDB persistent storage. When disabled, all data is
+# in-memory only and lost on restart.
+# Env: META_SOCKET_PEBBLE_ENABLED
+enabled = true
+
+# Directory for PebbleDB data files. Created if it does not exist.
+# Env: META_SOCKET_PEBBLE_DATA_DIR
+dataDir = "./data/pebble"
+
+# ---------------------------------------------------------------------------
+# [cache]  Two-level LRU cache settings
+# ---------------------------------------------------------------------------
+[cache]
+# Maximum number of entries in the L1 in-memory LRU cache.
+# Env: META_SOCKET_CACHE_MAX_ENTRIES (int)
+maxEntries = 10000
+
+# Default TTL (time-to-live) in seconds for cached entries.
+# Env: META_SOCKET_CACHE_DEFAULT_TTL_SECONDS (int)
+defaultTtlSeconds = 300
+
+# ---------------------------------------------------------------------------
+# [profile]  User profile (identity) resolver settings
+# ---------------------------------------------------------------------------
+[profile]
+# Enable profile resolution. When disabled, user info endpoints return
+# empty data.
+# Env: META_SOCKET_PROFILE_ENABLED
+enabled = true
+
+# Resolution mode:
+#   "local-first"  – query local indexer first, fall back to remote.
+#   "remote-only"  – always query the remote base URL.
+#   "local-only"   – never query remote.
+# Env: META_SOCKET_PROFILE_MODE
+mode = "local-first"
+
+# Base URL of the remote profile service (used in remote / fallback modes).
+# Env: META_SOCKET_PROFILE_REMOTE_BASE_URL
+remoteBaseURL = ""
+
+# When mode is "local-first" and local lookup returns nothing, whether to
+# try the remote service.
+# Env: META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK
+allowRemoteFallback = true
+
+# ---------------------------------------------------------------------------
+# [groupChat]  Group chat feature flags
+# ---------------------------------------------------------------------------
+[groupChat]
+# Enable message migration endpoints (copy messages between PebbleDB stores).
+# Env: META_SOCKET_GROUPCHAT_MIGRATION_ENABLED
+migrationEnabled = true
+
+# Enable backup endpoints.
+# Env: META_SOCKET_GROUPCHAT_BACKUP_ENABLED
+backupEnabled = false
+
+# Enable lucky-bag feature (P0 exclusion – disabled by default).
+# Env: META_SOCKET_GROUPCHAT_LUCKYBAG_ENABLED
+luckyBagEnabled = false
+
+# Enable gRPC endpoints (P0 exclusion – disabled by default).
+# Env: META_SOCKET_GROUPCHAT_GRPC_ENABLED
+grpcEnabled = false
+
+# Enable heavy/slow API endpoints (P0 exclusion – disabled by default).
+# Env: META_SOCKET_GROUPCHAT_HEAVY_API_ENABLED
+heavyApiEnabled = false
+
+# ---------------------------------------------------------------------------
+# [blockIndex]  Blockchain block scanning (indexer)
+#
+#   When [blockIndex].enabled is true the indexer engine starts and scans
+#   every enabled chain for new blocks. Each chain's [blockIndex.<chain>]
+#   section must also have enabled = true.
+# ---------------------------------------------------------------------------
+[blockIndex]
+# Master toggle for the entire block-indexing engine.
+# Env: META_SOCKET_BLOCK_INDEX_ENABLED (not wired in code – set below per-chain)
+enabled = false
+
+  # --- Bitcoin (BTC) ---
+  [blockIndex.btc]
+  # Enable BTC chain indexing.
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_ENABLED (not wired in code)
+  enabled = false
+
+  # BTC JSON-RPC endpoint (host:port).
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HOST (not wired in code)
+  rpcHost = "127.0.0.1:8332"
+
+  # BTC RPC username.
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_USER (not wired in code)
+  rpcUser = ""
+
+  # BTC RPC password.
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_PASS (not wired in code)
+  rpcPass = ""
+
+  # Use HTTP POST mode for RPC requests (vs. standard JSON-RPC).
+  rpcHttpPostMode = true
+
+  # Disable TLS for the RPC connection.
+  rpcDisableTls = true
+
+  # Block height to start scanning from (0 = current chain tip).
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_INITIAL_HEIGHT (not wired in code)
+  initialHeight = 0
+
+  # --- MicroVision Chain (MVC) ---
+  [blockIndex.mvc]
+  enabled = false
+  rpcHost = "127.0.0.1:8332"
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  initialHeight = 0
+
+  # --- Dogecoin (DOGE) ---
+  [blockIndex.doge]
+  enabled = false
+  rpcHost = "127.0.0.1:8332"
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  initialHeight = 0
+
+  # --- OPCAT ---
+  [blockIndex.opcat]
+  enabled = false
+  rpcHost = "127.0.0.1:8332"
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  initialHeight = 0
+
+# ---------------------------------------------------------------------------
+# [zmq]  ZeroMQ mempool monitoring
+#
+#   When [zmq].enabled is true the ZMQ event loop starts and subscribes to
+#   rawtx (or other) topics on every enabled chain. Each chain's [zmq.<chain>]
+#   section must also have enabled = true.
+# ---------------------------------------------------------------------------
+[zmq]
+# Master toggle for ZMQ mempool monitoring.
+# Env: META_SOCKET_ZMQ_ENABLED
+enabled = false
+
+  # --- Bitcoin (BTC) ZMQ ---
+  [zmq.btc]
+  # Enable BTC mempool ZMQ subscription.
+  # Env: META_SOCKET_ZMQ_BTC_ENABLED
+  enabled = false
+
+  # ZMQ PUB endpoint address (e.g. "tcp://127.0.0.1:28332").
+  # Env: META_SOCKET_ZMQ_BTC_ENDPOINT
+  endpoint = ""
+
+  # ZMQ topic to subscribe to (e.g. "rawtx", "hashblock").
+  # Env: META_SOCKET_ZMQ_BTC_TOPIC
+  topic = "rawtx"
+
+  # Fallback JSON-RPC host used by the indexer when ZMQ drops events.
+  # Env: META_SOCKET_ZMQ_BTC_RPC_HOST
+  rpcHost = ""
+
+  # RPC credentials for the ZMQ fallback host.
+  # Env: META_SOCKET_ZMQ_BTC_RPC_USER
+  rpcUser = ""
+
+  # Env: META_SOCKET_ZMQ_BTC_RPC_PASS
+  rpcPass = ""
+
+  # Use HTTP POST mode for RPC requests.
+  # Env: META_SOCKET_ZMQ_BTC_RPC_HTTP_POST_MODE
+  rpcHttpPostMode = true
+
+  # Disable TLS for the RPC connection.
+  # Env: META_SOCKET_ZMQ_BTC_RPC_DISABLE_TLS
+  rpcDisableTls = true
+
+  # --- MicroVision Chain (MVC) ZMQ ---
+  [zmq.mvc]
+  enabled = false
+  endpoint = ""
+  topic = "rawtx"
+  rpcHost = ""
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  # Env: META_SOCKET_ZMQ_MVC_ENABLED, META_SOCKET_ZMQ_MVC_ENDPOINT,
+  #      META_SOCKET_ZMQ_MVC_TOPIC, META_SOCKET_ZMQ_MVC_RPC_HOST,
+  #      META_SOCKET_ZMQ_MVC_RPC_USER, META_SOCKET_ZMQ_MVC_RPC_PASS,
+  #      META_SOCKET_ZMQ_MVC_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_ZMQ_MVC_RPC_DISABLE_TLS
+
+  # --- Dogecoin (DOGE) ZMQ ---
+  [zmq.doge]
+  enabled = false
+  endpoint = ""
+  topic = "rawtx"
+  rpcHost = ""
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  # Env: META_SOCKET_ZMQ_DOGE_ENABLED, META_SOCKET_ZMQ_DOGE_ENDPOINT,
+  #      META_SOCKET_ZMQ_DOGE_TOPIC, META_SOCKET_ZMQ_DOGE_RPC_HOST,
+  #      META_SOCKET_ZMQ_DOGE_RPC_USER, META_SOCKET_ZMQ_DOGE_RPC_PASS,
+  #      META_SOCKET_ZMQ_DOGE_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_ZMQ_DOGE_RPC_DISABLE_TLS
+
+  # --- OPCAT ZMQ ---
+  [zmq.opcat]
+  enabled = false
+  endpoint = ""
+  topic = "rawtx"
+  rpcHost = ""
+  rpcUser = ""
+  rpcPass = ""
+  rpcHttpPostMode = true
+  rpcDisableTls = true
+  # Note: OPCAT ZMQ env vars are not wired in config.Load() as of phase 6.
