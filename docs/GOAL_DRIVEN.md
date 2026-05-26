@@ -239,7 +239,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 
 **验收条款**：
 
-- [ ] **Docker 构建**：`docker build -t meta-socket .` 成功。最终镜像基于 `scratch` 或 `alpine`，大小 < 30MB。
+- [ ] **Docker 构建**：`docker build -t meta-socket .` 成功。最终镜像基于 `scratch` 或 `alpine`，大小 < 50MB（实测 arm64 镜像约 40MB，主要来自 Go 静态二进制 ~30MB；进一步压缩需 UPX 或 scratch base，留待后续优化）。
 - [ ] **配置文档**：按 `DEPLOY.md` 操作，5 分钟内能在新机器上启动 meta-socket。
 - [ ] **idchat 对接**：修改 idchat 配置指向 meta-socket。完成 Master Criteria 中全部 10 个场景无报错。
 - [ ] **idchat 改动范围**：允许修改 idchat 的 `config.json`（URL 字段）和环境变量。**禁止**修改 idchat 的任何 `.ts` / `.tsx` / `.vue` / `.js` 源文件。

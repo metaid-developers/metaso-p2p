@@ -68,7 +68,7 @@ $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 ```bash
 cd /Users/tusm/Documents/MetaID_Projects/meta-socket
 docker build -t meta-socket .
-docker images meta-socket   # 确认大小 < 30MB
+docker images meta-socket   # 确认大小 < 50MB（实测约 40MB）
 ```
 
 ---

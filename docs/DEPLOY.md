@@ -33,7 +33,7 @@ docker build -t meta-socket .
 
 The Dockerfile uses a multi-stage build:
 1. **Stage 1** (`golang:1.26-alpine`): compiles the Go binary with `CGO_ENABLED=0` and stripped symbols.
-2. **Stage 2** (`alpine:3.21`): copies only the binary, adds CA certs and tzdata. Final image is under 30 MB.
+2. **Stage 2** (`alpine:3.21`): copies only the binary, adds CA certs and tzdata. Final image is under 50 MB (about 40 MB on arm64 — the static Go binary alone is ~30 MB; further compression with UPX or a `scratch` base is a potential future optimization).
 
 ### Run
 
