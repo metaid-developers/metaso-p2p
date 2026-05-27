@@ -264,3 +264,32 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 3. **master 不写代码**：只做验收和调度。发现问题 → 让 subagent 修复，不直接改代码。
 4. **Phase 严格顺序**：Phase 2→7 不可并行。每个 Phase 必须在上一 Phase 全部验收通过后才能开始。
 5. **最终验收**：Phase 7 完成后，对照 Master Criteria 逐一验收。全部通过才宣布 v1 完成。
+
+---
+
+## Phase 8 (post-v1): Bot Hub Skill-Service 聚合 API
+
+**子目标**：为 IDBots Bot Hub 前端提供 `/api/bot-hub/skill-service/*` 聚合接口。完整 wire contract 见 `docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`。
+
+**关键设计原则**：
+- 聚合端只输出声明事实和可验证统计，不输出 `canOrder` / `available` / `disabledReason` 等动作许可裁决字段。
+- v1 强制同链版本链：create/modify/revoke 必须在同一 `chainName` 下；跨链 modify/revoke 等协议层补 `originalChainName` 后再支持。
+- 走 meta-socket 主体响应约定（`code=0` success，错误码 `40000/40400/50000`），不复用 `/api/info/*` 的 `code=1` 兼容模式。
+
+**Milestone（每个独立 commit + buzz）**：
+
+| Milestone | 内容 | 验收 |
+| --- | --- | --- |
+| M0 | spec 落地 + README / CLAUDE / GOAL_DRIVEN 更新 | spec 在 `docs/specs/`；项目说明提及 Bot Hub |
+| M1 | `internal/aggregator/skillservice/` 模块骨架；索引 `/protocols/skill-service`；`originalId` 同链折叠；PebbleDB 持久化当前服务视图 | 构造同链 create+modify+revoke pin → Pebble 中只剩 latest；revoke 默认不可见；缺失 `originalId` 走 fallback；跨链 originalId 不折叠并记 fallback 日志 |
+| M2 | provider profile 接入；in-process 读 `userinfo` 聚合；补 `providerName/providerAvatar/providerChatPubkey` | request path 不调外部 manapi；profile 缺失透传 null 不转裁决码 |
+| M3 | `/protocols/skill-service-rate` 索引与评分聚合；avg/count；`serviceID` 反查归一到 `sourceServicePinId` | 单测覆盖 source id / current id / 旧版本 id 三种 rating 输入 |
+| M4 | asset URL 解析；`META_SOCKET_ASSET_BASE_URL` 配置 | serviceIcon/providerAvatar 都返回可加载 URL；已是 http(s) URL 时原样透传 |
+| M5 | `GET /api/bot-hub/skill-service/list`；filter/sort/cursor paginate；错误码 envelope；`code=0 success` | 集成测试覆盖筛选、排序、分页、错误 code、`includeInactive` 边界 |
+| M6 | `GET /api/bot-hub/skill-service/detail/:serviceId`；`service` + `provider` 字段；`mrc20Ticker/Id` MRC20 路径 | 集成测试覆盖 currentPinId / sourceServicePinId 查询、缺失声明字段透传、MRC20 详情；不返回动作许可判断 |
+
+**第一阶段交付到 M6**。ratings 分页 / revisions 分页 / 订单统计 / 退款风险 / relatedServices / request schema 留到后续，明确产品需要再做。
+
+**前置依赖**：
+- `cmd/meta-socket/main.go` 必须 wire MVC indexer 才能真链验证（M5/M6 集成测试前补即可，M1-M4 用构造的 PIN 数据走单测）。
+- skill-service 协议在 `internal/aggregator/` 注册顺序：现有 4 个 aggregator 之后追加 `skillservice.Aggregator`。

@@ -4,13 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Meta-Socket is a modular, high-performance middleware backend for the MetaID protocol. It serves as a drop-in replacement for **idchat** (a decentralized chat application), requiring zero code changes to idchat itself — only configuration URLs change. It provides:
+Meta-Socket is a modular, high-performance middleware backend for the MetaID protocol. It serves two consumer applications:
+
+1. **idchat** (decentralized chat) — drop-in replacement requiring zero code changes; only config URLs change.
+2. **IDBots Bot Hub** (skill-service marketplace) — backend aggregation for the `/protocols/skill-service` family. See `docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`.
+
+It provides:
 
 - Real-time Socket.IO push for group chat, private chat, and role-change notifications
 - Group/private chat aggregation (message indexing, history queries)
 - User identity indexing (name, avatar, bio, chat key)
 - Chat blocking/unblocking management
 - Multi-chain blockchain indexing (BTC, MVC, DOGE, OPCAT)
+- Bot Hub skill-service aggregation: `/protocols/skill-service` create/modify/revoke version folding, rating aggregation, provider profile completion, asset URL resolution
+- Read-model HTTP APIs for the IDBots Bot Hub frontend
 
 **Tech stack:** Go 1.26, Gin HTTP framework, Socket.IO v2 (Go), Pebble embedded storage, btcd RPC, ZMQ mempool, two-level LRU cache.
 
@@ -55,7 +62,8 @@ Key principles:
 | `internal/api/` | Unified JSON response format `{code, data, message, processingTime}` |
 | `internal/chain/` | Chain and Indexer interfaces + BTC/MVC/DOGE/OPCAT adapters |
 | `internal/indexer/` | Block scanning engine + ZMQ mempool loop |
-| `internal/aggregator/` | Aggregator interface, Registry, and domain modules (userinfo, groupchat, privatechat, notify) |
+| `internal/aggregator/` | Aggregator interface, Registry, and domain modules (userinfo, groupchat, privatechat, notify, skillservice) |
+| `docs/specs/` | Versioned, dated specifications (e.g. Bot Hub skill-service aggregation API) |
 
 ### Development Phases
 

@@ -1,17 +1,19 @@
 # meta-socket
 
-A modular, high-performance middleware for the MetaID protocol. Provides real-time Socket.IO push, group chat / private chat aggregation, user identity indexing, and chat management — all backed by a pure PebbleDB storage layer with zero external database dependencies.
+A modular, high-performance middleware for the MetaID protocol. Provides real-time Socket.IO push, group chat / private chat aggregation, user identity indexing, chat management, and Bot Hub skill-service aggregation — all backed by a pure PebbleDB storage layer with zero external database dependencies.
 
 ## Architecture
 
 ```
 Chain RPC + ZMQ  →  Indexer Engine  →  Aggregator Registry
-                                         ├── UserInfo Aggregator    (HTTP + cache)
-                                         ├── GroupChat Aggregator   (HTTP + push)
-                                         ├── PrivateChat Aggregator (HTTP + push)
-                                         └── Notify Aggregator      (HTTP)
+                                         ├── UserInfo Aggregator     (HTTP + cache)
+                                         ├── GroupChat Aggregator    (HTTP + push)
+                                         ├── PrivateChat Aggregator  (HTTP + push)
+                                         ├── Notify Aggregator       (HTTP)
+                                         └── SkillService Aggregator (HTTP, Bot Hub)
                                               │
                                          Socket.IO Server  →  idchat clients
+                                         HTTP / JSON       →  IDBots Bot Hub
 ```
 
 - **Chain adapters** (`internal/chain/`) — RPC + parsing for BTC, MVC, DOGE, OPCAT
@@ -68,6 +70,12 @@ Key sections:
 ### Socket.IO
 - Connect: `wss://host/socket/socket.io?metaid=<globalMetaId>&type=pc|app`
 - Events: `WS_SERVER_NOTIFY_GROUP_CHAT`, `WS_SERVER_NOTIFY_PRIVATE_CHAT`, `WS_SERVER_NOTIFY_GROUP_ROLE`
+
+### Bot Hub Skill Service
+- `GET /api/bot-hub/skill-service/list` — paginated skill-service listing for the Bot Hub
+- `GET /api/bot-hub/skill-service/detail/:serviceId` — service detail including provider profile and payment declaration
+
+See [`docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`](docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md) for the full v1 contract.
 
 ## Development
 
