@@ -12,6 +12,7 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/aggregator/groupchat"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/privatechat"
+	"github.com/metaid-developers/meta-socket/internal/aggregator/skillservice"
 	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
@@ -62,6 +63,9 @@ func main() {
 		}
 		if err := aggRegistry.Register(&privatechat.Aggregator{}); err != nil {
 			log.Printf("WARNING: privatechat aggregator init failed: %v", err)
+		}
+		if err := aggRegistry.Register(&skillservice.Aggregator{}); err != nil {
+			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
