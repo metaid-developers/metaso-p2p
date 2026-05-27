@@ -19,9 +19,10 @@ import (
 // changes over Socket.IO. The Bot Hub frontend polls the HTTP API and the
 // 30s p95 fresh-view target is met by the indexer scan loop cadence.
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
+	store         *storage.PebbleStore
+	cache         *cache.Cache[[]byte]
+	notifyCh      chan *aggregator.NotifyEvent
+	profileLookup ProfileLookup // nil-safe; see ResolveProvider
 }
 
 const (

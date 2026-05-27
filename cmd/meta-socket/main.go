@@ -55,7 +55,8 @@ func main() {
 		if err := aggRegistry.Register(&notify.Aggregator{}); err != nil {
 			log.Printf("WARNING: notify aggregator init failed: %v", err)
 		}
-		if err := aggRegistry.Register(&userinfo.Aggregator{}); err != nil {
+		userinfoAgg := &userinfo.Aggregator{}
+		if err := aggRegistry.Register(userinfoAgg); err != nil {
 			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
 		}
 		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
@@ -64,9 +65,15 @@ func main() {
 		if err := aggRegistry.Register(&privatechat.Aggregator{}); err != nil {
 			log.Printf("WARNING: privatechat aggregator init failed: %v", err)
 		}
-		if err := aggRegistry.Register(&skillservice.Aggregator{}); err != nil {
+		skillserviceAgg := &skillservice.Aggregator{}
+		if err := aggRegistry.Register(skillserviceAgg); err != nil {
 			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
+		// Wire skillservice → userinfo for in-process provider profile
+		// resolution. This must stay in-process: the Bot Hub spec
+		// forbids HTTP fanout to manapi or to meta-socket itself from
+		// the request path.
+		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 

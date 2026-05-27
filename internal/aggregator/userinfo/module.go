@@ -228,6 +228,36 @@ func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
 	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
 }
 
+// --- In-process lookup helpers ----------------------------------------------
+//
+// These wrap the existing internal getters so other aggregators (e.g.
+// skillservice) can resolve a provider's profile without going through the
+// HTTP layer. They are intentionally thin: callers get the same data shape
+// idchat sees on the wire, plus the ChatPublicKey field which is only
+// populated when the chain-published /info/chatpubkey PIN has been indexed.
+//
+// Per the Bot Hub spec, request-path profile resolution must stay
+// in-process — no HTTP fanout — so consumers should call these directly
+// rather than re-hit /api/info/*.
+
+// LookupByMetaId returns the profile for a metaid. (nil, nil) means
+// "not found"; non-nil err is a real I/O / decode failure.
+func (a *Aggregator) LookupByMetaId(metaid string) (*UserProfile, error) {
+	return a.getProfile(metaid)
+}
+
+// LookupByAddress returns the profile whose Address matches (case-insensitive).
+// Currently scans the namespace; userinfo maintains no reverse index yet.
+func (a *Aggregator) LookupByAddress(address string) (*UserProfile, error) {
+	return a.findProfileByAddress(address)
+}
+
+// LookupByGlobalMetaId returns the profile whose GlobalMetaID matches
+// (case-insensitive). Also scan-based; same caveat as LookupByAddress.
+func (a *Aggregator) LookupByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
+	return a.findProfileByGlobalMetaId(globalMetaId)
+}
+
 // --- Profile persistence ---
 
 func (a *Aggregator) getProfile(metaid string) (*UserProfile, error) {
