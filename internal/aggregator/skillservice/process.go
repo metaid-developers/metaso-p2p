@@ -291,10 +291,4 @@ func recordSummary(r *ServiceRecord) string {
 	return fmt.Sprintf("%s/%s op=%s disabled=%v", r.ChainName, r.SourceServicePinId, r.Operation, r.Disabled)
 }
 
-// processRatingPin is a placeholder shipped with M1 so the package builds
-// when /protocols/skill-service-rate pins arrive before M3 lands. It logs
-// and returns nil so the indexer engine keeps running.
-func (a *Aggregator) processRatingPin(pin *aggregator.PinInscription) error {
-	log.Printf("[skillservice] rating pin received (not yet aggregated in M1): %s", pin.Id)
-	return nil
-}
+// processRatingPin moved to rating.go (M3).
