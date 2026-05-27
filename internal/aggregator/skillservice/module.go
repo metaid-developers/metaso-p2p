@@ -23,6 +23,7 @@ type Aggregator struct {
 	cache         *cache.Cache[[]byte]
 	notifyCh      chan *aggregator.NotifyEvent
 	profileLookup ProfileLookup // nil-safe; see ResolveProvider
+	assetResolver *AssetResolver
 }
 
 const (
@@ -87,4 +88,23 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 // real handlers land in M5 (list) and M6 (detail).
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	registerRoutes(a, router)
+}
+
+// SetAssetBaseURL configures the base URL used to expand on-chain pin id /
+// metafile references into HTTP URLs the frontend can load directly. It is
+// safe to leave unset: ResolveAsset will return the raw input unchanged,
+// which is convenient during isolated unit tests but never desirable in
+// production. main.go wires this from config.BotHubConfig.AssetBaseURL.
+func (a *Aggregator) SetAssetBaseURL(baseURL string) {
+	a.assetResolver = NewAssetResolver(baseURL)
+}
+
+// ResolveAsset converts a chain-declared asset reference into a load-ready
+// URL. Pass-through when no resolver is set so behaviour stays predictable
+// in tests that exercise the aggregator without going through main.go.
+func (a *Aggregator) ResolveAsset(asset string) string {
+	if a.assetResolver == nil {
+		return asset
+	}
+	return a.assetResolver.Resolve(asset)
 }

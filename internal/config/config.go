@@ -18,6 +18,20 @@ type Config struct {
 	Cache      CacheConfig      `json:"cache"`
 	Profile    ProfileConfig    `json:"profile"`
 	GroupChat  GroupChatConfig  `json:"groupChat"`
+	BotHub     BotHubConfig     `json:"botHub"`
+}
+
+// BotHubConfig holds the Bot Hub skill-service aggregator runtime knobs.
+// Today this is just the asset base URL — the place we resolve chain-
+// declared pin id / metafile references into HTTP URLs that the frontend
+// can load directly. See docs/specs/2026-05-28-bot-hub-skill-service-
+// aggregation-api.md for the wire contract.
+type BotHubConfig struct {
+	// AssetBaseURL prefixes any non-absolute icon / avatar reference
+	// returned by the Bot Hub list / detail endpoints. The frontend never
+	// sees a bare pin id; it sees either an already-absolute http(s) URL
+	// declared on chain, or this base joined with the pin id.
+	AssetBaseURL string `json:"assetBaseUrl"`
 }
 
 type BlockIndexConfig struct {
@@ -195,6 +209,12 @@ func Default() Config {
 			GRPCEnabled:      false,
 			HeavyAPIEnabled:  false,
 		},
+		BotHub: BotHubConfig{
+			// Default mirrors the spec's recommendation. Operators can
+			// override with META_SOCKET_ASSET_BASE_URL when running
+			// against a different MetaID asset host.
+			AssetBaseURL: "https://manapi.metaid.io/content",
+		},
 	}
 }
 
@@ -256,6 +276,8 @@ func Load() (Config, error) {
 	applyBoolEnv("META_SOCKET_GROUPCHAT_LUCKYBAG_ENABLED", &cfg.GroupChat.LuckyBagEnabled)
 	applyBoolEnv("META_SOCKET_GROUPCHAT_GRPC_ENABLED", &cfg.GroupChat.GRPCEnabled)
 	applyBoolEnv("META_SOCKET_GROUPCHAT_HEAVY_API_ENABLED", &cfg.GroupChat.HeavyAPIEnabled)
+
+	applyStringEnv("META_SOCKET_ASSET_BASE_URL", &cfg.BotHub.AssetBaseURL)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

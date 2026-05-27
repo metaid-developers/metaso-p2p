@@ -74,6 +74,11 @@ func main() {
 		// forbids HTTP fanout to manapi or to meta-socket itself from
 		// the request path.
 		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
+		// Asset base URL turns chain-declared pin ids / metafile URIs
+		// into HTTP URLs the Bot Hub frontend can load directly. The
+		// value comes from META_SOCKET_ASSET_BASE_URL (default in
+		// config.Default mirrors the documented recommendation).
+		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
