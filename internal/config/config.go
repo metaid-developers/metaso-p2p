@@ -35,7 +35,7 @@ type BotHubConfig struct {
 }
 
 type BlockIndexConfig struct {
-	Enabled bool   `json:"enabled"`
+	Enabled bool           `json:"enabled"`
 	BTC     ChainRPCConfig `json:"btc"`
 	MVC     ChainRPCConfig `json:"mvc"`
 	DOGE    ChainRPCConfig `json:"doge"`
@@ -53,7 +53,7 @@ type ChainRPCConfig struct {
 }
 
 type CacheConfig struct {
-	MaxEntries int `json:"maxEntries"`
+	MaxEntries        int `json:"maxEntries"`
 	DefaultTTLSeconds int `json:"defaultTtlSeconds"`
 }
 
@@ -183,10 +183,10 @@ func Default() Config {
 		},
 		BlockIndex: BlockIndexConfig{
 			Enabled: false,
-			BTC:   ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
-			MVC:   ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
-			DOGE:  ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
-			OPCAT: ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			BTC:     ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			MVC:     ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			DOGE:    ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
+			OPCAT:   ChainRPCConfig{Enabled: false, RPCHTTPPostMode: true, RPCDisableTLS: true},
 		},
 		Cache: CacheConfig{
 			MaxEntries:        10000,
@@ -262,6 +262,20 @@ func Load() (Config, error) {
 	applyStringEnv("META_SOCKET_ZMQ_DOGE_RPC_PASS", &cfg.ZMQ.DOGE.RPCPass)
 	applyBoolEnv("META_SOCKET_ZMQ_DOGE_RPC_HTTP_POST_MODE", &cfg.ZMQ.DOGE.RPCHTTPPostMode)
 	applyBoolEnv("META_SOCKET_ZMQ_DOGE_RPC_DISABLE_TLS", &cfg.ZMQ.DOGE.RPCDisableTLS)
+	applyBoolEnv("META_SOCKET_ZMQ_OPCAT_ENABLED", &cfg.ZMQ.OPCAT.Enabled)
+	applyStringEnv("META_SOCKET_ZMQ_OPCAT_ENDPOINT", &cfg.ZMQ.OPCAT.Endpoint)
+	applyStringEnv("META_SOCKET_ZMQ_OPCAT_TOPIC", &cfg.ZMQ.OPCAT.Topic)
+	applyStringEnv("META_SOCKET_ZMQ_OPCAT_RPC_HOST", &cfg.ZMQ.OPCAT.RPCHost)
+	applyStringEnv("META_SOCKET_ZMQ_OPCAT_RPC_USER", &cfg.ZMQ.OPCAT.RPCUser)
+	applyStringEnv("META_SOCKET_ZMQ_OPCAT_RPC_PASS", &cfg.ZMQ.OPCAT.RPCPass)
+	applyBoolEnv("META_SOCKET_ZMQ_OPCAT_RPC_HTTP_POST_MODE", &cfg.ZMQ.OPCAT.RPCHTTPPostMode)
+	applyBoolEnv("META_SOCKET_ZMQ_OPCAT_RPC_DISABLE_TLS", &cfg.ZMQ.OPCAT.RPCDisableTLS)
+
+	applyBoolEnv("META_SOCKET_BLOCK_INDEX_ENABLED", &cfg.BlockIndex.Enabled)
+	applyChainRPCEnv("META_SOCKET_BLOCK_INDEX_BTC", &cfg.BlockIndex.BTC)
+	applyChainRPCEnv("META_SOCKET_BLOCK_INDEX_MVC", &cfg.BlockIndex.MVC)
+	applyChainRPCEnv("META_SOCKET_BLOCK_INDEX_DOGE", &cfg.BlockIndex.DOGE)
+	applyChainRPCEnv("META_SOCKET_BLOCK_INDEX_OPCAT", &cfg.BlockIndex.OPCAT)
 
 	applyBoolEnv("META_SOCKET_PEBBLE_ENABLED", &cfg.Pebble.Enabled)
 	applyStringEnv("META_SOCKET_PEBBLE_DATA_DIR", &cfg.Pebble.DataDir)
@@ -349,6 +363,18 @@ func applyIntEnv(name string, target *int) {
 	*target = parsed
 }
 
+func applyInt64Env(name string, target *int64) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return
+	}
+	*target = parsed
+}
+
 func applyDurationEnv(name string, target *time.Duration) {
 	value, ok := os.LookupEnv(name)
 	if !ok {
@@ -361,9 +387,19 @@ func applyDurationEnv(name string, target *time.Duration) {
 	*target = parsed
 }
 
+func applyChainRPCEnv(prefix string, target *ChainRPCConfig) {
+	applyBoolEnv(prefix+"_ENABLED", &target.Enabled)
+	applyStringEnv(prefix+"_RPC_HOST", &target.RPCHost)
+	applyStringEnv(prefix+"_RPC_USER", &target.RPCUser)
+	applyStringEnv(prefix+"_RPC_PASS", &target.RPCPass)
+	applyBoolEnv(prefix+"_RPC_HTTP_POST_MODE", &target.RPCHTTPPostMode)
+	applyBoolEnv(prefix+"_RPC_DISABLE_TLS", &target.RPCDisableTLS)
+	applyInt64Env(prefix+"_INITIAL_HEIGHT", &target.InitialHeight)
+}
+
 func (c Config) Summary() string {
 	return fmt.Sprintf(
-		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t pebble_enabled=%t profile_enabled=%t groupchat_migration_enabled=%t groupchat_backup_enabled=%t",
+		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t block_index_enabled=%t pebble_enabled=%t profile_enabled=%t groupchat_migration_enabled=%t groupchat_backup_enabled=%t",
 		c.Service.HTTPAddr,
 		c.Service.HealthPath,
 		c.Socket.Enabled,
@@ -374,6 +410,7 @@ func (c Config) Summary() string {
 		c.Socket.MaxPCPerUser,
 		c.Socket.MaxAppPerUser,
 		c.ZMQ.Enabled,
+		c.BlockIndex.Enabled,
 		c.Pebble.Enabled,
 		c.Profile.Enabled,
 		c.GroupChat.MigrationEnabled,

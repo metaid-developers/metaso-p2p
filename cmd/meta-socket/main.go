@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	bitcoinchain "github.com/metaid-developers/meta-socket/internal/chain/bitcoin"
+	dogecoinchain "github.com/metaid-developers/meta-socket/internal/chain/dogecoin"
 	mvcchain "github.com/metaid-developers/meta-socket/internal/chain/mvc"
+	opcatchain "github.com/metaid-developers/meta-socket/internal/chain/opcat"
 	"github.com/metaid-developers/meta-socket/internal/config"
 	"github.com/metaid-developers/meta-socket/internal/indexer"
 	"github.com/metaid-developers/meta-socket/internal/socket"
@@ -87,6 +90,7 @@ func main() {
 	var idxEngine *indexer.Engine
 	if store != nil && aggRegistry != nil && cfg.BlockIndex.Enabled {
 		idxEngine = indexer.NewEngine(store, aggRegistry)
+		log.Printf("block index enabled chains: %s", strings.Join(enabledBlockIndexChainNames(cfg.BlockIndex), ","))
 
 		// BTC chain + indexer
 		if cfg.BlockIndex.BTC.Enabled {
@@ -107,6 +111,26 @@ func main() {
 
 			if err := idxEngine.RegisterChain(mvcChain, mvcIndexer, cfg.BlockIndex.MVC.InitialHeight); err != nil {
 				log.Printf("WARNING: MVC chain registration failed: %v", err)
+			}
+		}
+
+		if cfg.BlockIndex.DOGE.Enabled {
+			dogeChain := dogecoinchain.NewChain(cfg.BlockIndex.DOGE)
+			dogeParams := dogecoinchain.NetParams("")
+			dogeIndexer := dogecoinchain.NewIndexer(dogeChain, dogeParams)
+
+			if err := idxEngine.RegisterChain(dogeChain, dogeIndexer, cfg.BlockIndex.DOGE.InitialHeight); err != nil {
+				log.Printf("WARNING: DOGE chain registration failed: %v", err)
+			}
+		}
+
+		if cfg.BlockIndex.OPCAT.Enabled {
+			opcatChain := opcatchain.NewChain(cfg.BlockIndex.OPCAT)
+			opcatParams := opcatchain.NetParams("")
+			opcatIndexer := opcatchain.NewIndexer(opcatChain, opcatParams)
+
+			if err := idxEngine.RegisterChain(opcatChain, opcatIndexer, cfg.BlockIndex.OPCAT.InitialHeight); err != nil {
+				log.Printf("WARNING: OPCAT chain registration failed: %v", err)
 			}
 		}
 
@@ -175,4 +199,21 @@ func main() {
 		store.Close()
 	}
 	log.Printf("meta-socket stopped")
+}
+
+func enabledBlockIndexChainNames(cfg config.BlockIndexConfig) []string {
+	var names []string
+	if cfg.BTC.Enabled {
+		names = append(names, "btc")
+	}
+	if cfg.MVC.Enabled {
+		names = append(names, "mvc")
+	}
+	if cfg.DOGE.Enabled {
+		names = append(names, "doge")
+	}
+	if cfg.OPCAT.Enabled {
+		names = append(names, "opcat")
+	}
+	return names
 }

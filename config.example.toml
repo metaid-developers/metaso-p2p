@@ -160,35 +160,37 @@ heavyApiEnabled = false
 # ---------------------------------------------------------------------------
 [blockIndex]
 # Master toggle for the entire block-indexing engine.
-# Env: META_SOCKET_BLOCK_INDEX_ENABLED (not wired in code – set below per-chain)
+# Env: META_SOCKET_BLOCK_INDEX_ENABLED
 enabled = false
 
   # --- Bitcoin (BTC) ---
   [blockIndex.btc]
   # Enable BTC chain indexing.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_ENABLED (not wired in code)
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_ENABLED
   enabled = false
 
   # BTC JSON-RPC endpoint (host:port).
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HOST (not wired in code)
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HOST
   rpcHost = "127.0.0.1:8332"
 
   # BTC RPC username.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_USER (not wired in code)
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_USER
   rpcUser = ""
 
   # BTC RPC password.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_PASS (not wired in code)
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_PASS
   rpcPass = ""
 
   # Use HTTP POST mode for RPC requests (vs. standard JSON-RPC).
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HTTP_POST_MODE
   rpcHttpPostMode = true
 
   # Disable TLS for the RPC connection.
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_DISABLE_TLS
   rpcDisableTls = true
 
   # Block height to start scanning from (0 = current chain tip).
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_INITIAL_HEIGHT (not wired in code)
+  # Env: META_SOCKET_BLOCK_INDEX_BTC_INITIAL_HEIGHT
   initialHeight = 0
 
   # --- MicroVision Chain (MVC) ---
@@ -200,6 +202,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
+  # Env: META_SOCKET_BLOCK_INDEX_MVC_ENABLED,
+  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_HOST,
+  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_USER,
+  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_PASS,
+  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_DISABLE_TLS,
+  #      META_SOCKET_BLOCK_INDEX_MVC_INITIAL_HEIGHT
 
   # --- Dogecoin (DOGE) ---
   [blockIndex.doge]
@@ -210,6 +219,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
+  # Env: META_SOCKET_BLOCK_INDEX_DOGE_ENABLED,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_HOST,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_USER,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_PASS,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_DISABLE_TLS,
+  #      META_SOCKET_BLOCK_INDEX_DOGE_INITIAL_HEIGHT
 
   # --- OPCAT ---
   [blockIndex.opcat]
@@ -220,6 +236,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
+  # Env: META_SOCKET_BLOCK_INDEX_OPCAT_ENABLED,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HOST,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_USER,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_PASS,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_DISABLE_TLS,
+  #      META_SOCKET_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT
 
 # ---------------------------------------------------------------------------
 # [zmq]  ZeroMQ mempool monitoring
@@ -308,4 +331,8 @@ enabled = false
   rpcPass = ""
   rpcHttpPostMode = true
   rpcDisableTls = true
-  # Note: OPCAT ZMQ env vars are not wired in config.Load() as of phase 6.
+  # Env: META_SOCKET_ZMQ_OPCAT_ENABLED, META_SOCKET_ZMQ_OPCAT_ENDPOINT,
+  #      META_SOCKET_ZMQ_OPCAT_TOPIC, META_SOCKET_ZMQ_OPCAT_RPC_HOST,
+  #      META_SOCKET_ZMQ_OPCAT_RPC_USER, META_SOCKET_ZMQ_OPCAT_RPC_PASS,
+  #      META_SOCKET_ZMQ_OPCAT_RPC_HTTP_POST_MODE,
+  #      META_SOCKET_ZMQ_OPCAT_RPC_DISABLE_TLS
