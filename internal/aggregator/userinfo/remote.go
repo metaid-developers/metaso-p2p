@@ -98,7 +98,12 @@ func (a *Aggregator) lookupByGlobalMetaId(ctx context.Context, globalMetaId stri
 	}
 	return a.completeProfile(ctx, profile, remoteProfileQueries{
 		{kind: remoteLookupByGlobalMetaId, value: globalMetaId},
-	}, "")
+		// Legacy Bot Hub records sometimes carried the chain address in the
+		// providerGlobalMetaId field. Delivery fallback flows may then call
+		// /info/globalmetaid/<address>, so recover via address/metaid routes.
+		{kind: remoteLookupByAddress, value: globalMetaId},
+		{kind: remoteLookupByMetaId, value: globalMetaId},
+	}, globalMetaId)
 }
 
 func (a *Aggregator) completeProfile(ctx context.Context, local *UserProfile, queries remoteProfileQueries, aliasKey string) (*UserProfile, error) {
@@ -132,16 +137,12 @@ func (a *Aggregator) shouldFetchRemote(local *UserProfile) bool {
 	if !a.allowRemoteFallback {
 		return false
 	}
-	if local == nil {
-		return true
-	}
-	return strings.TrimSpace(local.ChatPublicKey) == "" ||
-		strings.TrimSpace(local.GlobalMetaID) == "" ||
-		strings.TrimSpace(local.Address) == ""
+	return profileNeedsRemoteCompletion(local)
 }
 
 func (a *Aggregator) fetchRemoteProfile(ctx context.Context, queries remoteProfileQueries) (*UserProfile, error) {
 	seen := make(map[string]bool)
+	var merged *UserProfile
 	for _, q := range queries {
 		q.value = strings.TrimSpace(q.value)
 		if q.value == "" {
@@ -171,10 +172,23 @@ func (a *Aggregator) fetchRemoteProfile(ctx context.Context, queries remoteProfi
 			return nil, err
 		}
 		if profile != nil {
-			return profile, nil
+			merged = mergeUserProfiles(merged, profile)
+			if !profileNeedsRemoteCompletion(merged) {
+				return merged, nil
+			}
 		}
 	}
-	return nil, nil
+	return merged, nil
+}
+
+func profileNeedsRemoteCompletion(profile *UserProfile) bool {
+	if profile == nil {
+		return true
+	}
+	return strings.TrimSpace(profile.ChatPublicKey) == "" ||
+		strings.TrimSpace(profile.GlobalMetaID) == "" ||
+		strings.TrimSpace(profile.MetaID) == "" ||
+		strings.TrimSpace(profile.Address) == ""
 }
 
 func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile) error {
@@ -225,9 +239,18 @@ func mergeUserProfiles(local, remote *UserProfile) *UserProfile {
 }
 
 func fillString(dst *string, src string) {
-	if strings.TrimSpace(*dst) == "" && strings.TrimSpace(src) != "" {
+	if shouldFillString(*dst, src) {
 		*dst = src
 	}
+}
+
+func shouldFillString(dst, src string) bool {
+	dst = strings.TrimSpace(dst)
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return false
+	}
+	return dst == "" || dst == "/content/"
 }
 
 func overrideString(dst *string, src string) {

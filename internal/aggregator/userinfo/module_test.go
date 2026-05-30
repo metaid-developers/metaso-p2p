@@ -580,6 +580,69 @@ func TestHandleMetaIdInfo_RemoteFallbackFillsMissingChatKey(t *testing.T) {
 	}
 }
 
+func TestHandleGlobalMetaIdInfo_LegacyAddressFallbackFillsMissingChatKey(t *testing.T) {
+	const providerAddress = "1LegacyGlobalAddress1111111111111111"
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/info/globalmetaid/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"globalMetaId":"` + providerAddress + `","metaid":"","address":"","avatar":"/content/","chatpubkey":"","chatpubkeyId":""}}`))
+		case "/info/address/" + providerAddress:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"metaid":"` + providerAddress + `","globalMetaId":"idq1legacyprovider","address":"` + providerAddress + `","name":"Legacy Provider","avatar":"/content/legacy_avatar:i0","chatpubkey":"04legacychatkey","chatpubkeyId":"legacy_key:i0"}}`))
+		default:
+			t.Fatalf("unexpected remote profile path: %s", r.URL.Path)
+		}
+	}))
+	defer remote.Close()
+
+	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
+	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	// Mirrors legacy Bot Hub records that exposed a provider address in the
+	// providerGlobalMetaId field. Delivery may later call
+	// /info/globalmetaid/<that-address>, so this path must recover through the
+	// address profile route instead of returning the incomplete local shell.
+	if err := agg.saveProfile(&UserProfile{
+		GlobalMetaID: providerAddress,
+		MetaID:       "local_shell",
+		Avatar:       "/content/",
+	}); err != nil {
+		t.Fatalf("seed local shell profile: %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/globalmetaid/"+providerAddress)
+	var resp struct {
+		Code int         `json:"code"`
+		Data UserProfile `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 1 {
+		t.Fatalf("expected success code=1, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.ChatPublicKey != "04legacychatkey" {
+		t.Fatalf("chatpubkey was not filled from address fallback: %+v", resp.Data)
+	}
+	if resp.Data.ChatPublicKeyId != "legacy_key:i0" {
+		t.Fatalf("chatpubkeyId mismatch: %+v", resp.Data)
+	}
+	if resp.Data.Address != providerAddress {
+		t.Fatalf("address should be filled from address fallback: %+v", resp.Data)
+	}
+	if resp.Data.Avatar != "/content/legacy_avatar:i0" {
+		t.Fatalf("avatar placeholder should be replaced from address fallback: %+v", resp.Data)
+	}
+	if resp.Data.GlobalMetaID != "idq1legacyprovider" {
+		t.Fatalf("canonical globalMetaId should be filled from remote fallback: %+v", resp.Data)
+	}
+}
+
 // TestHandleMetaIdInfo_FullWireFormat asserts the whole on-the-wire response
 // exactly matches what idchat's metafileIndexerApi client expects after a
 // realistic init + name + chatpubkey indexing sequence.
