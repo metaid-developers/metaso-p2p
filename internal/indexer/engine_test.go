@@ -15,14 +15,14 @@ type mockChain struct {
 	initErr    error
 }
 
-func (m *mockChain) Name() string                             { return m.name }
-func (m *mockChain) Init() error                              { return m.initErr }
-func (m *mockChain) GetBlock(height int64) (any, error)       { return nil, nil }
-func (m *mockChain) GetBlockTime(height int64) (int64, error) { return 0, nil }
-func (m *mockChain) GetTransaction(txID string) (any, error)  { return nil, nil }
-func (m *mockChain) GetBestHeight() int64                     { return m.bestHeight }
+func (m *mockChain) Name() string                              { return m.name }
+func (m *mockChain) Init() error                               { return m.initErr }
+func (m *mockChain) GetBlock(height int64) (any, error)        { return nil, nil }
+func (m *mockChain) GetBlockTime(height int64) (int64, error)  { return 0, nil }
+func (m *mockChain) GetTransaction(txID string) (any, error)   { return nil, nil }
+func (m *mockChain) GetBestHeight() int64                      { return m.bestHeight }
 func (m *mockChain) GetMempoolTransactionList() ([]any, error) { return nil, nil }
-func (m *mockChain) BroadcastTx(txRaw string) (string, error) { return "", nil }
+func (m *mockChain) BroadcastTx(txRaw string) (string, error)  { return "", nil }
 
 // mockIndexer is a minimal chain.Indexer for engine tests.
 type mockIndexer struct {
@@ -87,6 +87,37 @@ func TestPersistAndRestoreHeight(t *testing.T) {
 		t.Errorf("expected restored height 100, got %d", restoredHeight)
 	}
 	t.Logf("restored height: %d", restoredHeight)
+}
+
+func TestRestoreHeightAfterStoreReopen(t *testing.T) {
+	dir := t.TempDir()
+	store := storage.NewPebbleStore(dir)
+
+	registry := aggregator.NewRegistry(store, nil)
+	engine := NewEngine(store, registry)
+
+	chain := &mockChain{name: "mvc", bestHeight: 0}
+	idx := &mockIndexer{name: "mvc"}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+	engine.persistHeight("mvc", 175610)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	reopened := storage.NewPebbleStore(dir)
+	defer reopened.Close()
+	reopenedRegistry := aggregator.NewRegistry(reopened, nil)
+	reopenedEngine := NewEngine(reopened, reopenedRegistry)
+	if err := reopenedEngine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain reopened failed: %v", err)
+	}
+	reopenedEngine.restoreHeights()
+
+	if got := reopenedEngine.chains["mvc"].lastHeight; got != 175610 {
+		t.Fatalf("expected restored height 175610 after reopening store, got %d", got)
+	}
 }
 
 func TestPersistAndRestoreMultipleHeights(t *testing.T) {

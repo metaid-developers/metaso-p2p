@@ -170,19 +170,7 @@ func (a *Aggregator) Detail(p DetailParams) (*DetailResult, error) {
 }
 
 func (a *Aggregator) toServiceDetail(rec *ServiceRecord) ServiceDetail {
-	currency := strings.ToUpper(strings.TrimSpace(rec.Currency))
-	if currency == "MVC" {
-		currency = "SPACE"
-	}
-
-	var ticker any
-	var mrc20Id any
-	if rec.MRC20Ticker != "" {
-		ticker = rec.MRC20Ticker
-	}
-	if rec.MRC20Id != "" {
-		mrc20Id = rec.MRC20Id
-	}
+	payment := normalisePaymentMetadata(rec)
 
 	return ServiceDetail{
 		Id:                 rec.CurrentPinId,
@@ -197,12 +185,12 @@ func (a *Aggregator) toServiceDetail(rec *ServiceRecord) ServiceDetail {
 		OutputType:    rec.OutputType,
 
 		Price:          rec.Price,
-		Currency:       currency,
-		SettlementKind: rec.SettlementKind,
-		PaymentChain:   rec.PaymentChain,
-		MRC20Ticker:    ticker,
-		MRC20Id:        mrc20Id,
-		PaymentAddress: rec.PaymentAddress,
+		Currency:       payment.currency,
+		SettlementKind: payment.settlementKind,
+		PaymentChain:   payment.paymentChain,
+		MRC20Ticker:    payment.mrc20Ticker,
+		MRC20Id:        payment.mrc20Id,
+		PaymentAddress: payment.paymentAddress,
 
 		Status:    rec.Status,
 		Operation: rec.Operation,

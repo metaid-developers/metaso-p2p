@@ -88,9 +88,9 @@ func (s *PebbleStore) Set(namespace string, key, value []byte) error {
 
 // Get reads a key from a namespace. Returns pebble.ErrNotFound if not found.
 func (s *PebbleStore) Get(namespace string, key []byte) ([]byte, error) {
-	db := s.GetDB(namespace)
-	if db == nil {
-		return nil, pebble.ErrNotFound
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return nil, err
 	}
 	val, closer, err := db.Get(key)
 	if err != nil {

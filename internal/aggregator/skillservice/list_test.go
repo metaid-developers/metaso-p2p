@@ -159,6 +159,34 @@ func TestListEndpoint_SingleService(t *testing.T) {
 	}
 }
 
+func TestListEndpoint_DefaultsNativePaymentMetadataFromProviderAddress(t *testing.T) {
+	f := newListFixture(t)
+	pin := makeServicePin(t, servicePinOpts{
+		PinId: "native:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "fortune", DisplayName: "Fortune",
+	})
+	pin.ContentBody = []byte(`{"serviceName":"fortune","displayName":"Fortune","providerSkill":"fortune-skill","price":"0.01","currency":"SPACE","outputType":"text"}`)
+	if _, err := f.agg.HandleBlockPin(pin); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := f.call(t, "")
+	if len(body.Data.List) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(body.Data.List))
+	}
+	it := body.Data.List[0]
+	if it.SettlementKind != "native" {
+		t.Fatalf("settlementKind: got %q want native", it.SettlementKind)
+	}
+	if it.PaymentChain != "mvc" {
+		t.Fatalf("paymentChain: got %q want mvc", it.PaymentChain)
+	}
+	if it.PaymentAddress != "addr-prov-provA" {
+		t.Fatalf("paymentAddress: got %q want provider address", it.PaymentAddress)
+	}
+}
+
 // --- AC: revoked / disabled services hidden by default; shown with includeInactive=1 ---
 
 func TestListEndpoint_VisibilityFilter(t *testing.T) {

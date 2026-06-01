@@ -113,6 +113,32 @@ func TestDetailEndpoint_MRC20Fields(t *testing.T) {
 	}
 }
 
+func TestDetailEndpoint_DefaultsNativePaymentMetadataFromProviderAddress(t *testing.T) {
+	f := newListFixture(t)
+	pin := makeServicePin(t, servicePinOpts{
+		PinId: "native-detail:i0", ChainName: "mvc", Operation: OperationCreate,
+		ProviderMetaId: "provA", DisplayName: "Fortune", ServiceName: "fortune",
+	})
+	pin.ContentBody = []byte(`{"serviceName":"fortune","displayName":"Fortune","providerSkill":"fortune-skill","price":"0.01","currency":"SPACE","outputType":"text"}`)
+	if _, err := f.agg.HandleBlockPin(pin); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := f.callDetail(t, "native-detail:i0", "chainName=mvc")
+	if body.Code != 0 {
+		t.Fatalf("code=%d", body.Code)
+	}
+	if body.Data.Service.SettlementKind != "native" {
+		t.Fatalf("settlementKind: got %q want native", body.Data.Service.SettlementKind)
+	}
+	if body.Data.Service.PaymentChain != "mvc" {
+		t.Fatalf("paymentChain: got %q want mvc", body.Data.Service.PaymentChain)
+	}
+	if body.Data.Service.PaymentAddress != "addr-prov-provA" {
+		t.Fatalf("paymentAddress: got %q want provider address", body.Data.Service.PaymentAddress)
+	}
+}
+
 func TestDetailEndpoint_InvalidIDType(t *testing.T) {
 	f := newListFixture(t)
 	_, body := f.callDetail(t, "x", "idType=bad")

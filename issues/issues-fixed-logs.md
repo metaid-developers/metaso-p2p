@@ -4,6 +4,48 @@ This file records how downstream-reported issues under `issues/` were handled
 in this repository. Keep the original issue files unchanged as the reporter's
 evidence, and add maintainer-side resolution notes here.
 
+## 2026-06-01 - Bothub paid service payment metadata gap
+
+- Issue: `2026-06-01-bothub-paid-service-payment-metadata-gap.md`
+- Status: Fixed.
+- Maintainer check:
+  - The issue was reproduced against local `127.0.0.1:18091`.
+  - Detail for
+    `09d5b9dc05b816d0d6f0641d03f8d42235cb162f9f76e3329805a0c4ca376669i0`
+    returned `price="0.01"` and `currency="SPACE"` but empty
+    `settlementKind`, `paymentChain`, and `paymentAddress`.
+  - The list endpoint had the same missing payment metadata for the same
+    service.
+  - The provider chain address was present on the record, so the native
+    receiver was derivable without inventing a new receiver.
+  - The OAC skill-service compatibility rules state that missing
+    `settlementKind` defaults to `native`, `MVC` aliases normalize to `SPACE`,
+    and provider identity is the payment recipient for native services.
+- Fix:
+  - Added shared payment metadata normalization for BotHub list and detail
+    responses.
+  - Missing or unknown non-MRC20 settlement now defaults to `native`.
+  - Missing native payment chain is derived from display currency
+    (`SPACE`/`MVC` -> `mvc`, `BTC` -> `btc`, `DOGE` -> `doge`).
+  - Paid native services with no explicit `paymentAddress` fall back to the
+    provider chain address.
+  - MRC20 services still require explicit payment metadata and do not fall back
+    to provider address.
+  - Fixed Pebble read-on-restart so the indexer can restore
+    `indexer_meta/*_lastheight` after a process restart instead of starting
+    from the configured initial height.
+- Verification:
+  - Added red/green regression coverage for list and detail native payment
+    fallback.
+  - Added red/green regression coverage for restoring indexer height after
+    reopening the Pebble store.
+  - `CGO_ENABLED=0 go test ./internal/aggregator/skillservice ./internal/aggregator/userinfo ./internal/indexer ./internal/storage -count=1`
+  - Rebuilt and restarted the local `com.metaid.meta-socket.mvc30d.18091`
+    service.
+  - The tested service detail now returns `settlementKind="native"`,
+    `paymentChain="mvc"`, and
+    `paymentAddress="125DQu9dBCXksYWg7HnmnmU3TpBNqnMsZF"`.
+
 ## 2026-06-01 - Bothub skill-service availability gap
 
 - Issue: `2026-06-01-bothub-skill-service-availability-gap.md`
