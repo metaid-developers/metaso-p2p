@@ -10,7 +10,10 @@ production/staging meta-socket base URL that Bothub can use for release
 acceptance or hosted deployment.
 
 Please provide a meta-socket-owned production/staging endpoint, or document the
-deployment target Bothub should use, with the native routes listed below.
+deployment target Bothub should use, with the native routes listed below. While
+doing so, please also promote private chat to its own canonical API namespace so
+new Bothub code does not need to depend on the historical `/api/group-chat/...`
+private-chat paths.
 
 ## Why this is not an idchat dependency
 
@@ -35,13 +38,38 @@ The assigned base URL should support:
 - `GET /healthz`
 - `GET /api/bot-hub/skill-service/list`
 - `GET /api/bot-hub/skill-service/detail/:serviceId`
+- `GET /api/private-chat/homes/:metaId`
+- `GET /api/private-chat/messages`
+- `GET /api/private-chat/messages/by-index`
+- `GET /api/private-chat/paths`
+- Socket.IO at `/socket/socket.io`
+
+## Private-Chat API Migration Requirement
+
+Bothub needs private-chat history for Delivery recovery. It does not need
+group/channel/community chat product features.
+
+The current usable meta-socket routes are mounted under the historical
+`/api/group-chat/...` namespace:
+
 - `GET /api/group-chat/chat/homes/:metaId`
 - `GET /api/group-chat/private-chat-list`
 - `GET /api/group-chat/private-chat-list-by-index`
-- Socket.IO at `/socket/socket.io`
+- `GET /api/group-chat/private-group-paths`
 
-The `/api/group-chat/...` paths above are private-chat history routes in the
-current meta-socket namespace. Bothub does not need group/channel chat features.
+Please add canonical private-chat aliases with the same response envelopes and
+query semantics:
+
+| Canonical route | Existing compatibility route |
+| --- | --- |
+| `GET /api/private-chat/homes/:metaId` | `GET /api/group-chat/chat/homes/:metaId` |
+| `GET /api/private-chat/messages?metaId=&otherMetaId=&cursor=&size=&timestamp=` | `GET /api/group-chat/private-chat-list?...` |
+| `GET /api/private-chat/messages/by-index?metaId=&otherMetaId=&startIndex=&size=` | `GET /api/group-chat/private-chat-list-by-index?...` |
+| `GET /api/private-chat/paths?metaId=` | `GET /api/group-chat/private-group-paths?metaId=` |
+
+Keep the old `/api/group-chat/...` routes and `/chat-api/group-chat/...`
+compatibility routes working for existing clients. Bothub will switch to the
+canonical `/api/private-chat/*` routes once they are available.
 
 The deployment should also:
 
@@ -71,6 +99,17 @@ VITE_USE_WS_MOCK=false
 
 and load real service list/detail data plus Delivery private-chat history
 without relying on idchat.
+
+Additional route checks expected before Bothub switches over:
+
+```bash
+curl 'https://<meta-socket-host>/api/private-chat/homes/<buyer-metaId>'
+curl 'https://<meta-socket-host>/api/private-chat/messages?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&cursor=&size=5'
+curl 'https://<meta-socket-host>/api/private-chat/messages/by-index?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&startIndex=0&size=5'
+```
+
+Each canonical route should return the same envelope/data shape as its existing
+`/api/group-chat/...` compatibility route.
 
 ## Current Impact
 
