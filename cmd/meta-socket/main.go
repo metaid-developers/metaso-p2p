@@ -22,6 +22,7 @@ import (
 	mvcchain "github.com/metaid-developers/meta-socket/internal/chain/mvc"
 	opcatchain "github.com/metaid-developers/meta-socket/internal/chain/opcat"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/federation"
 	"github.com/metaid-developers/meta-socket/internal/indexer"
 	"github.com/metaid-developers/meta-socket/internal/socket"
 	"github.com/metaid-developers/meta-socket/internal/storage"
@@ -155,6 +156,21 @@ func main() {
 		}
 	}
 
+	// --- Federation service ---
+	var federationService *federation.Service
+	if cfg.Federation.Enabled {
+		if socketServer == nil {
+			log.Fatalf("federation is enabled but socket server is disabled")
+		}
+		federationService, err = federation.NewService(cfg.Federation, socketServer.Manager())
+		if err != nil {
+			log.Fatalf("failed to create federation service: %v", err)
+		}
+		socketServer.SetSnapshotProvider(federationService.SnapshotProvider())
+		socketServer.SetGlobalReader(federationService.GlobalReader())
+		log.Printf("federation service: node_id=%s", federationService.NodeID())
+	}
+
 	// --- HTTP router ---
 	router := api.SetupRouter(cfg, store, cacheProvider, aggRegistry, socketServer, version)
 
@@ -167,6 +183,10 @@ func main() {
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if federationService != nil {
+		federationService.Start(shutdownCtx)
+	}
 
 	go func() {
 		log.Printf("meta-socket started: %s", cfg.Summary())
@@ -182,6 +202,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Service.ShutdownTimeout)
 	defer cancel()
+
+	// Stop federation loops before closing local readers and stores.
+	if federationService != nil {
+		federationService.Stop()
+	}
 
 	// Shutdown socket server first (disconnects all clients cleanly).
 	if socketServer != nil {
