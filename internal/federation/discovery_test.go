@@ -2,18 +2,28 @@ package federation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 )
 
+const (
+	mvcSecondPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000002"
+	mvcSecondPublicKeyHex  = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+	mvcSecondAddress       = "1cMh228HTCiwS8ZsaakH8A8wze1JR5ZsP"
+)
+
 func TestDiscoveryExpandsDefaultTemplateAndAcceptsMANAPIEnvelope(t *testing.T) {
 	now := time.UnixMilli(1780000000000)
 	store := NewStore("node-self")
+	nodeAID := discoveryRegistryNodeID(t, "node-a", "mvc-mainnet")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/pin/path/list" {
@@ -26,7 +36,7 @@ func TestDiscoveryExpandsDefaultTemplateAndAcceptsMANAPIEnvelope(t *testing.T) {
 			t.Fatalf("request size query: want 100 got %q", got)
 		}
 		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
-			discoveryMANAPIPin(t, "pin-1", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-a", now)),
+			discoveryMANAPIPin(t, "pin-1", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-a", now)),
 		})
 	}))
 	defer server.Close()
@@ -48,21 +58,21 @@ func TestDiscoveryExpandsDefaultTemplateAndAcceptsMANAPIEnvelope(t *testing.T) {
 	if len(peers) != 1 {
 		t.Fatalf("peers: want 1 got %d", len(peers))
 	}
-	if peers[0].NodeID != "node-a" {
-		t.Fatalf("accepted nodeId: want node-a got %q", peers[0].NodeID)
+	if peers[0].NodeID != nodeAID {
+		t.Fatalf("accepted nodeId: want %q got %q", nodeAID, peers[0].NodeID)
 	}
 
-	stored, ok := store.Peer("node-a")
+	stored, ok := store.Peer(nodeAID)
 	if !ok {
-		t.Fatal("store should contain accepted peer node-a")
+		t.Fatalf("store should contain accepted peer %s", nodeAID)
 	}
 	if stored.PresenceURL != "https://node-a.example/.well-known/metasocket/presence" {
 		t.Fatalf("stored presenceUrl: got %q", stored.PresenceURL)
 	}
 	stored.Capabilities[0] = "mutated"
-	storedAgain, ok := store.Peer("node-a")
+	storedAgain, ok := store.Peer(nodeAID)
 	if !ok {
-		t.Fatal("store should still contain accepted peer node-a")
+		t.Fatalf("store should still contain accepted peer %s", nodeAID)
 	}
 	if storedAgain.Capabilities[0] != "presence-v1" {
 		t.Fatalf("store Peer must return a clone, got capabilities %#v", storedAgain.Capabilities)
@@ -129,11 +139,12 @@ func TestDiscoveryTreatsNullListAsEmpty(t *testing.T) {
 
 func TestDiscoveryAcceptsCreateModifyAndContentSummaryFallback(t *testing.T) {
 	now := time.UnixMilli(1780000000000)
-	summaryPayload := discoveryRegistryPayload("node-summary", now)
+	summaryPayload := discoveryRegistryPayload(t, "node-summary", now)
+	wantNodeIDs := discoverySortedNodeIDs(t, "mvc-mainnet", "node-body", "node-summary")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
-			discoveryMANAPIPin(t, "pin-body", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-body", now)),
+			discoveryMANAPIPin(t, "pin-body", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-body", now)),
 			{
 				"id":             "pin-summary",
 				"operation":      "modify",
@@ -159,41 +170,45 @@ func TestDiscoveryAcceptsCreateModifyAndContentSummaryFallback(t *testing.T) {
 	if len(peers) != 2 {
 		t.Fatalf("peers: want 2 got %d: %#v", len(peers), peers)
 	}
-	if peers[0].NodeID != "node-body" || peers[1].NodeID != "node-summary" {
-		t.Fatalf("peers should be sorted and include body plus summary payloads, got %#v", peers)
+	if peers[0].NodeID != wantNodeIDs[0] || peers[1].NodeID != wantNodeIDs[1] {
+		t.Fatalf("peers should be sorted and include body plus summary payloads, want %#v got %#v", wantNodeIDs, peers)
 	}
 }
 
 func TestDiscoveryFiltersPinsDeduplicatesNewestAndAppliesRemovals(t *testing.T) {
 	now := time.UnixMilli(1780000000000)
 	store := NewStore("node-self")
-	store.UpsertPeer(discoveryRegistryPayload("node-revoked", now))
-	store.UpsertPeer(discoveryRegistryPayload("node-expired", now))
+	revoked := discoveryRegistryPayload(t, "node-revoked", now)
+	expiredPeer := discoveryRegistryPayload(t, "node-expired", now)
+	selfID := discoveryRegistryNodeID(t, "node-self", "mvc-mainnet")
+	dupeID := discoveryRegistryNodeID(t, "node-dupe", "mvc-mainnet")
+	store.UpsertPeer(revoked)
+	store.UpsertPeer(expiredPeer)
 
-	oldDupe := discoveryRegistryPayload("node-dupe", now)
+	oldDupe := discoveryRegistryPayload(t, "node-dupe", now)
 	oldDupe.PresenceURL = "https://old.example/.well-known/metasocket/presence"
-	newDupe := discoveryRegistryPayload("node-dupe", now)
+	newDupe := discoveryRegistryPayload(t, "node-dupe", now)
 	newDupe.PresenceURL = "https://new.example/.well-known/metasocket/presence"
-	expired := discoveryRegistryPayload("node-expired", now)
+	expired := discoveryRegistryPayload(t, "node-expired", now)
 	expired.ValidUntil = now.Add(-time.Second).UnixMilli()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
 			discoveryMANAPIPin(t, "pin-old", "create", "mvc", now.UnixMilli(), oldDupe),
 			discoveryMANAPIPin(t, "pin-new", "modify", "mvc", now.Add(time.Second).UnixMilli(), newDupe),
-			discoveryMANAPIPin(t, "pin-revoke-create", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-revoked", now)),
-			discoveryMANAPIPin(t, "pin-revoke", "revoke", "mvc", now.Add(2*time.Second).UnixMilli(), discoveryRegistryPayload("node-revoked", now)),
+			discoveryMANAPIPin(t, "pin-revoke-create", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-revoked", now)),
+			discoveryMANAPIPin(t, "pin-revoke", "revoke", "mvc", now.Add(2*time.Second).UnixMilli(), discoveryRegistryPayload(t, "node-revoked", now)),
 			discoveryMANAPIPin(t, "pin-expired", "create", "mvc", now.UnixMilli(), expired),
-			discoveryMANAPIPin(t, "pin-self", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-self", now)),
-			discoveryMANAPIPin(t, "pin-btc", "create", "btc", now.UnixMilli(), discoveryRegistryPayload("node-btc", now)),
-			discoveryMANAPIPin(t, "pin-delete", "delete", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-delete", now)),
+			discoveryMANAPIPin(t, "pin-self", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-self", now)),
+			discoveryMANAPIPin(t, "pin-btc", "create", "btc", now.UnixMilli(), discoveryRegistryPayload(t, "node-btc", now)),
+			discoveryMANAPIPin(t, "pin-delete", "delete", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-delete", now)),
 		})
 	}))
 	defer server.Close()
 
 	discovery := newTestDiscovery(t, DiscoveryOptions{
 		MANAPIBaseURL: server.URL + "/pin/path/list?path={protocol-path}&size={size}",
-		SelfNodeID:    "node-self",
+		SelfNodeID:    selfID,
 		Store:         store,
 		HTTPClient:    server.Client(),
 		Clock:         func() time.Time { return now },
@@ -206,17 +221,136 @@ func TestDiscoveryFiltersPinsDeduplicatesNewestAndAppliesRemovals(t *testing.T) 
 	if len(peers) != 1 {
 		t.Fatalf("peers: want 1 got %d: %#v", len(peers), peers)
 	}
-	if peers[0].NodeID != "node-dupe" || peers[0].PresenceURL != newDupe.PresenceURL {
+	if peers[0].NodeID != dupeID || peers[0].PresenceURL != newDupe.PresenceURL {
 		t.Fatalf("newest valid duplicate should win, got %#v", peers[0])
 	}
-	if _, ok := store.Peer("node-revoked"); ok {
+	if _, ok := store.Peer(revoked.NodeID); ok {
 		t.Fatal("revoked peer should be removed from store")
 	}
-	if _, ok := store.Peer("node-expired"); ok {
+	if _, ok := store.Peer(expiredPeer.NodeID); ok {
 		t.Fatal("expired peer should be removed from store")
 	}
-	if _, ok := store.Peer("node-self"); ok {
+	if _, ok := store.Peer(selfID); ok {
 		t.Fatal("self node should not be inserted into peer store")
+	}
+}
+
+func TestDiscoveryRejectsRegistryNodeIDNotBoundToPublicKey(t *testing.T) {
+	now := time.UnixMilli(1780000000000)
+	store := NewStore("node-self")
+	payload := discoveryRegistryPayload(t, "node-a", now)
+	if payload.NodeID != "mvc:"+mvcTestAddress {
+		t.Fatalf("test fixture nodeId: want mvc:%s got %q", mvcTestAddress, payload.NodeID)
+	}
+	payload.PublicKey = mvcSecondPublicKeyHex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
+			discoveryMANAPIPin(t, "pin-mismatch", "create", "mvc", now.UnixMilli(), payload),
+		})
+	}))
+	defer server.Close()
+
+	discovery := newTestDiscovery(t, DiscoveryOptions{
+		MANAPIBaseURL: server.URL + "/pin/path/list?path={protocol-path}&size={size}",
+		Store:         store,
+		HTTPClient:    server.Client(),
+		Clock:         func() time.Time { return now },
+	})
+
+	peers, err := discovery.DiscoverOnce(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverOnce returned error: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("mismatched nodeId/publicKey should be rejected, got %#v", peers)
+	}
+	if _, ok := store.Peer(payload.NodeID); ok {
+		t.Fatal("mismatched nodeId/publicKey should not be stored")
+	}
+}
+
+func TestDiscoveryAcceptsRegistryNodeIDBoundToPublicKey(t *testing.T) {
+	now := time.UnixMilli(1780000000000)
+	store := NewStore("node-self")
+	payload := discoveryRegistryPayload(t, "node-b", now)
+	if payload.NodeID != "mvc:"+mvcSecondAddress {
+		t.Fatalf("test fixture nodeId: want mvc:%s got %q", mvcSecondAddress, payload.NodeID)
+	}
+	if payload.PublicKey != mvcSecondPublicKeyHex {
+		t.Fatalf("test fixture publicKey: want %q got %q", mvcSecondPublicKeyHex, payload.PublicKey)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
+			discoveryMANAPIPin(t, "pin-bound", "create", "mvc", now.UnixMilli(), payload),
+		})
+	}))
+	defer server.Close()
+
+	discovery := newTestDiscovery(t, DiscoveryOptions{
+		MANAPIBaseURL: server.URL + "/pin/path/list?path={protocol-path}&size={size}",
+		Store:         store,
+		HTTPClient:    server.Client(),
+		Clock:         func() time.Time { return now },
+	})
+
+	peers, err := discovery.DiscoverOnce(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverOnce returned error: %v", err)
+	}
+	if len(peers) != 1 || peers[0].NodeID != payload.NodeID {
+		t.Fatalf("bound nodeId/publicKey should be accepted, got %#v", peers)
+	}
+	if _, ok := store.Peer(payload.NodeID); !ok {
+		t.Fatal("bound nodeId/publicKey should be stored")
+	}
+}
+
+func TestDiscoveryDoesNotRemovePeerFromMismatchedRegistryIdentityRemovalPin(t *testing.T) {
+	now := time.UnixMilli(1780000000000)
+
+	tests := []struct {
+		name      string
+		operation string
+		expire    bool
+	}{
+		{name: "revoke", operation: "revoke"},
+		{name: "expired", operation: "modify", expire: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewStore("node-self")
+			valid := discoveryRegistryPayload(t, "node-a", now)
+			store.UpsertPeer(valid)
+			malformed := valid
+			malformed.PublicKey = mvcSecondPublicKeyHex
+			if tt.expire {
+				malformed.ValidUntil = now.Add(-time.Second).UnixMilli()
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeDiscoveryMANAPIResponse(t, w, []map[string]any{
+					discoveryMANAPIPin(t, "pin-mismatched-removal", tt.operation, "mvc", now.UnixMilli(), malformed),
+				})
+			}))
+			defer server.Close()
+
+			discovery := newTestDiscovery(t, DiscoveryOptions{
+				MANAPIBaseURL: server.URL + "/pin/path/list?path={protocol-path}&size={size}",
+				Store:         store,
+				HTTPClient:    server.Client(),
+				Clock:         func() time.Time { return now },
+			})
+
+			if _, err := discovery.DiscoverOnce(context.Background()); err != nil {
+				t.Fatalf("DiscoverOnce returned error: %v", err)
+			}
+			if _, ok := store.Peer(valid.NodeID); !ok {
+				t.Fatal("mismatched nodeId/publicKey removal pin must not remove existing peer")
+			}
+		})
 	}
 }
 
@@ -258,9 +392,10 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := NewStore("node-self")
-			store.UpsertPeer(discoveryRegistryPayload("node-victim", now))
+			victim := discoveryRegistryPayload(t, "node-victim", now)
+			store.UpsertPeer(victim)
 
-			malformed := tt.malformedPeer(discoveryRegistryPayload("node-victim", now))
+			malformed := tt.malformedPeer(victim)
 			malformedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				writeDiscoveryMANAPIResponse(t, w, []map[string]any{
 					discoveryMANAPIPin(t, "pin-malformed", tt.operation, "mvc", now.UnixMilli(), malformed),
@@ -278,11 +413,11 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 			if err != nil {
 				t.Fatalf("malformed removal DiscoverOnce returned error: %v", err)
 			}
-			if _, ok := store.Peer("node-victim"); !ok {
+			if _, ok := store.Peer(victim.NodeID); !ok {
 				t.Fatal("malformed removal pin must not remove existing peer")
 			}
 
-			valid := tt.validPeer(discoveryRegistryPayload("node-victim", now))
+			valid := tt.validPeer(victim)
 			validServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				writeDiscoveryMANAPIResponse(t, w, []map[string]any{
 					discoveryMANAPIPin(t, "pin-valid", tt.operation, "mvc", now.Add(time.Second).UnixMilli(), valid),
@@ -300,7 +435,7 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 			if err != nil {
 				t.Fatalf("valid removal DiscoverOnce returned error: %v", err)
 			}
-			if _, ok := store.Peer("node-victim"); ok {
+			if _, ok := store.Peer(victim.NodeID); ok {
 				t.Fatal("valid removal pin should remove existing peer")
 			}
 		})
@@ -324,7 +459,7 @@ func TestDiscoveryRejectsHTTPPresenceURLUnlessAllowedOrLocalhost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := discoveryRegistryPayload("node-http", now)
+			payload := discoveryRegistryPayload(t, "node-http", now)
 			payload.PresenceURL = tt.presenceURL
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -366,8 +501,7 @@ func TestDiscoveryNormalizesNetworkAliases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := discoveryRegistryPayload("node-alias", now)
-			payload.Network = tt.payloadNetwork
+			payload := discoveryRegistryPayloadForNetwork(t, "node-alias", now, tt.payloadNetwork)
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				writeDiscoveryMANAPIResponse(t, w, []map[string]any{
@@ -410,11 +544,12 @@ func TestNewDiscoveryRejectsUnsupportedNetwork(t *testing.T) {
 
 func TestDiscoveryEnforcesMaxPeersDeterministically(t *testing.T) {
 	now := time.UnixMilli(1780000000000)
+	wantNodeIDs := discoverySortedNodeIDs(t, "mvc-mainnet", "node-c", "node-a", "node-b")[:2]
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeDiscoveryMANAPIResponse(t, w, []map[string]any{
-			discoveryMANAPIPin(t, "pin-c", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-c", now)),
-			discoveryMANAPIPin(t, "pin-a", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-a", now)),
-			discoveryMANAPIPin(t, "pin-b", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload("node-b", now)),
+			discoveryMANAPIPin(t, "pin-c", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-c", now)),
+			discoveryMANAPIPin(t, "pin-a", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-a", now)),
+			discoveryMANAPIPin(t, "pin-b", "create", "mvc", now.UnixMilli(), discoveryRegistryPayload(t, "node-b", now)),
 		})
 	}))
 	defer server.Close()
@@ -433,8 +568,8 @@ func TestDiscoveryEnforcesMaxPeersDeterministically(t *testing.T) {
 	if len(peers) != 2 {
 		t.Fatalf("peers: want 2 got %d", len(peers))
 	}
-	if peers[0].NodeID != "node-a" || peers[1].NodeID != "node-b" {
-		t.Fatalf("max peers should cap deterministic nodeId order, got %#v", peers)
+	if peers[0].NodeID != wantNodeIDs[0] || peers[1].NodeID != wantNodeIDs[1] {
+		t.Fatalf("max peers should cap deterministic nodeId order, want %#v got %#v", wantNodeIDs, peers)
 	}
 }
 
@@ -478,7 +613,7 @@ func newTestDiscovery(t *testing.T, overrides DiscoveryOptions) *Discovery {
 		MANAPIBaseURL: "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}",
 		RegistryPath:  RegistryPath,
 		Size:          100,
-		SelfNodeID:    "node-self",
+		SelfNodeID:    discoveryRegistryNodeID(t, "node-self", "mvc-mainnet"),
 		Network:       "mvc-mainnet",
 		Clock:         func() time.Time { return time.UnixMilli(1780000000000) },
 		Interval:      time.Minute,
@@ -530,19 +665,65 @@ func newTestDiscovery(t *testing.T, overrides DiscoveryOptions) *Discovery {
 	return discovery
 }
 
-func discoveryRegistryPayload(nodeID string, now time.Time) RegistryNode {
+func discoveryRegistryPayload(t *testing.T, alias string, now time.Time) RegistryNode {
+	t.Helper()
+	return discoveryRegistryPayloadForNetwork(t, alias, now, "mvc-mainnet")
+}
+
+func discoveryRegistryPayloadForNetwork(t *testing.T, alias string, now time.Time, network string) RegistryNode {
+	t.Helper()
+	address, publicKey := discoveryRegistryIdentity(t, alias, network)
+	publicBaseURL := "https://" + alias + ".example"
 	return RegistryNode{
 		Protocol:      ProtocolNode,
 		Version:       Version,
-		NodeID:        nodeID,
-		Network:       "mvc-mainnet",
-		PublicBaseURL: "https://" + nodeID + ".example",
-		SocketURL:     "https://" + nodeID + ".example/socket/socket.io",
-		PresenceURL:   "https://" + nodeID + ".example/.well-known/metasocket/presence",
-		PublicKey:     mvcTestPublicKeyHex,
+		NodeID:        "mvc:" + address,
+		Network:       network,
+		PublicBaseURL: publicBaseURL,
+		SocketURL:     publicBaseURL + "/socket/socket.io",
+		PresenceURL:   publicBaseURL + "/.well-known/metasocket/presence",
+		PublicKey:     publicKey,
 		Capabilities:  []string{"presence-v1"},
 		PublishedAt:   now.UnixMilli(),
 		ValidUntil:    now.Add(time.Hour).UnixMilli(),
+	}
+}
+
+func discoveryRegistryNodeID(t *testing.T, alias string, network string) string {
+	t.Helper()
+	address, _ := discoveryRegistryIdentity(t, alias, network)
+	return "mvc:" + address
+}
+
+func discoverySortedNodeIDs(t *testing.T, network string, aliases ...string) []string {
+	t.Helper()
+	nodeIDs := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		nodeIDs = append(nodeIDs, discoveryRegistryNodeID(t, alias, network))
+	}
+	sort.Strings(nodeIDs)
+	return nodeIDs
+}
+
+func discoveryRegistryIdentity(t *testing.T, alias string, network string) (address string, publicKey string) {
+	t.Helper()
+	address, publicKey, err := MVCIdentityFromPrivateKey(discoveryRegistryPrivateKeyHex(alias), network)
+	if err != nil {
+		t.Fatalf("derive discovery registry identity for %s on %s: %v", alias, network, err)
+	}
+	return address, publicKey
+}
+
+func discoveryRegistryPrivateKeyHex(alias string) string {
+	switch alias {
+	case "node-a":
+		return mvcTestPrivateKeyHex
+	case "node-b":
+		return mvcSecondPrivateKeyHex
+	default:
+		digest := sha256.Sum256([]byte("meta-socket discovery test identity:" + alias))
+		digest[0] = 1
+		return hex.EncodeToString(digest[:])
 	}
 }
 

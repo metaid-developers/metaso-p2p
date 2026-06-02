@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoinsv/bsvutil"
 )
 
 const (
@@ -315,13 +317,34 @@ func (d *Discovery) acceptRegistryNode(node RegistryNode) bool {
 	if strings.TrimSpace(node.PublicKey) == "" {
 		return false
 	}
-	if _, err := parsePublicKeyHex(node.PublicKey); err != nil {
+	expectedAddress, err := mvcAddressFromPublicKey(node.PublicKey, d.network)
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(node.NodeID) != "mvc:"+expectedAddress {
 		return false
 	}
 	if !registryCapabilitiesInclude(node.Capabilities, publisherPresenceCapability) {
 		return false
 	}
 	return discoveryPresenceURLAllowed(node.PresenceURL, d.allowInsecureHTTP)
+}
+
+func mvcAddressFromPublicKey(publicKeyHex string, network string) (string, error) {
+	publicKey, err := parsePublicKeyHex(publicKeyHex)
+	if err != nil {
+		return "", err
+	}
+	params, err := mvcRegistryNetParams(network)
+	if err != nil {
+		return "", err
+	}
+	pubKeyHash := bsvutil.Hash160(publicKey.SerializeCompressed())
+	address, err := bsvutil.NewLegacyAddressPubKeyHash(pubKeyHash, params)
+	if err != nil {
+		return "", fmt.Errorf("derive MVC address: %w", err)
+	}
+	return address.String(), nil
 }
 
 func registryNodeFromPin(pin RegistryPin) (RegistryNode, bool) {
