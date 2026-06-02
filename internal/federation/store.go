@@ -151,6 +151,28 @@ func (s *Store) Peer(nodeID string) (RegistryNode, bool) {
 	return cloneRegistryNode(peer), true
 }
 
+// ActivePeers returns cloned non-expired registry peers sorted by node ID.
+func (s *Store) ActivePeers(now time.Time) []RegistryNode {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	peers := make([]RegistryNode, 0, len(s.peers))
+	for _, peer := range s.peers {
+		if peerExpired(peer, now) {
+			continue
+		}
+		peers = append(peers, cloneRegistryNode(peer))
+	}
+	sort.Slice(peers, func(i, j int) bool {
+		return peers[i].NodeID < peers[j].NodeID
+	})
+	return peers
+}
+
 // UpsertSnapshot records the latest accepted presence snapshot for a node.
 func (s *Store) UpsertSnapshot(snapshot presence.Snapshot) {
 	if s == nil || snapshot.NodeID == "" {
@@ -161,6 +183,22 @@ func (s *Store) UpsertSnapshot(snapshot presence.Snapshot) {
 	defer s.mu.Unlock()
 
 	s.snapshots[snapshot.NodeID] = cloneSnapshot(snapshot)
+}
+
+// Snapshot returns a cloned accepted presence snapshot by node ID.
+func (s *Store) Snapshot(nodeID string) (presence.Snapshot, bool) {
+	if s == nil || nodeID == "" {
+		return presence.Snapshot{}, false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snapshot, ok := s.snapshots[nodeID]
+	if !ok {
+		return presence.Snapshot{}, false
+	}
+	return cloneSnapshot(snapshot), true
 }
 
 // GlobalOnline returns merged local and non-expired remote presence entries.
@@ -361,5 +399,8 @@ func cloneRegistryNode(peer RegistryNode) RegistryNode {
 
 func cloneSnapshot(snapshot presence.Snapshot) presence.Snapshot {
 	snapshot.Items = append([]presence.OnlineEntry(nil), snapshot.Items...)
+	for i := range snapshot.Items {
+		snapshot.Items[i].SourceNodeIds = append([]string(nil), snapshot.Items[i].SourceNodeIds...)
+	}
 	return snapshot
 }
