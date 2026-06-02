@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metaid-developers/meta-socket/internal/presence"
+
 	sio "github.com/zishang520/socket.io/v2/socket"
 )
 
@@ -177,16 +179,7 @@ func (m *ConnectionManager) OnlineList(page, size int) []OnlineEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var entries []OnlineEntry
-	for _, conns := range m.connections {
-		for _, c := range conns {
-			entries = append(entries, OnlineEntry{
-				MetaId:      c.MetaId,
-				Type:        string(c.ConnType),
-				ConnectedAt: c.ConnectedAt.UnixMilli(),
-			})
-		}
-	}
+	entries := m.onlineListEntriesLocked()
 
 	// Paginate
 	start := (page - 1) * size
@@ -201,6 +194,50 @@ func (m *ConnectionManager) OnlineList(page, size int) []OnlineEntry {
 		end = len(entries)
 	}
 	return entries[start:end]
+}
+
+// OnlineEntries returns all active local presence entries without pagination.
+func (m *ConnectionManager) OnlineEntries() []presence.OnlineEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.onlineEntriesLocked()
+}
+
+func (m *ConnectionManager) onlineListEntriesLocked() []presence.OnlineEntry {
+	entries := []presence.OnlineEntry{}
+	for _, conns := range m.connections {
+		for _, c := range conns {
+			entries = append(entries, presence.OnlineEntry{
+				MetaId:      c.MetaId,
+				Type:        string(c.ConnType),
+				ConnectedAt: unixMilliOrZero(c.ConnectedAt),
+			})
+		}
+	}
+	return entries
+}
+
+func (m *ConnectionManager) onlineEntriesLocked() []presence.OnlineEntry {
+	entries := []presence.OnlineEntry{}
+	for _, conns := range m.connections {
+		for _, c := range conns {
+			entries = append(entries, presence.OnlineEntry{
+				MetaId:      c.MetaId,
+				Type:        string(c.ConnType),
+				ConnectedAt: unixMilliOrZero(c.ConnectedAt),
+				LastSeenAt:  unixMilliOrZero(c.LastPing),
+			})
+		}
+	}
+	return entries
+}
+
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 // FindStaleConnections returns connections that haven't sent a ping within the timeout.
@@ -235,8 +272,4 @@ func (m *ConnectionManager) DisconnectAll() {
 }
 
 // OnlineEntry represents an online connection for presence APIs.
-type OnlineEntry struct {
-	MetaId      string `json:"metaid"`
-	Type        string `json:"type"`
-	ConnectedAt int64  `json:"connectedAt"`
-}
+type OnlineEntry = presence.OnlineEntry

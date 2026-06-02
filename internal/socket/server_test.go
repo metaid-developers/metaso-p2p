@@ -262,6 +262,91 @@ func TestManagerOnlineListPagination(t *testing.T) {
 	}
 }
 
+func TestConnectionManagerOnlineEntriesReturnsAllLocalEntries(t *testing.T) {
+	cm := NewConnectionManager(3, 3)
+	connectedAt := time.UnixMilli(1710000000000)
+	lastSeenAt := time.UnixMilli(1710000000500)
+
+	cm.connections["meta-1"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypePC,
+			ConnectedAt: connectedAt,
+			LastPing:    lastSeenAt,
+		},
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypeApp,
+			ConnectedAt: connectedAt.Add(1 * time.Second),
+			LastPing:    lastSeenAt.Add(1 * time.Second),
+		},
+	}
+	cm.connections["meta-2"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-2",
+			ConnType:    ConnTypePC,
+			ConnectedAt: connectedAt.Add(2 * time.Second),
+			LastPing:    lastSeenAt.Add(2 * time.Second),
+		},
+	}
+
+	paged := cm.OnlineList(1, 2)
+	if len(paged) != 2 {
+		t.Fatalf("paged online list should still honor size: got %d", len(paged))
+	}
+
+	entries := cm.OnlineEntries()
+	if len(entries) != 3 {
+		t.Fatalf("unpaginated entries: want 3 got %d", len(entries))
+	}
+
+	seen := map[string]int64{}
+	for _, entry := range entries {
+		seen[entry.MetaId+":"+entry.Type] = entry.LastSeenAt
+	}
+	if seen["meta-1:pc"] != 1710000000500 {
+		t.Fatalf("meta-1 pc lastSeenAt: want 1710000000500 got %d", seen["meta-1:pc"])
+	}
+	if seen["meta-1:app"] != 1710000001500 {
+		t.Fatalf("meta-1 app lastSeenAt: want 1710000001500 got %d", seen["meta-1:app"])
+	}
+	if seen["meta-2:pc"] != 1710000002500 {
+		t.Fatalf("meta-2 pc lastSeenAt: want 1710000002500 got %d", seen["meta-2:pc"])
+	}
+}
+
+func TestConnectionManagerOnlineListPreservesLegacyJSONShape(t *testing.T) {
+	cm := NewConnectionManager(3, 3)
+	cm.connections["meta-1"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypePC,
+			ConnectedAt: time.UnixMilli(1710000000000),
+			LastPing:    time.UnixMilli(1710000000500),
+		},
+	}
+
+	entries := cm.OnlineList(1, 20)
+	if len(entries) != 1 {
+		t.Fatalf("legacy online list entries: want 1 got %d", len(entries))
+	}
+	if entries[0].LastSeenAt != 0 {
+		t.Fatalf("legacy online list LastSeenAt should remain zero, got %d", entries[0].LastSeenAt)
+	}
+
+	raw, err := json.Marshal(entries[0])
+	if err != nil {
+		t.Fatalf("marshal legacy online list entry: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode legacy online list entry: %v", err)
+	}
+	if _, ok := decoded["lastSeenAt"]; ok {
+		t.Fatalf("legacy online list JSON should not expose lastSeenAt: %s", raw)
+	}
+}
+
 // TestManagerStaleDetection tests the stale connection detection.
 func TestManagerStaleDetection(t *testing.T) {
 	cm := NewConnectionManager(3, 3)
