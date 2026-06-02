@@ -143,6 +143,32 @@ func TestSnapshotSortsItemsDeterministically(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuilderWithSigningKeyProducesVerifiableSignature(t *testing.T) {
+	reader := fakeLocalReader{entries: []presence.OnlineEntry{
+		{MetaId: "meta-1", Type: "pc", ConnectedAt: 1710000000000, LastSeenAt: 1710000000500},
+	}}
+	builder := NewSnapshotBuilder(
+		reader,
+		"node-a",
+		30,
+		WithClock(func() time.Time { return time.UnixMilli(1710000001000) }),
+		WithSequence(func() uint64 { return 7 }),
+		WithSnapshotSigningKey(testPrivateKeyHex),
+	)
+
+	snapshot, err := builder.Snapshot()
+	if err != nil {
+		t.Fatalf("build signed snapshot: %v", err)
+	}
+
+	if snapshot.Signature == "" {
+		t.Fatal("signed snapshot should include a signature")
+	}
+	if err := VerifySnapshot(snapshot, "node-a", testPublicKeyHex); err != nil {
+		t.Fatalf("verify signed snapshot: %v", err)
+	}
+}
+
 func itemKeyNumber(value int64) string {
 	return strconv.FormatInt(value, 10)
 }

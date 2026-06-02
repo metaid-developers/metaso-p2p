@@ -2,6 +2,7 @@ package federation
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -9,11 +10,12 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/presence"
 )
 
-// SnapshotBuilder creates unsigned local presence snapshots.
+// SnapshotBuilder creates local presence snapshots.
 type SnapshotBuilder struct {
 	local      presence.LocalReader
 	nodeID     string
 	ttlSeconds int64
+	privateKey string
 
 	clock    func() time.Time
 	sequence func() uint64
@@ -43,6 +45,13 @@ func WithSequence(sequence func() uint64) SnapshotOption {
 	}
 }
 
+// WithSnapshotSigningKey signs snapshots with a secp256k1 private key hex.
+func WithSnapshotSigningKey(privateKeyHex string) SnapshotOption {
+	return func(b *SnapshotBuilder) {
+		b.privateKey = privateKeyHex
+	}
+}
+
 // NewSnapshotBuilder returns a snapshot provider for local presence entries.
 func NewSnapshotBuilder(local presence.LocalReader, nodeID string, ttlSeconds int64, opts ...SnapshotOption) *SnapshotBuilder {
 	builder := &SnapshotBuilder{
@@ -59,7 +68,7 @@ func NewSnapshotBuilder(local presence.LocalReader, nodeID string, ttlSeconds in
 	return builder
 }
 
-// Snapshot builds an unsigned local presence snapshot.
+// Snapshot builds a local presence snapshot.
 func (b *SnapshotBuilder) Snapshot() (*presence.Snapshot, error) {
 	if b.local == nil {
 		return nil, errors.New("federation snapshot requires a local presence reader")
@@ -84,7 +93,7 @@ func (b *SnapshotBuilder) Snapshot() (*presence.Snapshot, error) {
 		return items[i].LastSeenAt < items[j].LastSeenAt
 	})
 
-	return &presence.Snapshot{
+	snapshot := &presence.Snapshot{
 		Protocol:    ProtocolPresence,
 		Version:     Version,
 		NodeID:      b.nodeID,
@@ -93,7 +102,16 @@ func (b *SnapshotBuilder) Snapshot() (*presence.Snapshot, error) {
 		Sequence:    b.sequence(),
 		Items:       items,
 		Signature:   "",
-	}, nil
+	}
+	if b.privateKey != "" {
+		signature, err := SignSnapshot(snapshot, b.privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("sign federation snapshot: %w", err)
+		}
+		snapshot.Signature = signature
+	}
+
+	return snapshot, nil
 }
 
 func (b *SnapshotBuilder) nextSequence() uint64 {
