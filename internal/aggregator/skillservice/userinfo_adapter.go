@@ -10,10 +10,9 @@ import (
 // means userinfo stays oblivious to Bot Hub concepts; if another consumer
 // shows up later it can write its own adapter without touching userinfo.
 //
-// The adapter copies only the four fields the Bot Hub UI cares about; the
-// rest of userinfo.UserProfile (avatarId, nameId, bio, …) stays unused so
-// future userinfo schema changes have no chance of leaking into Bot Hub
-// responses.
+// The adapter copies only the fields the Bot Hub UI cares about. The rest of
+// userinfo.UserProfile (nameId, bio, …) stays unused so future userinfo schema
+// changes have no chance of leaking into Bot Hub responses.
 type userInfoLookupAdapter struct {
 	ui *userinfo.Aggregator
 }
@@ -61,6 +60,7 @@ func snapshotFromUserInfo(p *userinfo.UserProfile) *ProfileSnapshot {
 		Address:       p.Address,
 		Name:          p.Name,
 		Avatar:        p.Avatar,
+		AvatarId:      p.AvatarId,
 		ChatPublicKey: p.ChatPublicKey,
 	}
 }

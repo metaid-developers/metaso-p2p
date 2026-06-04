@@ -236,7 +236,8 @@ func (m *ConnectionManager) DisconnectAll() {
 
 // OnlineEntry represents an online connection for presence APIs.
 type OnlineEntry struct {
-	MetaId      string `json:"metaid"`
-	Type        string `json:"type"`
-	ConnectedAt int64  `json:"connectedAt"`
+	MetaId      string           `json:"metaid"`
+	Type        string           `json:"type"`
+	ConnectedAt int64            `json:"connectedAt"`
+	UserInfo    *ProfileSnapshot `json:"userInfo,omitempty"`
 }

@@ -643,6 +643,63 @@ func TestHandleGlobalMetaIdInfo_LegacyAddressFallbackFillsMissingChatKey(t *test
 	}
 }
 
+func TestHandleGlobalMetaIdInfo_RemoteFallbackRefreshesLegacyAvatar(t *testing.T) {
+	const globalMetaID = "idq1avatarrefresh"
+	const providerMetaID = "ce447562dcbca15ee44c7055c40735b01d96f1fa2017c871051fe9cfcddf70c3"
+	const providerAddress = "1BvrDMi5UoytcLWKXnLL66xErdc73gkAoL"
+	const staleAvatarID = "d20f8dc9512b55223e67ea6e6df7b664f24d788ef1f594cfc57cd43c557f5e8ci0"
+	const currentAvatarID = "2b1a6068498cd34ae99953eca889dc206ed81823425ff7cc1c5e09a142c05795i0"
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/info/globalmetaid/" + globalMetaID:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"metaid":"` + providerMetaID + `","globalMetaId":"` + globalMetaID + `","address":"` + providerAddress + `","name":"Ellis Grant","avatar":"/content/` + currentAvatarID + `","avatarId":"` + currentAvatarID + `","chatpubkey":"04currentchatkey","chatpubkeyId":"current_key:i0"}}`))
+		default:
+			t.Fatalf("unexpected remote profile path: %s", r.URL.Path)
+		}
+	}))
+	defer remote.Close()
+
+	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
+	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	if err := agg.saveProfile(&UserProfile{
+		GlobalMetaID:    globalMetaID,
+		MetaID:          providerMetaID,
+		Address:         providerAddress,
+		Name:            "Ellis Grant",
+		Avatar:          "https://manapi.metaid.io/content/" + staleAvatarID,
+		AvatarId:        staleAvatarID,
+		ChatPublicKey:   "04currentchatkey",
+		ChatPublicKeyId: "current_key:i0",
+	}); err != nil {
+		t.Fatalf("seed stale local profile: %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/globalmetaid/"+globalMetaID)
+	var resp struct {
+		Code int         `json:"code"`
+		Data UserProfile `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 1 {
+		t.Fatalf("expected success code=1, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.Avatar != "/content/"+currentAvatarID {
+		t.Fatalf("avatar should be refreshed from current remote profile, got %+v", resp.Data)
+	}
+	if resp.Data.AvatarId != currentAvatarID {
+		t.Fatalf("avatarId should be current remote id, got %+v", resp.Data)
+	}
+}
+
 // TestHandleMetaIdInfo_FullWireFormat asserts the whole on-the-wire response
 // exactly matches what idchat's metafileIndexerApi client expects after a
 // realistic init + name + chatpubkey indexing sequence.

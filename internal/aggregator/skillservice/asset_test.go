@@ -20,6 +20,8 @@ func TestAssetResolver_Resolve(t *testing.T) {
 		{"https passthrough", base, "https://cdn.example.com/img/abc.png", "https://cdn.example.com/img/abc.png"},
 		{"https with whitespace trimmed", base, "  https://cdn.example.com/x.png  ", "https://cdn.example.com/x.png"},
 		{"uppercase scheme is still passthrough", base, "HTTPS://CDN.EXAMPLE.COM/A.PNG", "HTTPS://CDN.EXAMPLE.COM/A.PNG"},
+		{"legacy manapi content url rehomed", base, "https://manapi.metaid.io/content/old-avatar:i0", "https://example.com/content/old-avatar:i0"},
+		{"file indexer content url normalised", base, "https://file.metaid.io/metafile-indexer/content/current-avatar:i0", "https://example.com/content/current-avatar:i0"},
 
 		// metafile:// and metafile: forms.
 		{"metafile:// stripped + joined", base, "metafile://abc123i0", "https://example.com/content/abc123i0"},

@@ -173,6 +173,92 @@ func TestOnlineList(t *testing.T) {
 	t.Logf("online items: %d", len(data.Items))
 }
 
+type fakePresenceProfileLookup struct {
+	byMetaId     map[string]*ProfileSnapshot
+	byGlobalMeta map[string]*ProfileSnapshot
+	byAddress    map[string]*ProfileSnapshot
+}
+
+func (f *fakePresenceProfileLookup) LookupByMetaId(metaid string) (*ProfileSnapshot, error) {
+	return f.byMetaId[metaid], nil
+}
+
+func (f *fakePresenceProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	return f.byGlobalMeta[globalMetaId], nil
+}
+
+func (f *fakePresenceProfileLookup) LookupByAddress(address string) (*ProfileSnapshot, error) {
+	return f.byAddress[address], nil
+}
+
+func TestOnlineListHydratesAppRowsWithProfile(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer func() {
+		srv.manager.mu.Lock()
+		srv.manager.connections = map[string][]*TrackedConnection{}
+		srv.manager.mu.Unlock()
+		srv.Shutdown()
+	}()
+
+	const globalMetaID = "idq1wlsx9q3lf45uz3n654lnya8kplj6lt2vuwjgy5"
+	const avatarID = "2b1a6068498cd34ae99953eca889dc206ed81823425ff7cc1c5e09a142c05795i0"
+	srv.SetProfileLookup(&fakePresenceProfileLookup{
+		byGlobalMeta: map[string]*ProfileSnapshot{
+			globalMetaID: {
+				GlobalMetaId:  globalMetaID,
+				MetaId:        "ce447562dcbca15ee44c7055c40735b01d96f1fa2017c871051fe9cfcddf70c3",
+				Address:       "1BvrDMi5UoytcLWKXnLL66xErdc73gkAoL",
+				Name:          "Ellis Grant",
+				Avatar:        "/content/" + avatarID,
+				AvatarId:      avatarID,
+				ChatPublicKey: "04currentchatkey",
+			},
+		},
+	})
+	srv.SetProfileAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+
+	srv.manager.mu.Lock()
+	srv.manager.connections[globalMetaID] = []*TrackedConnection{{
+		MetaId:      globalMetaID,
+		ConnType:    ConnTypeApp,
+		ConnectedAt: time.UnixMilli(1780546569529),
+		LastPing:    time.UnixMilli(1780546569529),
+	}}
+	srv.manager.mu.Unlock()
+
+	w := performRequest(t, router, "GET", "/socket/online/list?page=1&size=5")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode list: %v", err)
+	}
+	var data struct {
+		Items []OnlineEntry `json:"items"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode data: %v", err)
+	}
+	if len(data.Items) != 1 {
+		t.Fatalf("expected 1 online item, got %d: %+v", len(data.Items), data.Items)
+	}
+	got := data.Items[0]
+	if got.UserInfo == nil {
+		t.Fatalf("app row should include hydrated userInfo: %+v", got)
+	}
+	if got.UserInfo.Name != "Ellis Grant" {
+		t.Fatalf("userInfo.name: got %q", got.UserInfo.Name)
+	}
+	if got.UserInfo.AvatarId != avatarID {
+		t.Fatalf("userInfo.avatarId: got %q want %q", got.UserInfo.AvatarId, avatarID)
+	}
+	if got.UserInfo.AvatarUrl != "https://file.metaid.io/metafile-indexer/content/"+avatarID {
+		t.Fatalf("userInfo.avatarUrl: got %q", got.UserInfo.AvatarUrl)
+	}
+}
+
 // TestOnlineListPagination verifies the list endpoint handles pagination params.
 func TestOnlineListPagination(t *testing.T) {
 	srv, router := newTestRouter(t)

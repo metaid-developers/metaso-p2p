@@ -1,6 +1,9 @@
 package skillservice
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // AssetResolver turns a chain-declared asset reference into something the
 // frontend can load directly. The Bot Hub spec requires that every
@@ -67,6 +70,8 @@ func (r *AssetResolver) Resolve(asset string) string {
 	}
 	lower := strings.ToLower(asset)
 	switch {
+	case isLegacyManAPIContentURL(asset), isFileIndexerContentURL(asset):
+		return r.joinID(assetIDFromContentURL(asset))
 	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
 		return asset
 	case strings.HasPrefix(lower, "metafile://"):
@@ -81,6 +86,34 @@ func (r *AssetResolver) Resolve(asset string) string {
 	default:
 		return r.joinID(asset)
 	}
+}
+
+func isLegacyManAPIContentURL(asset string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(asset))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, "manapi.metaid.io") && strings.HasPrefix(parsed.Path, "/content/")
+}
+
+func isFileIndexerContentURL(asset string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(asset))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, "file.metaid.io") && strings.HasPrefix(parsed.Path, "/metafile-indexer/content/")
+}
+
+func assetIDFromContentURL(asset string) string {
+	parsed, err := url.Parse(strings.TrimSpace(asset))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-1])
 }
 
 // joinID appends an id to the configured base URL. Returns the id

@@ -51,6 +51,7 @@ type DetailProvider struct {
 	Address      string  `json:"address"`
 	Name         string  `json:"name"`
 	Avatar       string  `json:"avatar"`
+	AvatarId     string  `json:"avatarId,omitempty"`
 	ChatPubkey   *string `json:"chatPubkey,omitempty"`
 }
 
@@ -208,6 +209,7 @@ func (a *Aggregator) toDetailProvider(rec *ServiceRecord, profile ProfileSnapsho
 		Address:      firstNonEmpty(profile.Address, rec.ProviderAddress),
 		Name:         profile.Name,
 		Avatar:       a.ResolveAsset(profile.Avatar),
+		AvatarId:     profile.AvatarId,
 	}
 	if pk := strings.TrimSpace(profile.ChatPublicKey); pk != "" {
 		out.ChatPubkey = &pk

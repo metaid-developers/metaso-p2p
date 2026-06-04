@@ -68,6 +68,9 @@ func TestDetailEndpoint_BySourcePinId(t *testing.T) {
 	if body.Data.Provider.ChatPubkey == nil || *body.Data.Provider.ChatPubkey != "pkA" {
 		t.Fatalf("chatPubkey: got %v", body.Data.Provider.ChatPubkey)
 	}
+	if body.Data.Provider.AvatarId != "provAavatar" {
+		t.Fatalf("avatarId: got %q want provAavatar", body.Data.Provider.AvatarId)
+	}
 	if body.Data.SchemaVersion != "botHubSkillServiceDetail.v1" {
 		t.Fatalf("schema: %q", body.Data.SchemaVersion)
 	}

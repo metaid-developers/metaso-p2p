@@ -78,6 +78,7 @@ type ServiceListItem struct {
 	ProviderAddress      string `json:"providerAddress"`
 	ProviderName         string `json:"providerName"`
 	ProviderAvatar       string `json:"providerAvatar"`
+	ProviderAvatarId     string `json:"providerAvatarId,omitempty"`
 	ProviderChatPubkey   string `json:"providerChatPubkey"`
 
 	RatingAvg   float64 `json:"ratingAvg"`
@@ -448,6 +449,7 @@ func (a *Aggregator) toListItem(exp expandedRecord) ServiceListItem {
 		ProviderAddress:      firstNonEmpty(exp.profile.Address, rec.ProviderAddress),
 		ProviderName:         exp.profile.Name,
 		ProviderAvatar:       a.ResolveAsset(exp.profile.Avatar),
+		ProviderAvatarId:     exp.profile.AvatarId,
 		ProviderChatPubkey:   exp.profile.ChatPublicKey,
 
 		RatingAvg:   avg,

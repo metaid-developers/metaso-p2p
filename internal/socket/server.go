@@ -2,6 +2,7 @@ package socket
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,11 +14,13 @@ import (
 
 // Server wraps the Socket.IO server with connection management and push capabilities.
 type Server struct {
-	ioServer  *sio.Server
-	manager   *ConnectionManager
-	cfg       config.SocketConfig
-	pushCh    chan *PushEnvelope
-	stopCh    chan struct{}
+	ioServer            *sio.Server
+	manager             *ConnectionManager
+	cfg                 config.SocketConfig
+	pushCh              chan *PushEnvelope
+	stopCh              chan struct{}
+	profileLookup       ProfileLookup
+	profileAssetBaseURL string
 }
 
 // PushEnvelope is the wire format for push messages, matching idchat's contract.
@@ -228,6 +231,16 @@ func (s *Server) Shutdown() {
 // Manager returns the connection manager for presence queries.
 func (s *Server) Manager() *ConnectionManager {
 	return s.manager
+}
+
+// SetProfileLookup wires optional profile hydration for presence rows.
+func (s *Server) SetProfileLookup(lookup ProfileLookup) {
+	s.profileLookup = lookup
+}
+
+// SetProfileAssetBaseURL configures avatar URL expansion for presence profiles.
+func (s *Server) SetProfileAssetBaseURL(baseURL string) {
+	s.profileAssetBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 }
 
 // IOServer returns the underlying Socket.IO server.

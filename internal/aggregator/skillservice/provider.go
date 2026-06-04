@@ -17,6 +17,7 @@ import "strings"
 //   - Name           → providerName
 //   - Avatar         → providerAvatar (relative path or absolute URL,
 //     asset URL resolution lands in M4)
+//   - AvatarId       → providerAvatarId / provider.avatarId
 //   - ChatPublicKey  → providerChatPubkey (the communication addressing
 //     field; missing is allowed and surfaces as "")
 type ProfileSnapshot struct {
@@ -25,6 +26,7 @@ type ProfileSnapshot struct {
 	Address       string
 	Name          string
 	Avatar        string
+	AvatarId      string
 	ChatPublicKey string
 }
 

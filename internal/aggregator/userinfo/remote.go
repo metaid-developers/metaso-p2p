@@ -188,7 +188,8 @@ func profileNeedsRemoteCompletion(profile *UserProfile) bool {
 	return strings.TrimSpace(profile.ChatPublicKey) == "" ||
 		strings.TrimSpace(profile.GlobalMetaID) == "" ||
 		strings.TrimSpace(profile.MetaID) == "" ||
-		strings.TrimSpace(profile.Address) == ""
+		strings.TrimSpace(profile.Address) == "" ||
+		avatarNeedsRemoteCompletion(profile)
 }
 
 func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile) error {
@@ -225,8 +226,7 @@ func mergeUserProfiles(local, remote *UserProfile) *UserProfile {
 
 	fillString(&out.Name, remote.Name)
 	fillString(&out.NameId, remote.NameId)
-	fillString(&out.Avatar, remote.Avatar)
-	fillString(&out.AvatarId, remote.AvatarId)
+	fillAvatarFields(&out, remote)
 	fillString(&out.NftAvatar, remote.NftAvatar)
 	fillString(&out.Bio, remote.Bio)
 	fillString(&out.BioId, remote.BioId)
@@ -251,6 +251,131 @@ func shouldFillString(dst, src string) bool {
 		return false
 	}
 	return dst == "" || dst == "/content/"
+}
+
+func avatarNeedsRemoteCompletion(profile *UserProfile) bool {
+	if profile == nil {
+		return true
+	}
+	avatar := strings.TrimSpace(profile.Avatar)
+	if avatar == "" || avatar == "/content/" || isLegacyManAPIContentURL(avatar) {
+		return true
+	}
+	return false
+}
+
+func fillAvatarFields(out *UserProfile, remote *UserProfile) {
+	if out == nil || remote == nil {
+		return
+	}
+	srcAvatar, srcID := normaliseAvatarReference(remote.Avatar, remote.AvatarId)
+	if srcAvatar == "" && srcID == "" {
+		return
+	}
+
+	dstAvatar := strings.TrimSpace(out.Avatar)
+	dstID := firstNonEmptyString(out.AvatarId, avatarIDFromReference(dstAvatar))
+	if shouldUseRemoteAvatar(dstAvatar, dstID, srcAvatar, srcID) {
+		if srcAvatar != "" {
+			out.Avatar = srcAvatar
+		}
+		if srcID != "" {
+			out.AvatarId = srcID
+		}
+		return
+	}
+	if strings.TrimSpace(out.AvatarId) == "" && dstID != "" {
+		out.AvatarId = dstID
+	}
+}
+
+func shouldUseRemoteAvatar(dstAvatar, dstID, srcAvatar, srcID string) bool {
+	dstAvatar = strings.TrimSpace(dstAvatar)
+	dstID = strings.TrimSpace(dstID)
+	srcAvatar = strings.TrimSpace(srcAvatar)
+	srcID = strings.TrimSpace(srcID)
+	if srcAvatar == "" && srcID == "" {
+		return false
+	}
+	if dstAvatar == "" || dstAvatar == "/content/" || isLegacyManAPIContentURL(dstAvatar) {
+		return true
+	}
+	return srcID != "" && dstID != "" && !strings.EqualFold(srcID, dstID)
+}
+
+func normaliseAvatarReference(avatar, avatarID string) (string, string) {
+	avatar = strings.TrimSpace(avatar)
+	avatarID = strings.TrimSpace(avatarID)
+	if avatarID == "" {
+		avatarID = avatarIDFromReference(avatar)
+	}
+	if avatarID == "" {
+		return avatar, ""
+	}
+	if avatar == "" || avatar == "/content/" || isContentBackedAvatarReference(avatar) {
+		return "/content/" + avatarID, avatarID
+	}
+	return avatar, avatarID
+}
+
+func isContentBackedAvatarReference(avatar string) bool {
+	avatar = strings.TrimSpace(avatar)
+	lower := strings.ToLower(avatar)
+	return strings.HasPrefix(avatar, "/content/") ||
+		strings.HasPrefix(lower, "metafile:") ||
+		isLegacyManAPIContentURL(avatar) ||
+		isFileIndexerContentURL(avatar)
+}
+
+func avatarIDFromReference(avatar string) string {
+	avatar = strings.TrimSpace(avatar)
+	if avatar == "" || avatar == "/content/" {
+		return ""
+	}
+	lower := strings.ToLower(avatar)
+	switch {
+	case strings.HasPrefix(avatar, "/content/"):
+		return strings.Trim(strings.TrimPrefix(avatar, "/content/"), "/")
+	case strings.HasPrefix(lower, "metafile://"):
+		return strings.Trim(strings.TrimPrefix(avatar, "metafile://"), "/")
+	case strings.HasPrefix(lower, "metafile:"):
+		return strings.Trim(strings.TrimPrefix(avatar, "metafile:"), "/")
+	case isLegacyManAPIContentURL(avatar), isFileIndexerContentURL(avatar):
+		if parsed, err := url.Parse(avatar); err == nil {
+			parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+			if len(parts) > 0 {
+				return strings.TrimSpace(parts[len(parts)-1])
+			}
+		}
+	}
+	return ""
+}
+
+func isLegacyManAPIContentURL(asset string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(asset))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	return host == "manapi.metaid.io" && strings.HasPrefix(parsed.Path, "/content/")
+}
+
+func isFileIndexerContentURL(asset string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(asset))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	return host == "file.metaid.io" && strings.HasPrefix(parsed.Path, "/metafile-indexer/content/")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func overrideString(dst *string, src string) {
@@ -344,14 +469,15 @@ func (p remoteProfilePayload) toUserProfile() *UserProfile {
 	if p.MetaID == "" && p.GlobalMetaID == "" && p.Address == "" {
 		return nil
 	}
+	avatar, avatarID := normaliseAvatarReference(p.Avatar, p.AvatarId)
 	return &UserProfile{
 		GlobalMetaID:    p.GlobalMetaID,
 		MetaID:          p.MetaID,
 		Address:         p.Address,
 		Name:            p.Name,
 		NameId:          p.NameId,
-		Avatar:          p.Avatar,
-		AvatarId:        p.AvatarId,
+		Avatar:          avatar,
+		AvatarId:        avatarID,
 		NftAvatar:       p.NftAvatar,
 		Bio:             rawJSONToString(p.Bio),
 		BioId:           p.BioId,

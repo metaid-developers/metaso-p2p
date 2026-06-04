@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
+	cfg := Default()
+	if cfg.BotHub.AssetBaseURL != "https://file.metaid.io/metafile-indexer/content" {
+		t.Fatalf("BotHub asset base URL: got %q", cfg.BotHub.AssetBaseURL)
+	}
+}
+
 func TestLoadBlockIndexEnv(t *testing.T) {
 	t.Setenv("META_SOCKET_BLOCK_INDEX_ENABLED", "true")
 

@@ -213,7 +213,7 @@ func Default() Config {
 			// Default mirrors the spec's recommendation. Operators can
 			// override with META_SOCKET_ASSET_BASE_URL when running
 			// against a different MetaID asset host.
-			AssetBaseURL: "https://manapi.metaid.io/content",
+			AssetBaseURL: "https://file.metaid.io/metafile-indexer/content",
 		},
 	}
 }

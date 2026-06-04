@@ -53,13 +53,14 @@ func main() {
 
 	// --- Aggregator registry ---
 	var aggRegistry *aggregator.Registry
+	var userinfoAgg *userinfo.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
 		if err := aggRegistry.Register(&notify.Aggregator{}); err != nil {
 			log.Printf("WARNING: notify aggregator init failed: %v", err)
 		}
-		userinfoAgg := &userinfo.Aggregator{}
+		userinfoAgg = &userinfo.Aggregator{}
 		if err := aggRegistry.Register(userinfoAgg); err != nil {
 			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
 		}
@@ -146,6 +147,10 @@ func main() {
 	var socketServer *socket.Server
 	if cfg.Socket.Enabled {
 		socketServer = socket.NewServer(cfg.Socket)
+		socketServer.SetProfileAssetBaseURL(cfg.BotHub.AssetBaseURL)
+		if userinfoAgg != nil {
+			socketServer.SetProfileLookup(&socketUserInfoLookupAdapter{ui: userinfoAgg})
+		}
 		socketServer.StartTimeoutCleanup()
 		log.Printf("socket.io server: path=%s legacy=%s", cfg.Socket.PrimaryPath, cfg.Socket.LegacyPath)
 
@@ -217,4 +222,48 @@ func enabledBlockIndexChainNames(cfg config.BlockIndexConfig) []string {
 		names = append(names, "opcat")
 	}
 	return names
+}
+
+type socketUserInfoLookupAdapter struct {
+	ui *userinfo.Aggregator
+}
+
+func (a *socketUserInfoLookupAdapter) LookupByMetaId(metaid string) (*socket.ProfileSnapshot, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupByMetaId(metaid)
+	return socketProfileFromUserInfo(p), err
+}
+
+func (a *socketUserInfoLookupAdapter) LookupByGlobalMetaId(globalMetaId string) (*socket.ProfileSnapshot, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupByGlobalMetaId(globalMetaId)
+	return socketProfileFromUserInfo(p), err
+}
+
+func (a *socketUserInfoLookupAdapter) LookupByAddress(address string) (*socket.ProfileSnapshot, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupByAddress(address)
+	return socketProfileFromUserInfo(p), err
+}
+
+func socketProfileFromUserInfo(p *userinfo.UserProfile) *socket.ProfileSnapshot {
+	if p == nil {
+		return nil
+	}
+	return &socket.ProfileSnapshot{
+		GlobalMetaId:  p.GlobalMetaID,
+		MetaId:        p.MetaID,
+		Address:       p.Address,
+		Name:          p.Name,
+		Avatar:        p.Avatar,
+		AvatarId:      p.AvatarId,
+		ChatPublicKey: p.ChatPublicKey,
+		Bio:           p.Bio,
+	}
 }

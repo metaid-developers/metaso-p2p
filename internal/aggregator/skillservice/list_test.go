@@ -35,7 +35,7 @@ func newListFixture(t *testing.T) *listFixture {
 	// test, not the userinfo adapter (covered in M2).
 	agg.SetProfileLookup(&fakeProfileLookup{
 		byMetaId: map[string]*ProfileSnapshot{
-			"provA": {Name: "Provider Alpha", Avatar: "metafile://provAavatar", ChatPublicKey: "pkA"},
+			"provA": {Name: "Provider Alpha", Avatar: "metafile://provAavatar", AvatarId: "provAavatar", ChatPublicKey: "pkA"},
 			"provB": {Name: "Provider Beta", Avatar: "https://cdn.example.com/b.png", ChatPublicKey: "pkB"},
 		},
 	})
@@ -149,6 +149,9 @@ func TestListEndpoint_SingleService(t *testing.T) {
 	}
 	if !strings.HasPrefix(it.ProviderAvatar, "https://example.com/c/") {
 		t.Errorf("providerAvatar not resolved: %q", it.ProviderAvatar)
+	}
+	if it.ProviderAvatarId != "provAavatar" {
+		t.Errorf("providerAvatarId: got %q want provAavatar", it.ProviderAvatarId)
 	}
 	if it.ProviderChatPubkey != "pkA" {
 		t.Errorf("providerChatPubkey: %q", it.ProviderChatPubkey)

@@ -41,6 +41,7 @@ func (s *Server) HandleOnlineList(c *gin.Context) {
 	if items == nil {
 		items = []OnlineEntry{}
 	}
+	items = s.hydrateOnlineEntries(items)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":           0,
