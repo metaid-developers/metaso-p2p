@@ -5,11 +5,10 @@
 // See docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md for the
 // full v1 contract. Key invariants enforced here:
 //   - Same-chain version chain only: create / modify / revoke must share a
-//     chainName. Cross-chain originalId references are intentionally NOT
-//     folded; they are logged as a compatibility fallback and treated as
-//     standalone records.
-//   - originalId is the canonical link to the source create PIN; the
-//     "previous version pinId" pattern is not accepted as v1 input.
+//     chainName. Cross-chain target references are intentionally NOT folded.
+//   - sourceServicePinId is the canonical aggregation key; modify / revoke
+//     PINs may point at the current version pin via `@pinId`, and the
+//     aggregator maps that version back to the source create PIN.
 //   - Declarative outputs only: the indexer stores chain-declared fields
 //     (status, disabled, operation) verbatim and never synthesises action
 //     verdicts like canOrder / available.
@@ -33,21 +32,21 @@ const (
 // specification, not the API response. The aggregator translates this into
 // a ServiceRecord (chain metadata + parsed summary) before persisting.
 type ServiceContentSummary struct {
-	ServiceName      string `json:"serviceName"`
-	DisplayName      string `json:"displayName"`
-	Description      string `json:"description"`
-	ServiceIcon      string `json:"serviceIcon"`
-	ProviderMetaBot  string `json:"providerMetaBot"`
-	ProviderSkill    string `json:"providerSkill"`
-	Price            string `json:"price"`
-	Currency         string `json:"currency"`
-	PaymentChain     string `json:"paymentChain"`
-	SettlementKind   string `json:"settlementKind"`
-	MRC20Ticker      string `json:"mrc20Ticker"`
-	MRC20Id          string `json:"mrc20Id"`
-	OutputType       string `json:"outputType"`
-	PaymentAddress   string `json:"paymentAddress"`
-	Disabled         bool   `json:"disabled"`
+	ServiceName     string `json:"serviceName"`
+	DisplayName     string `json:"displayName"`
+	Description     string `json:"description"`
+	ServiceIcon     string `json:"serviceIcon"`
+	ProviderMetaBot string `json:"providerMetaBot"`
+	ProviderSkill   string `json:"providerSkill"`
+	Price           string `json:"price"`
+	Currency        string `json:"currency"`
+	PaymentChain    string `json:"paymentChain"`
+	SettlementKind  string `json:"settlementKind"`
+	MRC20Ticker     string `json:"mrc20Ticker"`
+	MRC20Id         string `json:"mrc20Id"`
+	OutputType      string `json:"outputType"`
+	PaymentAddress  string `json:"paymentAddress"`
+	Disabled        bool   `json:"disabled"`
 }
 
 // RatingContentSummary mirrors the `contentSummary` JSON payload published

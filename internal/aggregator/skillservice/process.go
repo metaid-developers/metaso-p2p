@@ -24,22 +24,16 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription) error {
 	if pin == nil || pin.Path == "" {
 		return nil
 	}
-	// MetaID modify / revoke PINs commonly publish the path as
-	// `<base-path>@<originalPinId>`. Strip the `@…` suffix before routing
-	// so the legacy fallback path (relied on by resolveOriginalId when
-	// OriginalId is missing) reaches the correct handler. Anything to the
-	// right of `@` is still inspected later for the source pin id; here
-	// we only need the protocol identifier.
-	base := strings.ToLower(strings.TrimRight(pin.Path, "/"))
-	if at := strings.Index(base, "@"); at >= 0 {
-		base = base[:at]
-	}
+	base := protocolPathFromPinPath(pin.Path)
 	switch base {
 	case PathSkillService:
 		return a.processServicePin(pin)
 	case PathSkillServiceRate:
 		return a.processRatingPin(pin)
 	default:
+		if isVersionOperation(pin.Operation) {
+			return a.processTargetedServicePin(pin)
+		}
 		return nil
 	}
 }
@@ -48,10 +42,10 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription) error {
 // create / modify / revoke into a single ServiceRecord keyed by
 // (chainName, sourceServicePinId).
 //
-// Same-chain invariant: if a modify or revoke pin's originalId resolves to a
-// create pin on a different chainName, the pin is rejected as a compatibility
-// fallback (logged, not stored). Cross-chain version chains are intentionally
-// out of scope for v1; see docs/specs/2026-05-28-bot-hub-skill-service-...
+// Same-chain invariant: if a modify or revoke target resolves to a service
+// on a different chainName, the pin is rejected as a compatibility fallback
+// (logged, not stored). Cross-chain version chains are intentionally out of
+// scope for v1; see docs/specs/2026-05-28-bot-hub-skill-service-...
 func (a *Aggregator) processServicePin(pin *aggregator.PinInscription) error {
 	if pin.ChainName == "" || pin.Id == "" {
 		return nil
@@ -101,27 +95,32 @@ func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error 
 	return nil
 }
 
-// processServiceModify resolves the source pin via originalId (one hop),
-// rejects cross-chain references, and overwrites the current ServiceRecord
-// while keeping CreatedAt stable.
+// processServiceModify resolves the MetaID target pin back to the source
+// service, rejects stale or cross-chain references, and overwrites the current
+// ServiceRecord while keeping CreatedAt stable.
 func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error {
-	sourcePinId, ok := resolveOriginalId(pin)
+	targetPinId, ok := resolveTargetPinId(pin)
 	if !ok {
 		return nil
 	}
 
-	previous, err := a.loadService(pin.ChainName, sourcePinId)
+	previous, err := a.loadServiceByAnyPinId(pin.ChainName, targetPinId)
 	if err != nil {
 		return err
 	}
 	if previous == nil {
-		// No source on this chain to fold into; could be cross-chain
-		// originalId or simply out-of-order delivery. Drop the modify
+		// No target on this chain to fold into; could be cross-chain
+		// target id or simply out-of-order delivery. Drop the modify
 		// silently — the indexer engine does not replay later, so out-of-
 		// order is expected to be rare; log it so we can tell apart cross-
 		// chain pollution.
-		log.Printf("[skillservice] modify pin %s: source %s/%s not found (cross-chain or out-of-order); skipped",
-			pin.Id, pin.ChainName, sourcePinId)
+		log.Printf("[skillservice] modify pin %s: target %s/%s not found (cross-chain or out-of-order); skipped",
+			pin.Id, pin.ChainName, targetPinId)
+		return nil
+	}
+	if !isCurrentVersionTarget(previous, targetPinId) {
+		log.Printf("[skillservice] modify pin %s: target %s is not current version %s for source %s; skipped",
+			pin.Id, targetPinId, previous.CurrentPinId, previous.SourceServicePinId)
 		return nil
 	}
 
@@ -130,6 +129,7 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 		return nil
 	}
 
+	sourcePinId := previous.SourceServicePinId
 	updated := newServiceRecord(pin, summary, sourcePinId)
 	// Preserve the original CreatedAt; modifies only move UpdatedAt forward.
 	updated.CreatedAt = previous.CreatedAt
@@ -161,21 +161,27 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 // still return the last known declaration if the product chooses to surface
 // revoked services).
 func (a *Aggregator) processServiceRevoke(pin *aggregator.PinInscription) error {
-	sourcePinId, ok := resolveOriginalId(pin)
+	targetPinId, ok := resolveTargetPinId(pin)
 	if !ok {
 		return nil
 	}
 
-	previous, err := a.loadService(pin.ChainName, sourcePinId)
+	previous, err := a.loadServiceByAnyPinId(pin.ChainName, targetPinId)
 	if err != nil {
 		return err
 	}
 	if previous == nil {
-		log.Printf("[skillservice] revoke pin %s: source %s/%s not found (cross-chain or out-of-order); skipped",
-			pin.Id, pin.ChainName, sourcePinId)
+		log.Printf("[skillservice] revoke pin %s: target %s/%s not found (cross-chain or out-of-order); skipped",
+			pin.Id, pin.ChainName, targetPinId)
+		return nil
+	}
+	if !isCurrentVersionTarget(previous, targetPinId) {
+		log.Printf("[skillservice] revoke pin %s: target %s is not current version %s for source %s; skipped",
+			pin.Id, targetPinId, previous.CurrentPinId, previous.SourceServicePinId)
 		return nil
 	}
 
+	sourcePinId := previous.SourceServicePinId
 	updated := *previous // shallow copy
 	updated.Operation = OperationRevoke
 	updated.CurrentPinId = pin.Id
@@ -191,29 +197,65 @@ func (a *Aggregator) processServiceRevoke(pin *aggregator.PinInscription) error 
 
 // --- helpers -----------------------------------------------------------------
 
-// resolveOriginalId picks the canonical source pin id for a modify/revoke.
-// It prefers PinInscription.OriginalId (the metaid protocol's standard
-// one-hop reference). When OriginalId is missing we fall back to extracting
-// an @pinId from pin.Path; the fallback is bounded (one hop only — we do
-// NOT recursively resolve "previous version" pin chains) and is logged so
-// upstream telemetry can spot stragglers from the legacy publish path.
-func resolveOriginalId(pin *aggregator.PinInscription) (string, bool) {
-	if pin.OriginalId != "" {
-		return pin.OriginalId, true
+func protocolPathFromPinPath(path string) string {
+	base := strings.ToLower(strings.TrimRight(strings.TrimSpace(path), "/"))
+	if at := strings.Index(base, "@"); at > 0 {
+		return base[:at]
 	}
+	return base
+}
 
-	// Compatibility fallback: a few legacy publishers encode the original
-	// pin id as `@<pinId>` inside the path. Extract that, but only once;
-	// chain-resolution loops are not supported in v1.
-	if at := strings.Index(pin.Path, "@"); at >= 0 {
-		candidate := strings.TrimSpace(pin.Path[at+1:])
-		if candidate != "" && candidate != pin.Id {
-			log.Printf("[skillservice] originalId compatibility fallback for pin %s: extracted %s from path", pin.Id, candidate)
-			return candidate, true
-		}
+func isVersionOperation(operation string) bool {
+	switch strings.ToLower(strings.TrimSpace(operation)) {
+	case OperationModify, OperationRevoke:
+		return true
+	default:
+		return false
 	}
-	log.Printf("[skillservice] modify/revoke pin %s missing originalId and no @pinId in path; skipped", pin.Id)
+}
+
+func (a *Aggregator) processTargetedServicePin(pin *aggregator.PinInscription) error {
+	targetPinId := pinTargetFromPath(pin.Path)
+	if targetPinId == "" || pin.ChainName == "" {
+		return nil
+	}
+	rec, err := a.loadServiceByAnyPinId(pin.ChainName, targetPinId)
+	if err != nil {
+		return err
+	}
+	if rec == nil {
+		return nil
+	}
+	return a.processServicePin(pin)
+}
+
+// resolveTargetPinId picks the target pin id for a modify/revoke operation.
+// MetaID convention writes the target in path as `@<pinId>`; legacy test
+// fixtures and older publishers may also provide OriginalId directly.
+func resolveTargetPinId(pin *aggregator.PinInscription) (string, bool) {
+	if candidate := pinTargetFromPath(pin.Path); candidate != "" && candidate != pin.Id {
+		return candidate, true
+	}
+	if candidate := strings.TrimPrefix(strings.TrimSpace(pin.OriginalId), "@"); candidate != "" && candidate != pin.Id {
+		return candidate, true
+	}
+	log.Printf("[skillservice] modify/revoke pin %s missing target pin id; skipped", pin.Id)
 	return "", false
+}
+
+func pinTargetFromPath(path string) string {
+	at := strings.Index(path, "@")
+	if at < 0 {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(path[at+1:]), "/")
+}
+
+func isCurrentVersionTarget(rec *ServiceRecord, targetPinId string) bool {
+	if rec == nil {
+		return false
+	}
+	return targetPinId == rec.CurrentPinId
 }
 
 // decodeServiceSummary unmarshals the JSON content of a skill-service PIN

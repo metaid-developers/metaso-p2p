@@ -355,6 +355,126 @@ func TestProcessServiceModify_OriginalIdFallback(t *testing.T) {
 	}
 }
 
+func TestProcessServiceModify_PathAtTargetPinFoldsToSource(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_create:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "fortune", DisplayName: "v1",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_modify_metaid:i0", Path: "@tx_create:i0",
+		Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 2000,
+		ServiceName: "fortune", DisplayName: "v2 via @pin",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := agg.loadService("mvc", "tx_create:i0")
+	if rec == nil {
+		t.Fatal("record missing after @pin modify")
+	}
+	if rec.DisplayName != "v2 via @pin" {
+		t.Errorf("@pin modify did not fold: %s", rec.DisplayName)
+	}
+	if rec.CurrentPinId != "tx_modify_metaid:i0" {
+		t.Errorf("currentPinId not advanced: %s", rec.CurrentPinId)
+	}
+}
+
+func TestProcessServiceRevoke_PathAtCurrentPinHidesDefaultList(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_create:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "fortune", DisplayName: "v1",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_modify:i0", Path: "@tx_create:i0",
+		Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 2000,
+		ServiceName: "fortune", DisplayName: "v2",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_revoke:i0", Path: "@tx_modify:i0",
+		Operation: OperationRevoke,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 3000,
+		ServiceName: "fortune", DisplayName: "v2",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := agg.loadService("mvc", "tx_create:i0")
+	if rec == nil {
+		t.Fatal("record missing after revoke")
+	}
+	if rec.Operation != OperationRevoke {
+		t.Errorf("operation: got %s want revoke", rec.Operation)
+	}
+	if rec.CurrentPinId != "tx_revoke:i0" {
+		t.Errorf("currentPinId not advanced to revoke pin: %s", rec.CurrentPinId)
+	}
+	res, err := agg.List(ListParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 0 {
+		t.Errorf("default list should hide revoked service, got %+v", res.List)
+	}
+}
+
+func TestProcessServiceModify_StaleTargetIgnored(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "src:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "svc", DisplayName: "v1",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "mod_current:i0", Path: "@src:i0",
+		Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 2000,
+		ServiceName: "svc", DisplayName: "v2",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "mod_stale:i0", Path: "@src:i0",
+		Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 3000,
+		ServiceName: "svc", DisplayName: "stale overwrite",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := agg.loadService("mvc", "src:i0")
+	if rec == nil {
+		t.Fatal("record missing")
+	}
+	if rec.DisplayName != "v2" {
+		t.Errorf("stale modify overwrote latest record: %s", rec.DisplayName)
+	}
+	if rec.CurrentPinId != "mod_current:i0" {
+		t.Errorf("currentPinId changed after stale modify: %s", rec.CurrentPinId)
+	}
+}
+
 // --- AC #7: malformed pins are skipped without panic ---
 
 func TestProcessPin_MalformedSkipped(t *testing.T) {
@@ -367,8 +487,8 @@ func TestProcessPin_MalformedSkipped(t *testing.T) {
 		{Path: "/protocols/unknown", Id: "x"},
 		{Path: PathSkillService, Id: "tx:i0", ChainName: "mvc", Operation: OperationCreate, ContentBody: []byte("not json")},
 		{Path: PathSkillService, Id: "tx:i0", ChainName: "mvc", Operation: OperationCreate, ContentBody: []byte(`{"price":"1"}`)}, // no name/displayName
-		{Path: PathSkillService, Id: "tx:i0", ChainName: "mvc", Operation: "weird"},                                                   // unknown op
-		{Path: PathSkillService, Id: "tx_mod:i0", ChainName: "mvc", Operation: OperationModify, OriginalId: ""},                       // no originalId, no @ in path
+		{Path: PathSkillService, Id: "tx:i0", ChainName: "mvc", Operation: "weird"},                                               // unknown op
+		{Path: PathSkillService, Id: "tx_mod:i0", ChainName: "mvc", Operation: OperationModify, OriginalId: ""},                   // no originalId, no @ in path
 	}
 	for i, pin := range cases {
 		if _, err := agg.HandleBlockPin(pin); err != nil {
@@ -472,10 +592,15 @@ func TestProcessServiceModify_MultipleVersionsKeepLatest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, ts := range []int64{2000, 3000, 4000} {
+		targetPinId := "src:i0"
+		if i > 0 {
+			targetPinId = pinIdFor(i + 1)
+		}
 		if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
 			PinId: pinIdFor(i + 2), Operation: OperationModify,
+			Path:      "@" + targetPinId,
 			ChainName: "mvc", ProviderMetaId: "provA",
-			OriginalId: "src:i0", Timestamp: ts,
+			Timestamp:   ts,
 			ServiceName: "svc", DisplayName: displayFor(i + 2),
 		})); err != nil {
 			t.Fatal(err)
