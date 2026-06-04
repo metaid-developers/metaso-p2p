@@ -60,7 +60,7 @@ func TestGroupCreation(t *testing.T) {
 		GlobalMetaId:  "global_group_creator_1",
 		ChainName:     "btc",
 		Timestamp:     time.Now().Unix(),
-		ContentBody:   mustMarshal(t, SimpleGroupCreate{
+		ContentBody: mustMarshal(t, SimpleGroupCreate{
 			GroupId:   "group_test_001",
 			GroupName: "Test Group",
 			GroupIcon: "icon_hash_123",
@@ -77,8 +77,8 @@ func TestGroupCreation(t *testing.T) {
 	w := performRequest(t, router, "GET", "/api/group-chat/group-info?groupId=group_test_001")
 
 	var resp struct {
-		Code int    `json:"code"`
-		Data Group  `json:"data"`
+		Code    int    `json:"code"`
+		Data    Group  `json:"data"`
 		Message string `json:"message"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
@@ -150,8 +150,8 @@ func TestChatMessagePersistence(t *testing.T) {
 	w := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-v2?groupId=chat_test_group&cursor=&size=20")
 
 	var resp struct {
-		Code int              `json:"code"`
-		Data ChatListResult   `json:"data"`
+		Code int            `json:"code"`
+		Data ChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -242,8 +242,8 @@ func TestChatPagination(t *testing.T) {
 	// Query page 1 (first 20, newest first)
 	w1 := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-v2?groupId=page_test_group&cursor=&size=20")
 	var resp1 struct {
-		Code int             `json:"code"`
-		Data ChatListResult  `json:"data"`
+		Code int            `json:"code"`
+		Data ChatListResult `json:"data"`
 	}
 	json.Unmarshal(w1.Body.Bytes(), &resp1)
 
@@ -277,8 +277,8 @@ func TestChatPagination(t *testing.T) {
 		w := performRequest(t, router, "GET",
 			fmt.Sprintf("/api/group-chat/group-chat-list-v2?groupId=page_test_group&cursor=%s&size=20", cursor))
 		var resp struct {
-			Code int             `json:"code"`
-			Data ChatListResult  `json:"data"`
+			Code int            `json:"code"`
+			Data ChatListResult `json:"data"`
 		}
 		json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -363,8 +363,8 @@ func TestChatListByIndex(t *testing.T) {
 	// Query by index: startIndex=0, size=20 (should return latest 20, i.e., messages 49 down to 30)
 	w := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-by-index?groupId=idx_test_group&startIndex=0&size=20")
 	var resp struct {
-		Code int             `json:"code"`
-		Data ChatListResult  `json:"data"`
+		Code int            `json:"code"`
+		Data ChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -386,8 +386,8 @@ func TestChatListByIndex(t *testing.T) {
 	// Query next page: startIndex=20, size=20
 	w2 := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-by-index?groupId=idx_test_group&startIndex=20&size=20")
 	var resp2 struct {
-		Code int             `json:"code"`
-		Data ChatListResult  `json:"data"`
+		Code int            `json:"code"`
+		Data ChatListResult `json:"data"`
 	}
 	json.Unmarshal(w2.Body.Bytes(), &resp2)
 
@@ -456,6 +456,12 @@ func TestSocketPushNotification(t *testing.T) {
 	}
 	if evt.GroupId != "push_test_group" {
 		t.Errorf("expected GroupId='push_test_group', got %q", evt.GroupId)
+	}
+	if !containsString(evt.TargetIds, "creator1") {
+		t.Fatalf("expected group chat TargetIds to include creator metaId, got %#v", evt.TargetIds)
+	}
+	if !containsString(evt.TargetIds, "global_creator1") {
+		t.Fatalf("expected group chat TargetIds to include creator globalMetaId, got %#v", evt.TargetIds)
 	}
 
 	// Also check the notify channel
@@ -602,8 +608,8 @@ func TestSearchUsers(t *testing.T) {
 
 	w := performRequest(t, router, "GET", "/api/group-chat/search-users?query=Bob")
 	var resp struct {
-		Code int                      `json:"code"`
-		Data map[string]interface{}   `json:"data"`
+		Code int                    `json:"code"`
+		Data map[string]interface{} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -676,7 +682,7 @@ func TestGroupMemberQuery(t *testing.T) {
 	// Query member list via HTTP
 	w := performRequest(t, router, "GET", "/api/group-chat/group-member-list?groupId=member_test_group&cursor=&size=20")
 	var resp struct {
-		Code int              `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			Admins    []GroupMember `json:"admins"`
 			Creator   string        `json:"creator"`
@@ -746,7 +752,7 @@ func TestCommunityQuery(t *testing.T) {
 	// Query community list via HTTP
 	w := performRequest(t, router, "GET", "/api/group-chat/community/list?page=1&pageSize=20")
 	var resp struct {
-		Code int         `json:"code"`
+		Code int `json:"code"`
 		Data struct {
 			Results struct {
 				Items []Community `json:"items"`
@@ -832,8 +838,8 @@ func TestChatListByIndex_OutOfRange(t *testing.T) {
 
 	w := performRequest(t, router, "GET", "/api/group-chat/group-chat-list-by-index?groupId=oor_group&startIndex=999&size=20")
 	var resp struct {
-		Code int             `json:"code"`
-		Data ChatListResult  `json:"data"`
+		Code int            `json:"code"`
+		Data ChatListResult `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
@@ -886,4 +892,13 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 	return b
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

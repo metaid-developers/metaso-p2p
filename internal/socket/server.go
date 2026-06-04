@@ -210,7 +210,12 @@ func (s *Server) routeNotifyEvent(evt *aggregator.NotifyEvent) {
 
 	switch evt.Type {
 	case "WS_SERVER_NOTIFY_GROUP_CHAT":
-		// Broadcast to room: group:<GroupId>
+		// idchat clients connect by identity and do not join group rooms, so
+		// fan out to explicit member identities when the aggregator provides
+		// them. Keep room broadcast for clients that do join group rooms.
+		for _, targetId := range notifyEventTargetIds(evt) {
+			s.SendToUser(targetId, envelope)
+		}
 		if evt.GroupId != "" {
 			s.BroadcastToRoom("group:"+evt.GroupId, envelope)
 		}

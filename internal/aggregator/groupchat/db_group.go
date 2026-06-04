@@ -349,6 +349,39 @@ func (a *Aggregator) SearchGroupMembers(groupId, query string, size int64) ([]*G
 	return members, err
 }
 
+func (a *Aggregator) GroupMemberTargetIds(groupId string) []string {
+	seen := make(map[string]bool)
+	var ids []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		ids = append(ids, id)
+	}
+
+	prefix := []byte(groupMemberPrefix + groupId + ":")
+	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
+		var member GroupMember
+		if e := json.Unmarshal(value, &member); e != nil {
+			return nil
+		}
+		if member.IsRemoved {
+			return nil
+		}
+		add(member.MetaId)
+		add(member.GlobalMetaId)
+		add(member.Address)
+		return nil
+	})
+	return ids
+}
+
 // GetGroupJoinControlList returns the join control lists for a group.
 func (a *Aggregator) GetGroupJoinControlList(groupId string) (*GroupJoinControlList, error) {
 	var blockedMetaIds []string

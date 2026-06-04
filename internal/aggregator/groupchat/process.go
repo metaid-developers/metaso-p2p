@@ -65,13 +65,13 @@ type SimpleCommunity struct {
 }
 
 type SimpleGroupCreate struct {
-	GroupId    string `json:"groupId"`
-	GroupName  string `json:"groupName"`
-	GroupIcon  string `json:"groupIcon"`
-	GroupNote  string `json:"groupNote"`
-	GroupType  string `json:"groupType"`
-	Status     string `json:"status"`
-	JoinType   string `json:"joinType"`
+	GroupId     string `json:"groupId"`
+	GroupName   string `json:"groupName"`
+	GroupIcon   string `json:"groupIcon"`
+	GroupNote   string `json:"groupNote"`
+	GroupType   string `json:"groupType"`
+	Status      string `json:"status"`
+	JoinType    string `json:"joinType"`
 	CommunityId string `json:"communityId"`
 }
 
@@ -351,26 +351,26 @@ func (a *Aggregator) handleGroupChat(pin *aggregator.PinInscription) (*aggregato
 	}
 
 	msg := &ChatMessage{
-		TxId:         extractTxId(pin.Id),
-		PinId:        pin.Id,
-		GroupId:      groupId,
-		ChannelId:    sgc.ChannelId,
-		MetaId:       metaId,
-		GlobalMetaId: pin.GlobalMetaId,
-		Address:      pin.CreateAddress,
-		Protocol:     pin.Path,
-		Content:      sgc.Content,
-		ContentType:  sgc.ContentType,
-		Encryption:   sgc.Encryption,
-		ChatType:     chatType,
-		ReplyPin:     sgc.ReplyPin,
-		ReplyMetaId:  pin.MetaId,
+		TxId:              extractTxId(pin.Id),
+		PinId:             pin.Id,
+		GroupId:           groupId,
+		ChannelId:         sgc.ChannelId,
+		MetaId:            metaId,
+		GlobalMetaId:      pin.GlobalMetaId,
+		Address:           pin.CreateAddress,
+		Protocol:          pin.Path,
+		Content:           sgc.Content,
+		ContentType:       sgc.ContentType,
+		Encryption:        sgc.Encryption,
+		ChatType:          chatType,
+		ReplyPin:          sgc.ReplyPin,
+		ReplyMetaId:       pin.MetaId,
 		ReplyGlobalMetaId: pin.GlobalMetaId,
-		Mention:      sgc.Mention,
-		Timestamp:    pin.Timestamp,
-		Chain:        pin.ChainName,
-		BlockHeight:  pin.GenesisHeight,
-		Index:        -1,
+		Mention:           sgc.Mention,
+		Timestamp:         pin.Timestamp,
+		Chain:             pin.ChainName,
+		BlockHeight:       pin.GenesisHeight,
+		Index:             -1,
 	}
 
 	if replyInfo != nil {
@@ -385,9 +385,10 @@ func (a *Aggregator) handleGroupChat(pin *aggregator.PinInscription) (*aggregato
 
 	// Build notify event for socket push
 	notifyEvent := &aggregator.NotifyEvent{
-		Type:    "WS_SERVER_NOTIFY_GROUP_CHAT",
-		GroupId: groupId,
-		Payload: msg,
+		Type:      "WS_SERVER_NOTIFY_GROUP_CHAT",
+		GroupId:   groupId,
+		TargetIds: a.GroupMemberTargetIds(groupId),
+		Payload:   msg,
 	}
 
 	log.Printf("[groupchat] chat message saved: pinId=%s groupId=%s", msg.PinId, groupId)
