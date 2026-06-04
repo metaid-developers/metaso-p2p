@@ -3,9 +3,11 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,8 @@ import (
 	"github.com/metaid-developers/meta-socket/internal/api"
 	"github.com/metaid-developers/meta-socket/internal/cache"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/meta-socket/internal/socket"
 	"github.com/metaid-developers/meta-socket/internal/storage"
 )
 
@@ -69,6 +73,190 @@ func postJSON(t *testing.T, router *gin.Engine, path string, body string) (*http
 	var decoded map[string]interface{}
 	_ = json.Unmarshal(w.Body.Bytes(), &decoded)
 	return w, decoded
+}
+
+type fakePresenceSnapshotProvider struct {
+	snapshot *presence.Snapshot
+	err      error
+}
+
+func (p fakePresenceSnapshotProvider) Snapshot() (*presence.Snapshot, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.snapshot, nil
+}
+
+func setupPresenceRouter(t *testing.T, provider presence.SnapshotProvider) *gin.Engine {
+	t.Helper()
+
+	cfg := config.Default()
+	router, _ := setupPresenceRouterWithConfig(t, cfg, provider)
+	return router
+}
+
+func setupPresenceRouterWithConfig(t *testing.T, cfg config.Config, provider presence.SnapshotProvider) (*gin.Engine, *socket.Server) {
+	t.Helper()
+
+	socketServer := socket.NewServer(cfg.Socket)
+	t.Cleanup(socketServer.Shutdown)
+	socketServer.SetSnapshotProvider(provider)
+
+	return api.SetupRouter(cfg, nil, nil, nil, socketServer, "test"), socketServer
+}
+
+func fakePresenceSnapshot() *presence.Snapshot {
+	return &presence.Snapshot{
+		Protocol:    "metasocket-presence",
+		Version:     "1.0.0",
+		NodeID:      "node-a",
+		GeneratedAt: 1710000001000,
+		TTLSeconds:  30,
+		Sequence:    7,
+		Items: []presence.OnlineEntry{
+			{MetaId: "meta-1", Type: "pc", ConnectedAt: 1710000000000, LastSeenAt: 1710000000500},
+		},
+		Signature: "sig",
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointDisabledWithoutProvider(t *testing.T) {
+	router := setupPresenceRouter(t, nil)
+
+	w, _ := get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("presence endpoint without provider: want 404 got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointReturnsSnapshotFromProvider(t *testing.T) {
+	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
+
+	w, body := get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusOK {
+		t.Fatalf("presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	if body["protocol"] != "metasocket-presence" {
+		t.Fatalf("presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	}
+	if _, ok := body["code"]; ok {
+		t.Fatalf("presence endpoint should return the snapshot directly, got enveloped body=%s", w.Body.String())
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointUsesConfiguredPath(t *testing.T) {
+	cfg := config.Default()
+	cfg.Federation.PresencePath = "/custom/presence"
+	router, _ := setupPresenceRouterWithConfig(t, cfg, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
+
+	w, body := get(t, router, "/custom/presence")
+	if w.Code != http.StatusOK {
+		t.Fatalf("configured presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	if body["protocol"] != "metasocket-presence" {
+		t.Fatalf("configured presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	}
+
+	w, _ = get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("default presence endpoint should not be mounted when custom path is configured: got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointEmptyConfiguredPathFallsBackToDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.Federation.PresencePath = ""
+	router, _ := setupPresenceRouterWithConfig(t, cfg, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
+
+	w, body := get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusOK {
+		t.Fatalf("fallback presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	if body["protocol"] != "metasocket-presence" {
+		t.Fatalf("fallback presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointProviderErrorReturns503(t *testing.T) {
+	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{err: errors.New("signing failed")})
+
+	w, _ := get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("presence endpoint provider error: want 503 got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRouter_WellKnownPresenceEndpointDoesNotExposeSocketIDs(t *testing.T) {
+	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
+
+	w, body := get(t, router, "/.well-known/metasocket/presence")
+	if w.Code != http.StatusOK {
+		t.Fatalf("presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	assertNoJSONKey(t, body, "socketId")
+	assertNoJSONKey(t, body, "socketID")
+}
+
+func TestRouter_WellKnownPresenceEndpointProviderAccessIsRaceFree(t *testing.T) {
+	router, socketServer := setupPresenceRouterWithConfig(
+		t,
+		config.Default(),
+		fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()},
+	)
+
+	providers := []presence.SnapshotProvider{
+		nil,
+		fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()},
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(offset int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 1000; j++ {
+				socketServer.SetSnapshotProvider(providers[(j+offset)%len(providers)])
+			}
+		}(i)
+	}
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 1000; j++ {
+				w, _ := get(t, router, "/.well-known/metasocket/presence")
+				if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+					t.Errorf("presence endpoint during provider update: got %d body=%s", w.Code, w.Body.String())
+				}
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+}
+
+func assertNoJSONKey(t *testing.T, value any, forbidden string) {
+	t.Helper()
+
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, child := range typed {
+			if key == forbidden {
+				t.Fatalf("presence endpoint exposed forbidden key %q", forbidden)
+			}
+			assertNoJSONKey(t, child, forbidden)
+		}
+	case []interface{}:
+		for _, child := range typed {
+			assertNoJSONKey(t, child, forbidden)
+		}
+	}
 }
 
 // TestRouter_AggregatorRegistrationDoesNotPanic ensures all four aggregators

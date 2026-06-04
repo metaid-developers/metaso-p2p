@@ -3,6 +3,7 @@ package config
 import (
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
@@ -10,6 +11,312 @@ func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
 	if cfg.BotHub.AssetBaseURL != "https://file.metaid.io/metafile-indexer/content" {
 		t.Fatalf("BotHub asset base URL: got %q", cfg.BotHub.AssetBaseURL)
 	}
+}
+
+func TestDefaultFederationConfigDisabled(t *testing.T) {
+	cfg := Default()
+
+	if cfg.Federation.Enabled {
+		t.Fatal("expected federation to be disabled by default")
+	}
+	if cfg.Federation.Network != "mvc-mainnet" {
+		t.Fatalf("expected default network mvc-mainnet, got %q", cfg.Federation.Network)
+	}
+	if cfg.Federation.MANAPIBaseURL != "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}" {
+		t.Fatalf("expected default MANAPI base URL template, got %q", cfg.Federation.MANAPIBaseURL)
+	}
+	if cfg.Federation.RegistryPath != "/protocols/metasocket-node" {
+		t.Fatalf("expected default registry path, got %q", cfg.Federation.RegistryPath)
+	}
+	if cfg.Federation.PresencePath != "/.well-known/metasocket/presence" {
+		t.Fatalf("expected default presence path, got %q", cfg.Federation.PresencePath)
+	}
+	if cfg.Federation.RegistryRenewInterval != 6*time.Hour {
+		t.Fatalf("expected default registry renew interval 6h, got %s", cfg.Federation.RegistryRenewInterval)
+	}
+	if cfg.Federation.RegistryValidFor != 24*time.Hour {
+		t.Fatalf("expected default registry valid for 24h, got %s", cfg.Federation.RegistryValidFor)
+	}
+	if cfg.Federation.DiscoveryInterval != 5*time.Minute {
+		t.Fatalf("expected default discovery interval 5m, got %s", cfg.Federation.DiscoveryInterval)
+	}
+	if cfg.Federation.PresencePullInterval != 20*time.Second {
+		t.Fatalf("expected default presence pull interval 20s, got %s", cfg.Federation.PresencePullInterval)
+	}
+	if cfg.Federation.PresenceTTL != 90*time.Second {
+		t.Fatalf("expected default presence TTL 90s, got %s", cfg.Federation.PresenceTTL)
+	}
+	if cfg.Federation.RequestTimeout != 3*time.Second {
+		t.Fatalf("expected default request timeout 3s, got %s", cfg.Federation.RequestTimeout)
+	}
+	if cfg.Federation.DefaultScope != "global" {
+		t.Fatalf("expected default scope global, got %q", cfg.Federation.DefaultScope)
+	}
+}
+
+func TestLoadFederationEnv(t *testing.T) {
+	t.Setenv("META_SOCKET_FEDERATION_ENABLED", "true")
+	t.Setenv("META_SOCKET_FEDERATION_NETWORK", "mvc-testnet")
+	t.Setenv("META_SOCKET_FEDERATION_NODE_PRIVATE_KEY", "node-private-key")
+	t.Setenv("META_SOCKET_FEDERATION_PUBLIC_BASE_URL", "https://socket.example")
+	t.Setenv("META_SOCKET_FEDERATION_MANAPI_BASE_URL", "https://manapi.example/pin/path/list?path={protocol-path}&size={size}")
+	t.Setenv("META_SOCKET_FEDERATION_METALET_BASE_URL", "https://metalet.example")
+	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_PATH", "/protocols/custom-node")
+	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_PATH", "/presence")
+	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_RENEW_INTERVAL", "7h")
+	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_VALID_FOR", "25h")
+	t.Setenv("META_SOCKET_FEDERATION_DISCOVERY_INTERVAL", "6m")
+	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL", "21s")
+	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_TTL", "91s")
+	t.Setenv("META_SOCKET_FEDERATION_REQUEST_TIMEOUT", "4s")
+	t.Setenv("META_SOCKET_FEDERATION_DEFAULT_SCOPE", "local")
+	t.Setenv("META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP", "true")
+	t.Setenv("META_SOCKET_FEDERATION_MAX_PEERS", "77")
+	t.Setenv("META_SOCKET_FEDERATION_MAX_SNAPSHOT_BYTES", "123456")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if !cfg.Federation.Enabled {
+		t.Fatal("expected federation enabled to load from env")
+	}
+	if cfg.Federation.Network != "mvc-testnet" {
+		t.Fatalf("expected network env value, got %q", cfg.Federation.Network)
+	}
+	if cfg.Federation.NodePrivateKey != "node-private-key" {
+		t.Fatalf("expected node private key env value, got %q", cfg.Federation.NodePrivateKey)
+	}
+	if cfg.Federation.PublicBaseURL != "https://socket.example" {
+		t.Fatalf("expected public base URL env value, got %q", cfg.Federation.PublicBaseURL)
+	}
+	if cfg.Federation.MANAPIBaseURL != "https://manapi.example/pin/path/list?path={protocol-path}&size={size}" {
+		t.Fatalf("expected MANAPI base URL env value, got %q", cfg.Federation.MANAPIBaseURL)
+	}
+	if cfg.Federation.MetaletBaseURL != "https://metalet.example" {
+		t.Fatalf("expected Metalet base URL env value, got %q", cfg.Federation.MetaletBaseURL)
+	}
+	if cfg.Federation.RegistryPath != "/protocols/custom-node" {
+		t.Fatalf("expected registry path env value, got %q", cfg.Federation.RegistryPath)
+	}
+	if cfg.Federation.PresencePath != "/presence" {
+		t.Fatalf("expected presence path env value, got %q", cfg.Federation.PresencePath)
+	}
+	if cfg.Federation.RegistryRenewInterval != 7*time.Hour {
+		t.Fatalf("expected registry renew interval env value, got %s", cfg.Federation.RegistryRenewInterval)
+	}
+	if cfg.Federation.RegistryValidFor != 25*time.Hour {
+		t.Fatalf("expected registry valid for env value, got %s", cfg.Federation.RegistryValidFor)
+	}
+	if cfg.Federation.DiscoveryInterval != 6*time.Minute {
+		t.Fatalf("expected discovery interval env value, got %s", cfg.Federation.DiscoveryInterval)
+	}
+	if cfg.Federation.PresencePullInterval != 21*time.Second {
+		t.Fatalf("expected presence pull interval env value, got %s", cfg.Federation.PresencePullInterval)
+	}
+	if cfg.Federation.PresenceTTL != 91*time.Second {
+		t.Fatalf("expected presence TTL env value, got %s", cfg.Federation.PresenceTTL)
+	}
+	if cfg.Federation.RequestTimeout != 4*time.Second {
+		t.Fatalf("expected request timeout env value, got %s", cfg.Federation.RequestTimeout)
+	}
+	if cfg.Federation.DefaultScope != "local" {
+		t.Fatalf("expected default scope env value, got %q", cfg.Federation.DefaultScope)
+	}
+	if !cfg.Federation.AllowInsecureHTTP {
+		t.Fatal("expected allow insecure HTTP env value")
+	}
+	if cfg.Federation.MaxPeers != 77 {
+		t.Fatalf("expected max peers env value, got %d", cfg.Federation.MaxPeers)
+	}
+	if cfg.Federation.MaxSnapshotBytes != 123456 {
+		t.Fatalf("expected max snapshot bytes env value, got %d", cfg.Federation.MaxSnapshotBytes)
+	}
+}
+
+func TestValidateFederationRequiresPublicBaseURLWhenEnabled(t *testing.T) {
+	cfg := validFederationConfig()
+	cfg.Federation.PublicBaseURL = ""
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for missing public base URL")
+	}
+}
+
+func TestValidateFederationPublicBaseURLRequiresHTTPSUnlessInsecureAllowed(t *testing.T) {
+	cfg := validFederationConfig()
+	cfg.Federation.PublicBaseURL = "http://localhost:8080"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for insecure public base URL")
+	}
+
+	cfg.Federation.AllowInsecureHTTP = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate returned error with insecure HTTP allowed: %v", err)
+	}
+}
+
+func TestValidateFederationRequiresNodePrivateKeyWhenEnabled(t *testing.T) {
+	cfg := validFederationConfig()
+	cfg.Federation.NodePrivateKey = ""
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for missing node private key")
+	}
+}
+
+func TestValidateFederationRequiresDiscoveryAndWalletURLsWhenEnabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "missing MANAPI base URL",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MANAPIBaseURL = ""
+			},
+		},
+		{
+			name: "MANAPI base URL missing protocol path placeholder",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MANAPIBaseURL = "https://manapi.example/pin/path/list?path=/protocols/metasocket-node&size={size}"
+			},
+		},
+		{
+			name: "MANAPI base URL missing size placeholder",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MANAPIBaseURL = "https://manapi.example/pin/path/list?path={protocol-path}&size=50"
+			},
+		},
+		{
+			name: "missing Metalet base URL",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MetaletBaseURL = ""
+			},
+		},
+		{
+			name: "registry path must start with slash",
+			mutate: func(cfg *Config) {
+				cfg.Federation.RegistryPath = "protocols/metasocket-node"
+			},
+		},
+		{
+			name: "presence path must start with slash",
+			mutate: func(cfg *Config) {
+				cfg.Federation.PresencePath = ".well-known/metasocket/presence"
+			},
+		},
+		{
+			name: "registry renew interval must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.RegistryRenewInterval = 0
+			},
+		},
+		{
+			name: "registry valid for must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.RegistryValidFor = 0
+			},
+		},
+		{
+			name: "discovery interval must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.DiscoveryInterval = 0
+			},
+		},
+		{
+			name: "presence pull interval must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.PresencePullInterval = 0
+			},
+		},
+		{
+			name: "presence TTL must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.PresenceTTL = 0
+			},
+		},
+		{
+			name: "request timeout must be positive",
+			mutate: func(cfg *Config) {
+				cfg.Federation.RequestTimeout = 0
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validFederationConfig()
+			tt.mutate(&cfg)
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestValidateFederationRejectsNegativeLimits(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "negative max peers",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MaxPeers = -1
+			},
+		},
+		{
+			name: "negative max snapshot bytes",
+			mutate: func(cfg *Config) {
+				cfg.Federation.MaxSnapshotBytes = -1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validFederationConfig()
+			tt.mutate(&cfg)
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestValidateFederationDefaultScope(t *testing.T) {
+	for _, scope := range []string{"local", "global"} {
+		t.Run(scope, func(t *testing.T) {
+			cfg := validFederationConfig()
+			cfg.Federation.DefaultScope = scope
+
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate returned error: %v", err)
+			}
+		})
+	}
+
+	cfg := validFederationConfig()
+	cfg.Federation.DefaultScope = "team"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for unsupported default scope")
+	}
+}
+
+func validFederationConfig() Config {
+	cfg := Default()
+	cfg.Federation.Enabled = true
+	cfg.Federation.NodePrivateKey = "node-private-key"
+	cfg.Federation.PublicBaseURL = "https://socket.example"
+	cfg.Federation.MANAPIBaseURL = "https://manapi.example/pin/path/list?path={protocol-path}&size={size}"
+	cfg.Federation.MetaletBaseURL = "https://metalet.example"
+	return cfg
 }
 
 func TestLoadBlockIndexEnv(t *testing.T) {

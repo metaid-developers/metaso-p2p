@@ -3,6 +3,7 @@ package socket
 import (
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/metaid-developers/meta-socket/internal/aggregator"
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/presence"
 )
 
 // Server wraps the Socket.IO server with connection management and push capabilities.
@@ -21,6 +23,12 @@ type Server struct {
 	stopCh              chan struct{}
 	profileLookup       ProfileLookup
 	profileAssetBaseURL string
+
+	snapshotProviderMu sync.RWMutex
+	snapshotProvider   presence.SnapshotProvider
+
+	globalReaderMu sync.RWMutex
+	globalReader   presence.GlobalReader
 }
 
 // PushEnvelope is the wire format for push messages, matching idchat's contract.
@@ -58,6 +66,36 @@ func NewServer(cfg config.SocketConfig) *Server {
 func (s *Server) Handler() gin.HandlerFunc {
 	handler := s.ioServer.ServeHandler(nil)
 	return gin.WrapH(handler)
+}
+
+// SetSnapshotProvider configures the provider used by the well-known presence endpoint.
+func (s *Server) SetSnapshotProvider(provider presence.SnapshotProvider) {
+	s.snapshotProviderMu.Lock()
+	defer s.snapshotProviderMu.Unlock()
+
+	s.snapshotProvider = provider
+}
+
+func (s *Server) presenceSnapshotProvider() presence.SnapshotProvider {
+	s.snapshotProviderMu.RLock()
+	defer s.snapshotProviderMu.RUnlock()
+
+	return s.snapshotProvider
+}
+
+// SetGlobalReader configures the reader used for global presence list and stats.
+func (s *Server) SetGlobalReader(reader presence.GlobalReader) {
+	s.globalReaderMu.Lock()
+	defer s.globalReaderMu.Unlock()
+
+	s.globalReader = reader
+}
+
+func (s *Server) presenceGlobalReader() presence.GlobalReader {
+	s.globalReaderMu.RLock()
+	defer s.globalReaderMu.RUnlock()
+
+	return s.globalReader
 }
 
 // onConnection handles a new Socket.IO connection.

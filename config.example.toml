@@ -152,6 +152,95 @@ grpcEnabled = false
 heavyApiEnabled = false
 
 # ---------------------------------------------------------------------------
+# [federation]  Federated presence and peer discovery
+# ---------------------------------------------------------------------------
+[federation]
+# Enable federated presence publishing and peer discovery.
+# Env: META_SOCKET_FEDERATION_ENABLED
+enabled = false
+
+# Network label advertised for this node.
+# Env: META_SOCKET_FEDERATION_NETWORK
+network = "mvc-mainnet"
+
+# Private key used to sign this node's registry and presence payloads.
+# Required when federation is enabled.
+# Env: META_SOCKET_FEDERATION_NODE_PRIVATE_KEY
+nodePrivateKey = ""
+
+# Public HTTPS base URL where other nodes can reach this server.
+# Required when federation is enabled.
+# Env: META_SOCKET_FEDERATION_PUBLIC_BASE_URL
+publicBaseUrl = ""
+
+# MANAPI path-list URL template used for node registry discovery.
+# Must contain "{protocol-path}" and "{size}" when federation is enabled.
+# Env: META_SOCKET_FEDERATION_MANAPI_BASE_URL
+manapiBaseUrl = "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"
+
+# Metalet API base URL used for wallet/signing-adjacent node workflows.
+# Required when federation is enabled.
+# Env: META_SOCKET_FEDERATION_METALET_BASE_URL
+metaletBaseUrl = "https://www.metalet.space"
+
+# MetaID protocol path where this node publishes registry records.
+# Must start with "/" when federation is enabled.
+# Env: META_SOCKET_FEDERATION_REGISTRY_PATH
+registryPath = "/protocols/metasocket-node"
+
+# HTTP path for this node's presence snapshot.
+# Must start with "/" when federation is enabled.
+# Env: META_SOCKET_FEDERATION_PRESENCE_PATH
+presencePath = "/.well-known/metasocket/presence"
+
+# How often this node renews its registry record.
+# Format: Go duration string (e.g. "6h").
+# Env: META_SOCKET_FEDERATION_REGISTRY_RENEW_INTERVAL
+registryRenewInterval = "6h"
+
+# How long registry records should be treated as valid.
+# Format: Go duration string (e.g. "24h").
+# Env: META_SOCKET_FEDERATION_REGISTRY_VALID_FOR
+registryValidFor = "24h"
+
+# How often peer discovery runs.
+# Format: Go duration string (e.g. "5m").
+# Env: META_SOCKET_FEDERATION_DISCOVERY_INTERVAL
+discoveryInterval = "5m"
+
+# How often remote presence snapshots are pulled.
+# Format: Go duration string (e.g. "20s").
+# Env: META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL
+presencePullInterval = "20s"
+
+# Time-to-live for imported remote presence entries.
+# Format: Go duration string (e.g. "90s").
+# Env: META_SOCKET_FEDERATION_PRESENCE_TTL
+presenceTTL = "90s"
+
+# Timeout for outbound federation HTTP requests.
+# Format: Go duration string (e.g. "3s").
+# Env: META_SOCKET_FEDERATION_REQUEST_TIMEOUT
+requestTimeout = "3s"
+
+# Default presence scope for this node. Allowed values: "local", "global".
+# Env: META_SOCKET_FEDERATION_DEFAULT_SCOPE
+defaultScope = "global"
+
+# Allow non-HTTPS federation URLs for development or private networks.
+# Env: META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP
+allowInsecureHttp = false
+
+# Maximum number of peers to retain. 0 means no explicit config limit yet.
+# Env: META_SOCKET_FEDERATION_MAX_PEERS
+maxPeers = 0
+
+# Maximum accepted remote presence snapshot size in bytes. 0 means no
+# explicit config limit yet.
+# Env: META_SOCKET_FEDERATION_MAX_SNAPSHOT_BYTES
+maxSnapshotBytes = 0
+
+# ---------------------------------------------------------------------------
 # [blockIndex]  Blockchain block scanning (indexer)
 #
 #   When [blockIndex].enabled is true the indexer engine starts and scans

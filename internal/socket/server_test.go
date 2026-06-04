@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/meta-socket/internal/presence"
 )
 
 // apiResponse is a generic envelope for idchat-compatible HTTP responses.
@@ -61,6 +62,86 @@ func performRequest(t *testing.T, router *gin.Engine, method, path string) *http
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
+}
+
+type fakeGlobalReader struct {
+	enabled      bool
+	defaultScope string
+	items        []presence.OnlineEntry
+	stats        presence.GlobalStats
+
+	listCalls  int
+	statsCalls int
+	lastLocal  []presence.OnlineEntry
+}
+
+func (r *fakeGlobalReader) Enabled() bool {
+	return r.enabled
+}
+
+func (r *fakeGlobalReader) DefaultScope() string {
+	return r.defaultScope
+}
+
+func (r *fakeGlobalReader) OnlineList(local []presence.OnlineEntry, page int, size int) []presence.OnlineEntry {
+	r.listCalls++
+	r.lastLocal = append([]presence.OnlineEntry(nil), local...)
+	return append([]presence.OnlineEntry(nil), r.items...)
+}
+
+func (r *fakeGlobalReader) Stats(local []presence.OnlineEntry) presence.GlobalStats {
+	r.statsCalls++
+	r.lastLocal = append([]presence.OnlineEntry(nil), local...)
+	return r.stats
+}
+
+func addServerTestConnection(srv *Server, metaID string, connType ConnType, connectedAt int64, lastSeenAt int64) {
+	srv.manager.mu.Lock()
+	defer srv.manager.mu.Unlock()
+
+	srv.manager.connections[metaID] = append(srv.manager.connections[metaID], &TrackedConnection{
+		MetaId:      metaID,
+		ConnType:    connType,
+		ConnectedAt: time.UnixMilli(connectedAt),
+		LastPing:    time.UnixMilli(lastSeenAt),
+	})
+}
+
+func shutdownServerWithoutTestConnections(srv *Server) {
+	srv.manager.mu.Lock()
+	srv.manager.connections = make(map[string][]*TrackedConnection)
+	srv.manager.mu.Unlock()
+	srv.Shutdown()
+}
+
+func decodeOnlineListMaps(t *testing.T, body []byte) []map[string]any {
+	t.Helper()
+
+	var resp apiResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("failed to decode list response: %v", err)
+	}
+	var data struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode list data: %v", err)
+	}
+	return data.Items
+}
+
+func assertLegacyOnlineItemShape(t *testing.T, item map[string]any) {
+	t.Helper()
+
+	if _, ok := item["lastSeenAt"]; ok {
+		t.Fatalf("legacy online item should not include lastSeenAt: %#v", item)
+	}
+	if _, ok := item["sourceNodeIds"]; ok {
+		t.Fatalf("legacy online item should not include sourceNodeIds: %#v", item)
+	}
+	if _, ok := item["sources"]; ok {
+		t.Fatalf("legacy online item should not include sources: %#v", item)
+	}
 }
 
 // TestPushMessageFormat verifies the exact envelope format {M, C:0, D}.
@@ -259,6 +340,153 @@ func TestOnlineListHydratesAppRowsWithProfile(t *testing.T) {
 	}
 }
 
+func TestOnlineListScopeLocalPreservesLocalOnlyResponseShape(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "global",
+		items: []presence.OnlineEntry{
+			{
+				MetaId:        "meta-global",
+				Type:          "app",
+				ConnectedAt:   1710000000000,
+				LastSeenAt:    1710000001000,
+				SourceNodeIds: []string{"node-remote"},
+				Sources:       1,
+			},
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/socket/online/list?scope=local")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	items := decodeOnlineListMaps(t, w.Body.Bytes())
+	if len(items) != 1 {
+		t.Fatalf("local scope items: want 1 got %d", len(items))
+	}
+	if items[0]["metaid"] != "meta-local" {
+		t.Fatalf("local scope should return local entry, got %#v", items[0])
+	}
+	assertLegacyOnlineItemShape(t, items[0])
+	if reader.listCalls != 0 {
+		t.Fatalf("scope=local should not call global reader, got %d calls", reader.listCalls)
+	}
+}
+
+func TestOnlineListScopeGlobalWithNilOrDisabledReaderBehavesLocalOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader *fakeGlobalReader
+	}{
+		{name: "nil reader"},
+		{name: "disabled reader", reader: &fakeGlobalReader{enabled: false, defaultScope: "global"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, router := newTestRouter(t)
+			defer shutdownServerWithoutTestConnections(srv)
+			addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+			if tc.reader != nil {
+				srv.SetGlobalReader(tc.reader)
+			}
+
+			w := performRequest(t, router, "GET", "/socket/online/list?scope=global")
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			items := decodeOnlineListMaps(t, w.Body.Bytes())
+			if len(items) != 1 {
+				t.Fatalf("global scope with no enabled reader items: want 1 got %d", len(items))
+			}
+			if items[0]["metaid"] != "meta-local" {
+				t.Fatalf("disabled global reader should preserve local item, got %#v", items[0])
+			}
+			assertLegacyOnlineItemShape(t, items[0])
+			if tc.reader != nil && tc.reader.listCalls != 0 {
+				t.Fatalf("disabled global reader should not be called, got %d calls", tc.reader.listCalls)
+			}
+		})
+	}
+}
+
+func TestOnlineListScopeGlobalWithEnabledReaderReturnsGlobalItems(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "local",
+		items: []presence.OnlineEntry{
+			{
+				MetaId:        "meta-global",
+				Type:          "app",
+				ConnectedAt:   1710000000000,
+				LastSeenAt:    1710000001000,
+				SourceNodeIds: []string{"node-remote"},
+				Sources:       2,
+			},
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/socket/online/list?scope=global")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	items := decodeOnlineListMaps(t, w.Body.Bytes())
+	if len(items) != 1 {
+		t.Fatalf("global scope items: want 1 got %d", len(items))
+	}
+	if items[0]["metaid"] != "meta-global" {
+		t.Fatalf("enabled global reader should return global item, got %#v", items[0])
+	}
+	if _, ok := items[0]["lastSeenAt"]; !ok {
+		t.Fatalf("global item should include lastSeenAt: %#v", items[0])
+	}
+	if _, ok := items[0]["sourceNodeIds"]; !ok {
+		t.Fatalf("global item should include sourceNodeIds: %#v", items[0])
+	}
+	if items[0]["sources"] != float64(2) {
+		t.Fatalf("global item sources: want 2 got %#v", items[0]["sources"])
+	}
+	if reader.listCalls != 1 {
+		t.Fatalf("enabled global reader calls: want 1 got %d", reader.listCalls)
+	}
+	if len(reader.lastLocal) != 1 || reader.lastLocal[0].LastSeenAt != 1710000000500 {
+		t.Fatalf("global reader should receive unpaginated local OnlineEntries with LastSeenAt, got %#v", reader.lastLocal)
+	}
+}
+
+func TestOnlineListScopeDefaultUsesEnabledGlobalReaderDefaultScope(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "global",
+		items: []presence.OnlineEntry{
+			{MetaId: "meta-global", Type: "app", ConnectedAt: 1710000000000, LastSeenAt: 1710000001000, SourceNodeIds: []string{"node-remote"}, Sources: 1},
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/socket/online/list")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	items := decodeOnlineListMaps(t, w.Body.Bytes())
+	if len(items) != 1 || items[0]["metaid"] != "meta-global" {
+		t.Fatalf("default global scope should use global reader, got %#v", items)
+	}
+}
+
 // TestOnlineListPagination verifies the list endpoint handles pagination params.
 func TestOnlineListPagination(t *testing.T) {
 	srv, router := newTestRouter(t)
@@ -299,6 +527,86 @@ func TestOnlineListPagination(t *testing.T) {
 	json.Unmarshal(resp.Data, &data)
 	if data.Items == nil {
 		t.Error("expected items array with large size")
+	}
+}
+
+func TestOnlineStatsScopeGlobalReturnsAggregateFields(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "local",
+		stats: presence.GlobalStats{
+			TotalConnections: 4,
+			UniqueMetaIds:    3,
+			Nodes:            2,
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/socket/online/stats?scope=global")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode stats response: %v", err)
+	}
+	var data map[string]int
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode stats data: %v", err)
+	}
+	if len(data) != 3 {
+		t.Fatalf("global stats should expose exactly 3 fields, got %#v", data)
+	}
+	if data["totalConnections"] != 4 || data["uniqueMetaIds"] != 3 || data["nodes"] != 2 {
+		t.Fatalf("unexpected global stats data: %#v", data)
+	}
+	if reader.statsCalls != 1 {
+		t.Fatalf("enabled global stats calls: want 1 got %d", reader.statsCalls)
+	}
+	if len(reader.lastLocal) != 1 || reader.lastLocal[0].LastSeenAt != 1710000000500 {
+		t.Fatalf("global stats reader should receive unpaginated local OnlineEntries with LastSeenAt, got %#v", reader.lastLocal)
+	}
+}
+
+func TestOnlineStatsScopeLocalPreservesCurrentResponseShape(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "global",
+		stats:        presence.GlobalStats{TotalConnections: 4, UniqueMetaIds: 3, Nodes: 2},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/socket/online/stats?scope=local")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode stats response: %v", err)
+	}
+	var data map[string]int
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode stats data: %v", err)
+	}
+	if len(data) != 1 || data["totalConnections"] != 1 {
+		t.Fatalf("local stats should expose only local totalConnections, got %#v", data)
+	}
+	if _, ok := data["uniqueMetaIds"]; ok {
+		t.Fatalf("local stats should not include uniqueMetaIds: %#v", data)
+	}
+	if _, ok := data["nodes"]; ok {
+		t.Fatalf("local stats should not include nodes: %#v", data)
+	}
+	if reader.statsCalls != 0 {
+		t.Fatalf("scope=local should not call global stats reader, got %d calls", reader.statsCalls)
 	}
 }
 
@@ -345,6 +653,91 @@ func TestManagerOnlineListPagination(t *testing.T) {
 	entries = cm.OnlineList(-1, 10)
 	if len(entries) != 0 {
 		t.Error("expected empty list for negative page")
+	}
+}
+
+func TestConnectionManagerOnlineEntriesReturnsAllLocalEntries(t *testing.T) {
+	cm := NewConnectionManager(3, 3)
+	connectedAt := time.UnixMilli(1710000000000)
+	lastSeenAt := time.UnixMilli(1710000000500)
+
+	cm.connections["meta-1"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypePC,
+			ConnectedAt: connectedAt,
+			LastPing:    lastSeenAt,
+		},
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypeApp,
+			ConnectedAt: connectedAt.Add(1 * time.Second),
+			LastPing:    lastSeenAt.Add(1 * time.Second),
+		},
+	}
+	cm.connections["meta-2"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-2",
+			ConnType:    ConnTypePC,
+			ConnectedAt: connectedAt.Add(2 * time.Second),
+			LastPing:    lastSeenAt.Add(2 * time.Second),
+		},
+	}
+
+	paged := cm.OnlineList(1, 2)
+	if len(paged) != 2 {
+		t.Fatalf("paged online list should still honor size: got %d", len(paged))
+	}
+
+	entries := cm.OnlineEntries()
+	if len(entries) != 3 {
+		t.Fatalf("unpaginated entries: want 3 got %d", len(entries))
+	}
+
+	seen := map[string]int64{}
+	for _, entry := range entries {
+		seen[entry.MetaId+":"+entry.Type] = entry.LastSeenAt
+	}
+	if seen["meta-1:pc"] != 1710000000500 {
+		t.Fatalf("meta-1 pc lastSeenAt: want 1710000000500 got %d", seen["meta-1:pc"])
+	}
+	if seen["meta-1:app"] != 1710000001500 {
+		t.Fatalf("meta-1 app lastSeenAt: want 1710000001500 got %d", seen["meta-1:app"])
+	}
+	if seen["meta-2:pc"] != 1710000002500 {
+		t.Fatalf("meta-2 pc lastSeenAt: want 1710000002500 got %d", seen["meta-2:pc"])
+	}
+}
+
+func TestConnectionManagerOnlineListPreservesLegacyJSONShape(t *testing.T) {
+	cm := NewConnectionManager(3, 3)
+	cm.connections["meta-1"] = []*TrackedConnection{
+		{
+			MetaId:      "meta-1",
+			ConnType:    ConnTypePC,
+			ConnectedAt: time.UnixMilli(1710000000000),
+			LastPing:    time.UnixMilli(1710000000500),
+		},
+	}
+
+	entries := cm.OnlineList(1, 20)
+	if len(entries) != 1 {
+		t.Fatalf("legacy online list entries: want 1 got %d", len(entries))
+	}
+	if entries[0].LastSeenAt != 0 {
+		t.Fatalf("legacy online list LastSeenAt should remain zero, got %d", entries[0].LastSeenAt)
+	}
+
+	raw, err := json.Marshal(entries[0])
+	if err != nil {
+		t.Fatalf("marshal legacy online list entry: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode legacy online list entry: %v", err)
+	}
+	if _, ok := decoded["lastSeenAt"]; ok {
+		t.Fatalf("legacy online list JSON should not expose lastSeenAt: %s", raw)
 	}
 }
 

@@ -19,6 +19,7 @@ type Config struct {
 	Profile    ProfileConfig    `json:"profile"`
 	GroupChat  GroupChatConfig  `json:"groupChat"`
 	BotHub     BotHubConfig     `json:"botHub"`
+	Federation FederationConfig `json:"federation"`
 }
 
 // BotHubConfig holds the Bot Hub skill-service aggregator runtime knobs.
@@ -32,6 +33,27 @@ type BotHubConfig struct {
 	// sees a bare pin id; it sees either an already-absolute http(s) URL
 	// declared on chain, or this base joined with the pin id.
 	AssetBaseURL string `json:"assetBaseUrl"`
+}
+
+type FederationConfig struct {
+	Enabled               bool          `json:"enabled"`
+	Network               string        `json:"network"`
+	NodePrivateKey        string        `json:"nodePrivateKey"`
+	PublicBaseURL         string        `json:"publicBaseUrl"`
+	MANAPIBaseURL         string        `json:"manapiBaseUrl"`
+	MetaletBaseURL        string        `json:"metaletBaseUrl"`
+	RegistryPath          string        `json:"registryPath"`
+	PresencePath          string        `json:"presencePath"`
+	RegistryRenewInterval time.Duration `json:"registryRenewInterval"`
+	RegistryValidFor      time.Duration `json:"registryValidFor"`
+	DiscoveryInterval     time.Duration `json:"discoveryInterval"`
+	PresencePullInterval  time.Duration `json:"presencePullInterval"`
+	PresenceTTL           time.Duration `json:"presenceTTL"`
+	RequestTimeout        time.Duration `json:"requestTimeout"`
+	DefaultScope          string        `json:"defaultScope"`
+	AllowInsecureHTTP     bool          `json:"allowInsecureHttp"`
+	MaxPeers              int           `json:"maxPeers"`
+	MaxSnapshotBytes      int           `json:"maxSnapshotBytes"`
 }
 
 type BlockIndexConfig struct {
@@ -215,6 +237,26 @@ func Default() Config {
 			// against a different MetaID asset host.
 			AssetBaseURL: "https://file.metaid.io/metafile-indexer/content",
 		},
+		Federation: FederationConfig{
+			Enabled:               false,
+			Network:               "mvc-mainnet",
+			NodePrivateKey:        "",
+			PublicBaseURL:         "",
+			MANAPIBaseURL:         "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}",
+			MetaletBaseURL:        "https://www.metalet.space",
+			RegistryPath:          "/protocols/metasocket-node",
+			PresencePath:          "/.well-known/metasocket/presence",
+			RegistryRenewInterval: 6 * time.Hour,
+			RegistryValidFor:      24 * time.Hour,
+			DiscoveryInterval:     5 * time.Minute,
+			PresencePullInterval:  20 * time.Second,
+			PresenceTTL:           90 * time.Second,
+			RequestTimeout:        3 * time.Second,
+			DefaultScope:          "global",
+			AllowInsecureHTTP:     false,
+			MaxPeers:              0,
+			MaxSnapshotBytes:      0,
+		},
 	}
 }
 
@@ -293,6 +335,25 @@ func Load() (Config, error) {
 
 	applyStringEnv("META_SOCKET_ASSET_BASE_URL", &cfg.BotHub.AssetBaseURL)
 
+	applyBoolEnv("META_SOCKET_FEDERATION_ENABLED", &cfg.Federation.Enabled)
+	applyStringEnv("META_SOCKET_FEDERATION_NETWORK", &cfg.Federation.Network)
+	applyStringEnv("META_SOCKET_FEDERATION_NODE_PRIVATE_KEY", &cfg.Federation.NodePrivateKey)
+	applyStringEnv("META_SOCKET_FEDERATION_PUBLIC_BASE_URL", &cfg.Federation.PublicBaseURL)
+	applyStringEnv("META_SOCKET_FEDERATION_MANAPI_BASE_URL", &cfg.Federation.MANAPIBaseURL)
+	applyStringEnv("META_SOCKET_FEDERATION_METALET_BASE_URL", &cfg.Federation.MetaletBaseURL)
+	applyStringEnv("META_SOCKET_FEDERATION_REGISTRY_PATH", &cfg.Federation.RegistryPath)
+	applyStringEnv("META_SOCKET_FEDERATION_PRESENCE_PATH", &cfg.Federation.PresencePath)
+	applyDurationEnv("META_SOCKET_FEDERATION_REGISTRY_RENEW_INTERVAL", &cfg.Federation.RegistryRenewInterval)
+	applyDurationEnv("META_SOCKET_FEDERATION_REGISTRY_VALID_FOR", &cfg.Federation.RegistryValidFor)
+	applyDurationEnv("META_SOCKET_FEDERATION_DISCOVERY_INTERVAL", &cfg.Federation.DiscoveryInterval)
+	applyDurationEnv("META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL", &cfg.Federation.PresencePullInterval)
+	applyDurationEnv("META_SOCKET_FEDERATION_PRESENCE_TTL", &cfg.Federation.PresenceTTL)
+	applyDurationEnv("META_SOCKET_FEDERATION_REQUEST_TIMEOUT", &cfg.Federation.RequestTimeout)
+	applyStringEnv("META_SOCKET_FEDERATION_DEFAULT_SCOPE", &cfg.Federation.DefaultScope)
+	applyBoolEnv("META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP", &cfg.Federation.AllowInsecureHTTP)
+	applyIntEnv("META_SOCKET_FEDERATION_MAX_PEERS", &cfg.Federation.MaxPeers)
+	applyIntEnv("META_SOCKET_FEDERATION_MAX_SNAPSHOT_BYTES", &cfg.Federation.MaxSnapshotBytes)
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -329,6 +390,67 @@ func (c Config) Validate() error {
 	}
 	if c.Service.ShutdownTimeout <= 0 {
 		return errors.New("service.shutdownTimeout must be greater than zero")
+	}
+	if err := c.validateFederation(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateFederation() error {
+	if !c.Federation.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Federation.NodePrivateKey) == "" {
+		return errors.New("federation.nodePrivateKey is required when federation is enabled")
+	}
+	if strings.TrimSpace(c.Federation.PublicBaseURL) == "" {
+		return errors.New("federation.publicBaseUrl is required when federation is enabled")
+	}
+	if !c.Federation.AllowInsecureHTTP && strings.HasPrefix(strings.ToLower(c.Federation.PublicBaseURL), "http://") {
+		return errors.New("federation.publicBaseUrl must use https unless federation.allowInsecureHttp is true")
+	}
+	if strings.TrimSpace(c.Federation.MANAPIBaseURL) == "" {
+		return errors.New("federation.manapiBaseUrl is required when federation is enabled")
+	}
+	if !strings.Contains(c.Federation.MANAPIBaseURL, "{protocol-path}") || !strings.Contains(c.Federation.MANAPIBaseURL, "{size}") {
+		return errors.New("federation.manapiBaseUrl must contain {protocol-path} and {size}")
+	}
+	if strings.TrimSpace(c.Federation.MetaletBaseURL) == "" {
+		return errors.New("federation.metaletBaseUrl is required when federation is enabled")
+	}
+	if !strings.HasPrefix(c.Federation.RegistryPath, "/") {
+		return errors.New("federation.registryPath must start with '/'")
+	}
+	if !strings.HasPrefix(c.Federation.PresencePath, "/") {
+		return errors.New("federation.presencePath must start with '/'")
+	}
+	if c.Federation.RegistryRenewInterval <= 0 {
+		return errors.New("federation.registryRenewInterval must be greater than zero")
+	}
+	if c.Federation.RegistryValidFor <= 0 {
+		return errors.New("federation.registryValidFor must be greater than zero")
+	}
+	if c.Federation.DiscoveryInterval <= 0 {
+		return errors.New("federation.discoveryInterval must be greater than zero")
+	}
+	if c.Federation.PresencePullInterval <= 0 {
+		return errors.New("federation.presencePullInterval must be greater than zero")
+	}
+	if c.Federation.PresenceTTL <= 0 {
+		return errors.New("federation.presenceTTL must be greater than zero")
+	}
+	if c.Federation.RequestTimeout <= 0 {
+		return errors.New("federation.requestTimeout must be greater than zero")
+	}
+	if c.Federation.DefaultScope != "local" && c.Federation.DefaultScope != "global" {
+		return errors.New("federation.defaultScope must be local or global")
+	}
+	if c.Federation.MaxPeers < 0 {
+		return errors.New("federation.maxPeers must be zero or greater")
+	}
+	if c.Federation.MaxSnapshotBytes < 0 {
+		return errors.New("federation.maxSnapshotBytes must be zero or greater")
 	}
 	return nil
 }

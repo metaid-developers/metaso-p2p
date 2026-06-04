@@ -45,7 +45,7 @@ func SetupRouter(
 		router.Any(cfg.Socket.LegacyPath+"/*any", handler)
 
 		// Presence routes
-		socketServer.RegisterPresenceRoutes(router)
+		socketServer.RegisterPresenceRoutes(router, cfg.Federation.PresencePath)
 	}
 
 	// Aggregator routes (mounted under /api/ prefix for native meta-socket clients).
