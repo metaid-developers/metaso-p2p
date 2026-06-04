@@ -99,7 +99,10 @@ func (a *Aggregator) handlePrivateGroupPaths(c *gin.Context) {
 		return
 	}
 
-	api.RespSuccess(c, paths)
+	api.RespSuccess(c, gin.H{
+		"total": len(paths),
+		"list":  paths,
+	})
 }
 
 // handleChatHomes returns the conversation list with last message preview.

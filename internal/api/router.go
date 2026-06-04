@@ -46,6 +46,9 @@ func SetupRouter(
 
 		// Presence routes
 		socketServer.RegisterPresenceRoutes(router, cfg.Federation.PresencePath)
+		router.GET("/chat-api/group-chat/socket/online-users", socketServer.HandleIdchatOnlineUsers)
+		router.GET("/chat-api/group-chat/socket/user-online", socketServer.HandleIdchatUserOnline)
+		router.GET("/chat-api/group-chat/socket/stats", socketServer.HandleOnlineStats)
 	}
 
 	// Aggregator routes (mounted under /api/ prefix for native meta-socket clients).

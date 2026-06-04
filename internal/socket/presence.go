@@ -78,6 +78,97 @@ func (s *Server) HandleOnlineList(c *gin.Context) {
 	})
 }
 
+// HandleIdchatOnlineUsers returns the old idchat /group-chat/socket/online-users shape.
+func (s *Server) HandleIdchatOnlineUsers(c *gin.Context) {
+	size, err := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if err != nil || size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+	cursor := c.DefaultQuery("cursor", "")
+
+	items := s.onlineItemsForIDChat(size)
+	rows := make([]gin.H, 0, len(items))
+	now := time.Now().UnixMilli()
+	for _, item := range items {
+		lastSeenAt := item.LastSeenAt
+		if lastSeenAt == 0 {
+			lastSeenAt = item.ConnectedAt
+		}
+		agoSeconds := int64(0)
+		if lastSeenAt > 0 && now > lastSeenAt {
+			agoSeconds = (now - lastSeenAt) / 1000
+		}
+		globalMetaId := item.MetaId
+		if item.UserInfo != nil && item.UserInfo.GlobalMetaId != "" {
+			globalMetaId = item.UserInfo.GlobalMetaId
+		}
+		rows = append(rows, gin.H{
+			"globalMetaId":       globalMetaId,
+			"lastSeenAt":         lastSeenAt,
+			"lastSeenAgoSeconds": agoSeconds,
+			"deviceCount":        1,
+			"userInfo":           item.UserInfo,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"total":               len(rows),
+			"cursor":              cursor,
+			"size":                size,
+			"onlineWindowSeconds": 35,
+			"list":                rows,
+		},
+		"message":        "",
+		"processingTime": time.Now().UnixMilli(),
+	})
+}
+
+// HandleIdchatUserOnline returns whether the queried identity has an active connection.
+func (s *Server) HandleIdchatUserOnline(c *gin.Context) {
+	metaId := strings.TrimSpace(c.Query("metaId"))
+	if metaId == "" {
+		metaId = strings.TrimSpace(c.Query("globalMetaId"))
+	}
+	online := false
+	if metaId != "" {
+		for _, entry := range s.manager.OnlineEntries() {
+			if entry.MetaId == metaId {
+				online = true
+				break
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":           0,
+		"data":           gin.H{"online": online},
+		"message":        "",
+		"processingTime": time.Now().UnixMilli(),
+	})
+}
+
+func (s *Server) onlineItemsForIDChat(size int) []OnlineEntry {
+	scope := "local"
+	reader := s.presenceGlobalReader()
+	if reader != nil && reader.Enabled() && strings.ToLower(strings.TrimSpace(reader.DefaultScope())) == "global" {
+		scope = "global"
+	}
+	var items []OnlineEntry
+	if scope == "global" && reader != nil && reader.Enabled() {
+		items = onlineEntriesFromPresence(reader.OnlineList(s.manager.OnlineEntries(), 1, size))
+	} else {
+		items = s.manager.OnlineList(1, size)
+	}
+	if items == nil {
+		items = []OnlineEntry{}
+	}
+	return s.hydrateOnlineEntries(items)
+}
+
 // HandlePresenceSnapshot returns the local federated presence snapshot.
 func (s *Server) HandlePresenceSnapshot(c *gin.Context) {
 	provider := s.presenceSnapshotProvider()

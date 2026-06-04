@@ -41,21 +41,21 @@ type GroupMember struct {
 
 // GroupMemberRole stores role data per member-group pair.
 type GroupMemberRole struct {
-	MetaId       string `json:"metaId"`
-	GroupId      string `json:"groupId"`
-	IsCreator    bool   `json:"isCreator"`
-	IsAdmin      bool   `json:"isAdmin"`
-	IsBlocked    bool   `json:"isBlocked"`
-	IsWhitelist  bool   `json:"isWhitelist"`
-	IsRemoved    bool   `json:"isRemoved"`
-	Timestamp    int64  `json:"timestamp"`
-	BlockHeight  int64  `json:"blockHeight"`
+	MetaId      string `json:"metaId"`
+	GroupId     string `json:"groupId"`
+	IsCreator   bool   `json:"isCreator"`
+	IsAdmin     bool   `json:"isAdmin"`
+	IsBlocked   bool   `json:"isBlocked"`
+	IsWhitelist bool   `json:"isWhitelist"`
+	IsRemoved   bool   `json:"isRemoved"`
+	Timestamp   int64  `json:"timestamp"`
+	BlockHeight int64  `json:"blockHeight"`
 }
 
 const (
-	groupPrefix        = "group:"
-	groupMemberPrefix  = "member:"
-	groupRolePrefix    = "grouprole:"
+	groupPrefix       = "group:"
+	groupMemberPrefix = "member:"
+	groupRolePrefix   = "grouprole:"
 )
 
 func groupKey(groupId string) []byte {
@@ -353,6 +353,8 @@ func (a *Aggregator) SearchGroupMembers(groupId, query string, size int64) ([]*G
 func (a *Aggregator) GetGroupJoinControlList(groupId string) (*GroupJoinControlList, error) {
 	var blockedMetaIds []string
 	var whitelistMetaIds []string
+	var blockedGlobalMetaIds []string
+	var whitelistGlobalMetaIds []string
 
 	prefix := []byte(groupRolePrefix + groupId + ":")
 	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
@@ -362,23 +364,45 @@ func (a *Aggregator) GetGroupJoinControlList(groupId string) (*GroupJoinControlL
 		}
 		if role.IsBlocked {
 			blockedMetaIds = append(blockedMetaIds, role.MetaId)
+			if member, _ := a.GetGroupMember(groupId, role.MetaId); member != nil && member.GlobalMetaId != "" {
+				blockedGlobalMetaIds = append(blockedGlobalMetaIds, member.GlobalMetaId)
+			}
 		}
 		if role.IsWhitelist {
 			whitelistMetaIds = append(whitelistMetaIds, role.MetaId)
+			if member, _ := a.GetGroupMember(groupId, role.MetaId); member != nil && member.GlobalMetaId != "" {
+				whitelistGlobalMetaIds = append(whitelistGlobalMetaIds, member.GlobalMetaId)
+			}
 		}
 		return nil
 	})
+	if blockedMetaIds == nil {
+		blockedMetaIds = []string{}
+	}
+	if whitelistMetaIds == nil {
+		whitelistMetaIds = []string{}
+	}
+	if blockedGlobalMetaIds == nil {
+		blockedGlobalMetaIds = []string{}
+	}
+	if whitelistGlobalMetaIds == nil {
+		whitelistGlobalMetaIds = []string{}
+	}
 
 	return &GroupJoinControlList{
-		GroupId:              groupId,
-		JoinBlockMetaIds:     blockedMetaIds,
-		JoinWhitelistMetaIds: whitelistMetaIds,
+		GroupId:                    groupId,
+		JoinBlockMetaIds:           blockedMetaIds,
+		JoinBlockGlobalMetaIds:     blockedGlobalMetaIds,
+		JoinWhitelistMetaIds:       whitelistMetaIds,
+		JoinWhitelistGlobalMetaIds: whitelistGlobalMetaIds,
 	}, nil
 }
 
 // GroupJoinControlList represents join control configuration.
 type GroupJoinControlList struct {
-	GroupId              string   `json:"groupId"`
-	JoinBlockMetaIds     []string `json:"joinBlockMetaIds"`
-	JoinWhitelistMetaIds []string `json:"joinWhitelistMetaIds"`
+	GroupId                    string   `json:"groupId"`
+	JoinBlockMetaIds           []string `json:"joinBlockMetaIds"`
+	JoinBlockGlobalMetaIds     []string `json:"joinBlockGlobalMetaIds"`
+	JoinWhitelistMetaIds       []string `json:"joinWhitelistMetaIds"`
+	JoinWhitelistGlobalMetaIds []string `json:"joinWhitelistGlobalMetaIds"`
 }

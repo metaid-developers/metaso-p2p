@@ -887,19 +887,22 @@ func TestPrivateGroupPaths(t *testing.T) {
 	// Query Alice's paths
 	w := performRequest(t, router, "GET", "/api/group-chat/private-group-paths?metaId=alice_path")
 	var resp struct {
-		Code int      `json:"code"`
-		Data []string `json:"data"`
+		Code int `json:"code"`
+		Data struct {
+			Total int                 `json:"total"`
+			List  []*PrivateGroupPath `json:"list"`
+		} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
 	if resp.Code != 0 {
 		t.Fatalf("paths query failed: code=%d: %s", resp.Code, w.Body.String())
 	}
-	if len(resp.Data) != 2 {
-		t.Errorf("expected 2 paths for Alice, got %d: %v", len(resp.Data), resp.Data)
+	if resp.Data.Total != 2 || len(resp.Data.List) != 2 {
+		t.Errorf("expected 2 paths for Alice, got total=%d len=%d: %v", resp.Data.Total, len(resp.Data.List), resp.Data.List)
 	}
 
-	t.Logf("Private group paths OK: %d paths %v", len(resp.Data), resp.Data)
+	t.Logf("Private group paths OK: %d paths %v", len(resp.Data.List), resp.Data.List)
 }
 
 // --- AC7: Socket push notification ---

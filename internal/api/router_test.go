@@ -31,6 +31,20 @@ import (
 func setupFullRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 
+	fixture := setupFullRouterFixture(t)
+	return fixture.router
+}
+
+type fullRouterFixture struct {
+	router     *gin.Engine
+	store      *storage.PebbleStore
+	groupAgg   *groupchat.Aggregator
+	privateAgg *privatechat.Aggregator
+}
+
+func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
+	t.Helper()
+
 	store := storage.NewPebbleStore(t.TempDir())
 	t.Cleanup(func() { store.Close() })
 	cacheProvider := cache.New(store)
@@ -42,16 +56,23 @@ func setupFullRouter(t *testing.T) *gin.Engine {
 	if err := reg.Register(&userinfo.Aggregator{}); err != nil {
 		t.Fatalf("register userinfo: %v", err)
 	}
-	if err := reg.Register(&groupchat.Aggregator{}); err != nil {
+	groupAgg := &groupchat.Aggregator{}
+	if err := reg.Register(groupAgg); err != nil {
 		t.Fatalf("register groupchat: %v", err)
 	}
-	if err := reg.Register(&privatechat.Aggregator{}); err != nil {
+	privateAgg := &privatechat.Aggregator{}
+	if err := reg.Register(privateAgg); err != nil {
 		t.Fatalf("register privatechat: %v", err)
 	}
 
 	cfg := config.Default()
 	// SetupRouter handles nil socketServer gracefully (Socket.IO routes skipped).
-	return api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test")
+	return &fullRouterFixture{
+		router:     api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
+		store:      store,
+		groupAgg:   groupAgg,
+		privateAgg: privateAgg,
+	}
 }
 
 func get(t *testing.T, router *gin.Engine, path string) (*httptest.ResponseRecorder, map[string]interface{}) {
@@ -73,6 +94,26 @@ func postJSON(t *testing.T, router *gin.Engine, path string, body string) (*http
 	var decoded map[string]interface{}
 	_ = json.Unmarshal(w.Body.Bytes(), &decoded)
 	return w, decoded
+}
+
+func assertResponseDataKeys(t *testing.T, body map[string]interface{}, keys ...string) map[string]interface{} {
+	t.Helper()
+
+	code, _ := body["code"].(float64)
+	if int(code) != 0 {
+		t.Fatalf("expected code=0, got %v body=%v", body["code"], body)
+	}
+
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data should be an object, got %T %v", body["data"], body["data"])
+	}
+	for _, key := range keys {
+		if _, ok := data[key]; !ok {
+			t.Fatalf("missing data.%s in %v", key, data)
+		}
+	}
+	return data
 }
 
 type fakePresenceSnapshotProvider struct {
@@ -283,17 +324,17 @@ func TestRouter_AggregatorRegistrationDoesNotPanic(t *testing.T) {
 //   - "list"   = data is an object with a "list" field.
 //   - "object" = data is a plain object that must be non-empty (has at least
 //     one of the privatechat fields total/nextCursor/list).
-//   - "array"  = data is an array; the stub would have returned {}.
+//   - "object_with_list" = data is an object with a "list" field.
 func TestRouter_PrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 	router := setupFullRouter(t)
 
 	cases := []struct {
 		path  string
-		shape string // "object_with_list" | "array"
+		shape string // "object_with_list"
 	}{
 		{"/api/group-chat/private-chat-list?metaId=a&otherMetaId=b", "object_with_list"},
 		{"/api/group-chat/private-chat-list-by-index?metaId=a&otherMetaId=b", "object_with_list"},
-		{"/api/group-chat/private-group-paths?metaId=a", "array"},
+		{"/api/group-chat/private-group-paths?metaId=a", "object_with_list"},
 		{"/api/group-chat/chat/homes/some_metaid", "object_with_list"},
 	}
 
@@ -321,11 +362,6 @@ func TestRouter_PrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 				t.Errorf("%s: expected privatechat field 'list' in data (groupchat stub would have returned empty {}); got data=%v",
 					tc.path, data)
 			}
-		case "array":
-			if _, ok := body["data"].([]interface{}); !ok {
-				t.Errorf("%s: expected data to be array (privatechat returns []string); groupchat stub would have returned {}; got %T %v",
-					tc.path, body["data"], body["data"])
-			}
 		}
 	}
 }
@@ -335,11 +371,11 @@ func TestRouter_CanonicalPrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 
 	cases := []struct {
 		path  string
-		shape string // "object_with_list" | "array"
+		shape string // "object_with_list"
 	}{
 		{"/api/private-chat/messages?metaId=a&otherMetaId=b", "object_with_list"},
 		{"/api/private-chat/messages/by-index?metaId=a&otherMetaId=b", "object_with_list"},
-		{"/api/private-chat/paths?metaId=a", "array"},
+		{"/api/private-chat/paths?metaId=a", "object_with_list"},
 		{"/api/private-chat/homes/some_metaid", "object_with_list"},
 	}
 
@@ -364,10 +400,6 @@ func TestRouter_CanonicalPrivateChatRoutesHandledByPrivateChat(t *testing.T) {
 			}
 			if _, present := data["list"]; !present {
 				t.Errorf("%s: expected privatechat field 'list' in data; got data=%v", tc.path, data)
-			}
-		case "array":
-			if _, ok := body["data"].([]interface{}); !ok {
-				t.Errorf("%s: expected data to be array; got %T %v", tc.path, body["data"], body["data"])
 			}
 		}
 	}
@@ -435,6 +467,143 @@ func TestRouter_IDChatChatAPICompatRoutes(t *testing.T) {
 				t.Errorf("%s: expected data.list, got data=%v", tc.path, data)
 			}
 		}
+	}
+}
+
+func TestRouter_IDChatP0RoutesReturnCompatibilityEnvelopes(t *testing.T) {
+	router := setupFullRouter(t)
+
+	cases := []struct {
+		path     string
+		dataKeys []string
+	}{
+		{"/chat-api/group-chat/group-chat-list?groupId=g1", []string{"total", "nextTimestamp", "list"}},
+		{"/chat-api/group-chat/group-chat-list-v2?groupId=g1", []string{"total", "nextTimestamp", "list"}},
+		{"/chat-api/group-chat/group-chat-list-by-index?groupId=g1", []string{"total", "lastIndex", "list"}},
+		{"/chat-api/group-chat/channel-chat-list-v3?groupId=g1&channelId=c1", []string{"total", "nextTimestamp", "list"}},
+		{"/chat-api/group-chat/channel-chat-list-by-index?groupId=g1&channelId=c1", []string{"total", "lastIndex", "list"}},
+		{"/chat-api/group-chat/group-channel-list?groupId=g1", []string{"total", "list"}},
+		{"/chat-api/group-chat/group-metaid-join-list?groupId=g1&metaId=m1", []string{"metaId", "items"}},
+		{"/chat-api/group-chat/private-group-paths?metaId=m1", []string{"total", "list"}},
+		{"/chat-api/group-chat/search-groups-and-users?query=m&size=5", []string{"total", "list"}},
+		{"/chat-api/group-chat/user/latest-chat-info-list?metaId=m1", []string{"total", "list"}},
+	}
+
+	for _, tc := range cases {
+		w, body := get(t, router, tc.path)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: want 200 got %d body=%s", tc.path, w.Code, w.Body.String())
+		}
+		assertResponseDataKeys(t, body, tc.dataKeys...)
+	}
+}
+
+func TestRouter_IDChatLatestChatInfoListIncludesPrivateSessions(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	if err := fixture.groupAgg.SaveGroup(&groupchat.Group{
+		GroupId:       "group-1",
+		GroupName:     "General",
+		Avatar:        "avatar-1",
+		Creator:       "addr-creator",
+		CreatorMetaId: "creator-meta",
+		MemberCount:   2,
+		JoinType:      "public",
+		CreatedAt:     1000,
+		Chain:         "mvc",
+		BlockHeight:   10,
+	}); err != nil {
+		t.Fatalf("save group: %v", err)
+	}
+	if err := fixture.groupAgg.SaveGroupMember("group-1", "user-a", &groupchat.GroupMember{
+		MetaId:       "user-a",
+		GlobalMetaId: "global-a",
+		Address:      "addr-a",
+		Timestamp:    1000,
+	}); err != nil {
+		t.Fatalf("save member: %v", err)
+	}
+	if err := fixture.groupAgg.SaveChatMessage(&groupchat.ChatMessage{
+		TxId:         "tx-group",
+		PinId:        "tx-groupi0",
+		GroupId:      "group-1",
+		MetaId:       "user-a",
+		GlobalMetaId: "global-a",
+		Address:      "addr-a",
+		Protocol:     "/protocols/simplegroupchat",
+		Content:      "group message",
+		ContentType:  "text/plain",
+		ChatType:     "msg",
+		Timestamp:    1500,
+		Chain:        "mvc",
+		BlockHeight:  11,
+		Index:        1,
+	}); err != nil {
+		t.Fatalf("save group message: %v", err)
+	}
+	if err := fixture.privateAgg.SavePrivateMessage(&privatechat.PrivateMessage{
+		FromGlobalMetaId: "global-b",
+		From:             "user-b",
+		FromAddress:      "addr-b",
+		FromUserInfo: map[string]interface{}{
+			"metaId":        "user-b",
+			"globalMetaId":  "global-b",
+			"chatPublicKey": "pub-b",
+		},
+		ToGlobalMetaId: "global-a",
+		To:             "user-a",
+		ToAddress:      "addr-a",
+		TxId:           "tx-private",
+		PinId:          "tx-privatei0",
+		Protocol:       "/protocols/simplemsg",
+		Content:        "private message",
+		ContentType:    "text/plain",
+		Timestamp:      2000,
+		Chain:          "mvc",
+		BlockHeight:    12,
+		Index:          2,
+	}); err != nil {
+		t.Fatalf("save private message: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/chat-api/group-chat/user/latest-chat-info-list?metaId=user-a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "list")
+	if data["total"] != float64(2) {
+		t.Fatalf("total: want 2 got %v body=%s", data["total"], w.Body.String())
+	}
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 2 {
+		t.Fatalf("list: want two items got %T %v body=%s", data["list"], data["list"], w.Body.String())
+	}
+	privateItem, ok := list[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first list item should be object: %T %v", list[0], list[0])
+	}
+	if privateItem["type"] != "2" {
+		t.Fatalf("newest item should be private type=2, got %v item=%v", privateItem["type"], privateItem)
+	}
+	userInfo, ok := privateItem["userInfo"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("private item should include userInfo, got %T %v", privateItem["userInfo"], privateItem["userInfo"])
+	}
+	if userInfo["chatPublicKey"] != "pub-b" {
+		t.Fatalf("private userInfo.chatPublicKey: want pub-b got %v userInfo=%v", userInfo["chatPublicKey"], userInfo)
+	}
+}
+
+func TestRouter_IDChatSocketOnlineUsersCompatibilityRoute(t *testing.T) {
+	router := setupPresenceRouter(t, nil)
+
+	w, body := get(t, router, "/chat-api/group-chat/socket/online-users?cursor=&size=20&withUserInfo=true")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	data := assertResponseDataKeys(t, body, "total", "cursor", "size", "onlineWindowSeconds", "list")
+	if _, ok := data["list"].([]interface{}); !ok {
+		t.Fatalf("data.list should be an array, got %T %v", data["list"], data["list"])
 	}
 }
 

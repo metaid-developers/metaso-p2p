@@ -47,6 +47,13 @@ type PrivateChatHome struct {
 	LastMessage  *PrivateMessage `json:"lastMessage,omitempty"`
 }
 
+// PrivateGroupPath mirrors the old idchat private path item shape.
+type PrivateGroupPath struct {
+	Path    string `json:"path"`
+	GroupId string `json:"groupId"`
+	PinId   string `json:"pinId"`
+}
+
 const (
 	pchatKeyConst = "pchat:"
 )
@@ -276,8 +283,8 @@ func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, err
 }
 
 // GetPrivateGroupPaths returns the list of paths where the given metaId has private chat messages.
-func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]string, error) {
-	pathSet := make(map[string]bool)
+func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]*PrivateGroupPath, error) {
+	pathMap := make(map[string]*PrivateGroupPath)
 
 	prefix := []byte(pchatKeyConst)
 	a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
@@ -288,18 +295,25 @@ func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]string, error) {
 
 		if msg.From == metaid || msg.To == metaid {
 			lo, hi := sortMetas(msg.From, msg.To)
-			pathSet[lo+":"+hi] = true
+			path := lo + ":" + hi
+			if _, ok := pathMap[path]; !ok {
+				pathMap[path] = &PrivateGroupPath{
+					Path:    path,
+					GroupId: path,
+					PinId:   msg.PinId,
+				}
+			}
 		}
 		return nil
 	})
 
-	var paths []string
-	for p := range pathSet {
+	var paths []*PrivateGroupPath
+	for _, p := range pathMap {
 		paths = append(paths, p)
 	}
 
 	if paths == nil {
-		paths = []string{}
+		paths = []*PrivateGroupPath{}
 	}
 
 	return paths, nil

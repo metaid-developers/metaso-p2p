@@ -33,22 +33,21 @@ func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 	gc.GET("/search-group-members", a.handleSearchGroupMembers)
 	gc.GET("/group-list", a.handleGroupList)
 	gc.GET("/group-join-control-list", a.handleGroupJoinControlList)
-
-	// Group stubs
-	gc.GET("/group-channel-list", a.handleStub)
-	gc.GET("/group-metaid-join-list", a.handleStub)
+	gc.GET("/group-channel-list", a.handleGroupChannelList)
+	gc.GET("/group-metaid-join-list", a.handleGroupMetaIdJoinList)
 
 	// Chat Messages
+	gc.GET("/group-chat-list", a.handleGroupChatList)
 	gc.GET("/group-chat-list-v2", a.handleGroupChatListV2)
+	gc.GET("/group-chat-list-v3", a.handleGroupChatListV3)
 	gc.GET("/group-chat-list-by-index", a.handleGroupChatListByIndex)
 	gc.GET("/user/latest-chat-info-list", a.handleUserLatestChatInfoList)
-
-	// Chat stubs
-	gc.GET("/channel-chat-list-v3", a.handleStub)
-	gc.GET("/channel-chat-list-by-index", a.handleStub)
+	gc.GET("/channel-chat-list-v3", a.handleChannelChatListV3)
+	gc.GET("/channel-chat-list-by-index", a.handleChannelChatListByIndex)
 
 	// Search
 	gc.GET("/search-users", a.handleSearchUsers)
+	gc.GET("/search-groups-and-users", a.handleSearchGroupsAndUsers)
 
 	// Private chat routes are owned by the privatechat aggregator (see
 	// internal/aggregator/privatechat/api.go). Both aggregators share the
@@ -241,6 +240,7 @@ func (a *Aggregator) handleGroupMemberList(c *gin.Context) {
 		"blockList": blockList,
 		"creator":   creator,
 		"list":      members,
+		"total":     len(members),
 		"whiteList": whiteList,
 	})
 }
@@ -269,7 +269,8 @@ func (a *Aggregator) handleSearchGroupMembers(c *gin.Context) {
 	}
 
 	api.RespSuccess(c, gin.H{
-		"list": members,
+		"total": len(members),
+		"list":  members,
 	})
 }
 
@@ -281,7 +282,7 @@ func (a *Aggregator) handleGroupList(c *gin.Context) {
 		size = 20
 	}
 
-	groups, nextCursorVal, _, err := a.GetGroupList(metaId, cursor, size)
+	groups, nextCursorVal, total, err := a.GetGroupList(metaId, cursor, size)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get group list")
 		return
@@ -294,6 +295,7 @@ func (a *Aggregator) handleGroupList(c *gin.Context) {
 	api.RespSuccess(c, gin.H{
 		"list":       groups,
 		"nextCursor": nextCursorVal,
+		"total":      total,
 	})
 }
 
@@ -314,6 +316,10 @@ func (a *Aggregator) handleGroupJoinControlList(c *gin.Context) {
 }
 
 // --- Chat Handlers ---
+
+func (a *Aggregator) handleGroupChatList(c *gin.Context) {
+	a.handleGroupChatListV2(c)
+}
 
 func (a *Aggregator) handleGroupChatListV2(c *gin.Context) {
 	groupId := c.Query("groupId")
@@ -337,6 +343,10 @@ func (a *Aggregator) handleGroupChatListV2(c *gin.Context) {
 	api.RespSuccess(c, result)
 }
 
+func (a *Aggregator) handleGroupChatListV3(c *gin.Context) {
+	a.handleGroupChatListV2(c)
+}
+
 func (a *Aggregator) handleGroupChatListByIndex(c *gin.Context) {
 	groupId := c.Query("groupId")
 	if groupId == "" {
@@ -350,9 +360,55 @@ func (a *Aggregator) handleGroupChatListByIndex(c *gin.Context) {
 		size = 20
 	}
 
-	result, err := a.GetChatListByIndex(groupId, startIndex, size)
+	result, err := a.GetChatListByIndexCompat(groupId, startIndex, size)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get chat list")
+		return
+	}
+
+	api.RespSuccess(c, result)
+}
+
+func (a *Aggregator) handleChannelChatListV3(c *gin.Context) {
+	groupId := c.Query("groupId")
+	channelId := c.Query("channelId")
+	if groupId == "" || channelId == "" {
+		api.RespErr(c, 1, "groupId and channelId are required")
+		return
+	}
+
+	cursor := c.DefaultQuery("cursor", "")
+	size, _ := strconv.ParseInt(c.DefaultQuery("size", "20"), 10, 64)
+	if size < 1 || size > 100 {
+		size = 20
+	}
+
+	result, err := a.GetChannelChatListV3(groupId, channelId, cursor, size)
+	if err != nil {
+		api.RespErr(c, 1, "failed to get channel chat list")
+		return
+	}
+
+	api.RespSuccess(c, result)
+}
+
+func (a *Aggregator) handleChannelChatListByIndex(c *gin.Context) {
+	groupId := c.Query("groupId")
+	channelId := c.Query("channelId")
+	if groupId == "" || channelId == "" {
+		api.RespErr(c, 1, "groupId and channelId are required")
+		return
+	}
+
+	startIndex, _ := strconv.ParseInt(c.DefaultQuery("startIndex", "0"), 10, 64)
+	size, _ := strconv.ParseInt(c.DefaultQuery("size", "20"), 10, 64)
+	if size < 1 || size > 100 {
+		size = 20
+	}
+
+	result, err := a.GetChannelChatListByIndex(groupId, channelId, startIndex, size)
+	if err != nil {
+		api.RespErr(c, 1, "failed to get channel chat list by index")
 		return
 	}
 
@@ -377,7 +433,8 @@ func (a *Aggregator) handleUserLatestChatInfoList(c *gin.Context) {
 	}
 
 	api.RespSuccess(c, gin.H{
-		"list": infos,
+		"total": len(infos),
+		"list":  infos,
 	})
 }
 
@@ -390,7 +447,12 @@ func (a *Aggregator) handleSearchUsers(c *gin.Context) {
 		return
 	}
 
-	users, err := a.SearchUsers(query, 50)
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "50"))
+	if size < 1 || size > 100 {
+		size = 50
+	}
+
+	users, err := a.SearchUsers(query, size)
 	if err != nil {
 		api.RespErr(c, 1, "failed to search users")
 		return
@@ -401,7 +463,77 @@ func (a *Aggregator) handleSearchUsers(c *gin.Context) {
 	}
 
 	api.RespSuccess(c, gin.H{
-		"list": users,
+		"total": len(users),
+		"list":  users,
+	})
+}
+
+func (a *Aggregator) handleSearchGroupsAndUsers(c *gin.Context) {
+	query := c.Query("query")
+	if query == "" {
+		api.RespErr(c, 1, "query is required")
+		return
+	}
+
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+	if size < 1 || size > 100 {
+		size = 20
+	}
+
+	results, err := a.SearchGroupsAndUsers(query, size)
+	if err != nil {
+		api.RespErr(c, 1, "failed to search groups and users")
+		return
+	}
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+
+	api.RespSuccess(c, gin.H{
+		"total": len(results),
+		"list":  results,
+	})
+}
+
+func (a *Aggregator) handleGroupChannelList(c *gin.Context) {
+	groupId := c.Query("groupId")
+	if groupId == "" {
+		api.RespErr(c, 1, "groupId is required")
+		return
+	}
+
+	channels, err := a.GetGroupChannelList(groupId)
+	if err != nil {
+		api.RespErr(c, 1, "failed to get group channel list")
+		return
+	}
+	if channels == nil {
+		channels = []*GroupChannel{}
+	}
+
+	api.RespSuccess(c, gin.H{
+		"total": len(channels),
+		"list":  channels,
+	})
+}
+
+func (a *Aggregator) handleGroupMetaIdJoinList(c *gin.Context) {
+	metaId := c.Query("metaId")
+	if metaId == "" {
+		metaId = c.Query("globalMetaId")
+	}
+	items, err := a.GetGroupMetaIdJoinList(c.Query("groupId"), metaId)
+	if err != nil {
+		api.RespErr(c, 1, "failed to get group metaid join list")
+		return
+	}
+	if items == nil {
+		items = []map[string]interface{}{}
+	}
+
+	api.RespSuccess(c, gin.H{
+		"metaId": metaId,
+		"items":  items,
 	})
 }
 
