@@ -299,6 +299,113 @@ func TestPrivateChatList_ResolvesCanonicalPeerAlias(t *testing.T) {
 	}
 }
 
+func TestPrivateChatNotifyEventTargetsRecipientAliases(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+	agg.SetProfileLookup(&fakePrivateChatProfileLookup{
+		byGlobalMetaId: map[string]*IdentityProfile{
+			"idqBuyerGlobal": {
+				MetaId:       "buyer_local_meta",
+				GlobalMetaId: "idqBuyerGlobal",
+				Address:      "1BuyerAddress",
+			},
+		},
+	})
+
+	pin := &aggregator.PinInscription{
+		Id:            "alias_push:i0",
+		Path:          "/private/chat/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1ProviderAddress",
+		CreateMetaId:  "provider_meta",
+		GlobalMetaId:  "idqProviderGlobal",
+		ChainName:     "mvc",
+		Timestamp:     1780562000,
+		GenesisHeight: 176100,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "provider_meta",
+			To:          "idqBuyerGlobal",
+			Content:     "alias route",
+			ContentType: "text/plain",
+			Encrypt:     "none",
+		}),
+	}
+
+	evt, err := agg.HandleBlockPin(pin)
+	if err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected NotifyEvent")
+	}
+
+	want := []string{"idqBuyerGlobal", "buyer_local_meta", "1BuyerAddress"}
+	if !reflect.DeepEqual(evt.TargetIds, want) {
+		t.Fatalf("TargetIds = %#v, want %#v", evt.TargetIds, want)
+	}
+	if evt.MetaId != "idqBuyerGlobal" {
+		t.Fatalf("MetaId fallback = %q, want idqBuyerGlobal", evt.MetaId)
+	}
+}
+
+func TestPrivateChatNotifyPayloadUsesCanonicalMessageShape(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	pin := &aggregator.PinInscription{
+		Id:            "canonical_payload:i0",
+		Path:          "/private/chat/simplemsg",
+		Operation:     "create",
+		CreateAddress: "1ProviderAddress",
+		CreateMetaId:  "provider_meta",
+		GlobalMetaId:  "idqProviderGlobal",
+		ChainName:     "mvc",
+		Timestamp:     1780562100,
+		GenesisHeight: 176101,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "provider_meta",
+			To:          "idqBuyerGlobal",
+			Content:     "canonical payload",
+			ContentType: "text/markdown",
+			Encrypt:     "ecdh",
+		}),
+	}
+
+	evt, err := agg.HandleBlockPin(pin)
+	if err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected NotifyEvent")
+	}
+
+	payload, ok := evt.Payload.(*PrivateMessage)
+	if !ok {
+		t.Fatalf("Payload = %T, want *PrivateMessage", evt.Payload)
+	}
+	if payload.FromGlobalMetaId != "idqProviderGlobal" {
+		t.Fatalf("FromGlobalMetaId = %q, want idqProviderGlobal", payload.FromGlobalMetaId)
+	}
+	if payload.ToGlobalMetaId != "idqBuyerGlobal" {
+		t.Fatalf("ToGlobalMetaId = %q, want idqBuyerGlobal", payload.ToGlobalMetaId)
+	}
+	if payload.Protocol != "/private/chat/simplemsg" {
+		t.Fatalf("Protocol = %q, want /private/chat/simplemsg", payload.Protocol)
+	}
+	if payload.Chain != "mvc" {
+		t.Fatalf("Chain = %q, want mvc", payload.Chain)
+	}
+	if payload.BlockHeight != 176101 {
+		t.Fatalf("BlockHeight = %d, want 176101", payload.BlockHeight)
+	}
+	if payload.Index != -1 {
+		t.Fatalf("Index = %d, want -1", payload.Index)
+	}
+	if payload.ContentType != "text/markdown" || payload.Encryption != "ecdh" {
+		t.Fatalf("ContentType/Encryption = %q/%q, want text/markdown/ecdh", payload.ContentType, payload.Encryption)
+	}
+}
+
 func TestCanonicalPrivateChatRoutesMirrorGroupChatCompatibilityRoutes(t *testing.T) {
 	agg, store, router := setupTestAggregator(t)
 	defer store.Close()
@@ -836,15 +943,18 @@ func TestSocketPushNotification(t *testing.T) {
 	}
 
 	// Verify payload contains expected fields
-	payload, ok := evt.Payload.(map[string]interface{})
+	payload, ok := evt.Payload.(*PrivateMessage)
 	if !ok {
-		t.Fatal("expected payload to be map[string]interface{}")
+		t.Fatal("expected payload to be *PrivateMessage")
 	}
-	if payload["from"] != "alice_push" {
-		t.Errorf("expected payload.from='alice_push', got %v", payload["from"])
+	if payload.From != "alice_push" {
+		t.Errorf("expected payload.From='alice_push', got %q", payload.From)
 	}
-	if payload["content"] != "Push notification test" {
-		t.Errorf("expected payload.content='Push notification test', got %v", payload["content"])
+	if payload.Content != "Push notification test" {
+		t.Errorf("expected payload.Content='Push notification test', got %q", payload.Content)
+	}
+	if payload.ToGlobalMetaId != "bob_push" {
+		t.Errorf("expected payload.ToGlobalMetaId='bob_push', got %q", payload.ToGlobalMetaId)
 	}
 
 	// Check that event was delivered to notify channel

@@ -10,27 +10,27 @@ import (
 // PinInscription is a parsed MetaID protocol entry from a blockchain transaction.
 // This mirrors the core data type from the indexing pipeline.
 type PinInscription struct {
-	Id                string `json:"id"`
-	Number            int64  `json:"number"`
-	Path              string `json:"path"`
-	OriginalPath      string `json:"originalPath,omitempty"`
-	Operation         string `json:"operation"` // init, create, modify, revoke
-	ContentBody       []byte `json:"contentBody"`
-	ContentType       string `json:"contentType"`
-	Creator           string `json:"creator"`
-	CreateAddress     string `json:"createAddress"`
-	CreateMetaId      string `json:"createMetaId"`
-	MetaId            string `json:"metaId"`
-	GlobalMetaId      string `json:"globalMetaId"`
-	Address           string `json:"address"`
-	ChainName         string `json:"chainName"`
+	Id                 string `json:"id"`
+	Number             int64  `json:"number"`
+	Path               string `json:"path"`
+	OriginalPath       string `json:"originalPath,omitempty"`
+	Operation          string `json:"operation"` // init, create, modify, revoke
+	ContentBody        []byte `json:"contentBody"`
+	ContentType        string `json:"contentType"`
+	Creator            string `json:"creator"`
+	CreateAddress      string `json:"createAddress"`
+	CreateMetaId       string `json:"createMetaId"`
+	MetaId             string `json:"metaId"`
+	GlobalMetaId       string `json:"globalMetaId"`
+	Address            string `json:"address"`
+	ChainName          string `json:"chainName"`
 	GenesisTransaction string `json:"genesisTransaction"`
-	GenesisHeight     int64  `json:"genesisHeight"`
-	Timestamp         int64  `json:"timestamp"`
-	Output            string `json:"output"`
-	IsTransfered      bool   `json:"isTransfered"`
-	OriginalId        string `json:"originalId,omitempty"`
-	Host              string `json:"host"`
+	GenesisHeight      int64  `json:"genesisHeight"`
+	Timestamp          int64  `json:"timestamp"`
+	Output             string `json:"output"`
+	IsTransfered       bool   `json:"isTransfered"`
+	OriginalId         string `json:"originalId,omitempty"`
+	Host               string `json:"host"`
 }
 
 // PinEvent represents a parsed pin emitted by the indexer engine.
@@ -44,11 +44,12 @@ type PinEvent struct {
 
 // NotifyEvent is emitted by aggregators to trigger socket push.
 type NotifyEvent struct {
-	Type      string      // WS_SERVER_NOTIFY_GROUP_CHAT, etc.
-	MetaId    string      // target user MetaId
-	GlobalMetaId string   // target user GlobalMetaId
-	GroupId   string      // target group (for room broadcast)
-	Payload   interface{} // notification body
+	Type         string      // WS_SERVER_NOTIFY_GROUP_CHAT, etc.
+	MetaId       string      // target user MetaId
+	GlobalMetaId string      // target user GlobalMetaId
+	TargetIds    []string    // all known target identities/aliases for user-directed pushes
+	GroupId      string      // target group (for room broadcast)
+	Payload      interface{} // notification body
 }
 
 // Aggregator is the interface each business module must implement.
@@ -134,4 +135,3 @@ func (r *Registry) RouteMempoolPin(pin *PinInscription) []*NotifyEvent {
 	}
 	return events
 }
-

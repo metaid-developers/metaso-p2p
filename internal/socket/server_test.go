@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/metaid-developers/meta-socket/internal/aggregator"
 	"github.com/metaid-developers/meta-socket/internal/config"
 	"github.com/metaid-developers/meta-socket/internal/presence"
 )
@@ -179,6 +181,33 @@ func TestPushMessageFormat(t *testing.T) {
 	// Verify D is present
 	if _, ok := result["D"]; !ok {
 		t.Error("expected D field")
+	}
+}
+
+func TestNotifyEventTargetIdsDeduplicateAndFallback(t *testing.T) {
+	evt := &aggregator.NotifyEvent{
+		MetaId:       "buyer_local_meta",
+		GlobalMetaId: "idqBuyerGlobal",
+		TargetIds:    []string{"idqBuyerGlobal", "buyer_local_meta", "1BuyerAddress", "idqBuyerGlobal", " "},
+	}
+
+	got := notifyEventTargetIds(evt)
+	want := []string{"idqBuyerGlobal", "buyer_local_meta", "1BuyerAddress"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("notifyEventTargetIds() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNotifyEventTargetIdsFallbackWithoutTargetIds(t *testing.T) {
+	evt := &aggregator.NotifyEvent{
+		MetaId:       "buyer_local_meta",
+		GlobalMetaId: "idqBuyerGlobal",
+	}
+
+	got := notifyEventTargetIds(evt)
+	want := []string{"buyer_local_meta", "idqBuyerGlobal"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("notifyEventTargetIds() = %#v, want %#v", got, want)
 	}
 }
 

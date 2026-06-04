@@ -215,18 +215,14 @@ func (s *Server) routeNotifyEvent(evt *aggregator.NotifyEvent) {
 			s.BroadcastToRoom("group:"+evt.GroupId, envelope)
 		}
 	case "WS_SERVER_NOTIFY_PRIVATE_CHAT":
-		// Send to specific MetaId
-		if evt.MetaId != "" {
-			s.SendToUser(evt.MetaId, envelope)
-		} else if evt.GlobalMetaId != "" {
-			s.SendToUser(evt.GlobalMetaId, envelope)
+		// Send to all known user identity aliases.
+		for _, targetId := range notifyEventTargetIds(evt) {
+			s.SendToUser(targetId, envelope)
 		}
 	case "WS_SERVER_NOTIFY_GROUP_ROLE":
-		// Send to MetaId AND broadcast to room
-		if evt.MetaId != "" {
-			s.SendToUser(evt.MetaId, envelope)
-		} else if evt.GlobalMetaId != "" {
-			s.SendToUser(evt.GlobalMetaId, envelope)
+		// Send to user identity aliases AND broadcast to room.
+		for _, targetId := range notifyEventTargetIds(evt) {
+			s.SendToUser(targetId, envelope)
 		}
 		if evt.GroupId != "" {
 			s.BroadcastToRoom("group:"+evt.GroupId, envelope)
@@ -234,6 +230,36 @@ func (s *Server) routeNotifyEvent(evt *aggregator.NotifyEvent) {
 	default:
 		log.Printf("[socket] unknown notify event type: %s", evt.Type)
 	}
+}
+
+func notifyEventTargetIds(evt *aggregator.NotifyEvent) []string {
+	if evt == nil {
+		return nil
+	}
+
+	targets := make([]string, 0, len(evt.TargetIds)+2)
+	seen := make(map[string]bool)
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		targets = append(targets, id)
+	}
+
+	for _, id := range evt.TargetIds {
+		add(id)
+	}
+	if len(targets) == 0 {
+		add(evt.MetaId)
+		add(evt.GlobalMetaId)
+	}
+	return targets
 }
 
 // SendToUser sends a push envelope to all connections of a given metaid.
@@ -248,6 +274,13 @@ func (s *Server) SendToUser(metaId string, msg *PushEnvelope) {
 		}
 		return true
 	})
+}
+
+// SendToUsers sends a push envelope to all connections for each target metaid.
+func (s *Server) SendToUsers(metaIds []string, msg *PushEnvelope) {
+	for _, metaId := range metaIds {
+		s.SendToUser(metaId, msg)
+	}
 }
 
 // BroadcastToRoom sends a push envelope to all sockets in a room.

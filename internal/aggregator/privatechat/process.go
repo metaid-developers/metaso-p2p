@@ -119,25 +119,11 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 		return nil, err
 	}
 
-	// Build notify event for socket push
-	notifyPayload := map[string]interface{}{
-		"type":         "WS_SERVER_NOTIFY_PRIVATE_CHAT",
-		"from":         fromMetaId,
-		"fromAddress":  fromAddress,
-		"fromUserInfo": msg.FromUserInfo,
-		"to":           toMetaId,
-		"content":      sm.Content,
-		"contentType":  contentType,
-		"encryption":   encryption,
-		"timestamp":    pin.Timestamp,
-		"pinId":        pin.Id,
-		"txId":         txId,
-	}
-
 	notifyEvent := &aggregator.NotifyEvent{
-		Type:    "WS_SERVER_NOTIFY_PRIVATE_CHAT",
-		MetaId:  toMetaId,
-		Payload: notifyPayload,
+		Type:      "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+		MetaId:    toMetaId,
+		TargetIds: a.identityAliases(toMetaId),
+		Payload:   msg,
 	}
 
 	log.Printf("[privatechat] private message saved: pinId=%s from=%s to=%s", msg.PinId, fromMetaId, toMetaId)

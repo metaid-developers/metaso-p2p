@@ -184,6 +184,11 @@ All delivered via `message` event with envelope:
 
 **PrivateChatItem**: `{fromGlobalMetaId, from, fromUserInfo: UserInfo, toGlobalMetaId, to, toUserInfo: UserInfo, txId, pinId, globalMetaId, metaId, address, userInfo: UserInfo, nickName, protocol, content, contentType, encryption, chatType, data, replyPin, replyInfo, replyGlobalMetaId, replyMetaId, timestamp, params, chain, blockHeight, index}`
 
+Private-chat Socket.IO pushes use the same `PrivateChatItem`-compatible object
+as `D` in the `{M, C, D}` envelope. Clients should use `M` for event dispatch
+and treat `D.from`, `D.to`, `D.fromGlobalMetaId`, `D.toGlobalMetaId`, `D.pinId`,
+and `D.txId` as the stable identity and de-duplication fields.
+
 **GroupUserRoleInfo**: `{globalMetaId, metaId, address, userInfo: UserInfo, groupId, channelId, isCreator, isAdmin, isBlocked, isWhitelist, isRemoved}`
 
 ## 6. Health Check
