@@ -74,6 +74,9 @@ func TestRegistryPayloadBuildsPublicURLsAndValidUntil(t *testing.T) {
 	if utxoReq.address != mvcTestAddress {
 		t.Fatalf("utxo address: want %q got %q", mvcTestAddress, utxoReq.address)
 	}
+	if utxoReq.flag != "" {
+		t.Fatalf("utxo flag should be omitted by default, got %q", utxoReq.flag)
+	}
 
 	if len(client.broadcastRequests()) != 1 {
 		t.Fatalf("broadcast calls: want 1 got %d", len(client.broadcastRequests()))

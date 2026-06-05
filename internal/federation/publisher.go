@@ -17,7 +17,7 @@ const (
 	defaultPublisherValidFor      = 24 * time.Hour
 	defaultPublisherFeeRate       = int64(1)
 	defaultPublisherDustAmount    = int64(1)
-	defaultPublisherUTXOFlag      = "confirmed"
+	defaultPublisherUTXOFlag      = ""
 	publisherPresenceCapability   = "presence-v1"
 )
 
