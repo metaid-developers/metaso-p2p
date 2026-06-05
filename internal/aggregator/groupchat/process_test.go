@@ -723,6 +723,286 @@ func TestGroupMemberQuery(t *testing.T) {
 		resp.Data.Creator, len(resp.Data.Admins), len(resp.Data.List))
 }
 
+func TestGroupMetaIdJoinListPreservesPrivateGroupKey(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	createPin := &aggregator.PinInscription{
+		Id:            "private_group_create:i0",
+		Path:          "/protocols/simplegroupcreate",
+		Operation:     "create",
+		CreateAddress: "addr_creator",
+		CreateMetaId:  "creator_local",
+		GlobalMetaId:  "creator_global",
+		ChainName:     "mvc",
+		Timestamp:     1000,
+		GenesisHeight: 100,
+		ContentBody: mustMarshal(t, map[string]interface{}{
+			"groupId":   "private_group",
+			"groupName": "Private Group",
+			"type":      "100",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(createPin); err != nil {
+		t.Fatalf("HandleBlockPin(group create): %v", err)
+	}
+
+	joinPin := &aggregator.PinInscription{
+		Id:            "private_group_join:i0",
+		Path:          "/protocols/simplegroupjoin",
+		Operation:     "create",
+		CreateAddress: "addr_member",
+		CreateMetaId:  "member_local",
+		GlobalMetaId:  "member_global",
+		ChainName:     "mvc",
+		Timestamp:     2000,
+		GenesisHeight: 200,
+		ContentBody: mustMarshal(t, map[string]interface{}{
+			"groupId":  "private_group",
+			"state":    1,
+			"referrer": "creator_global",
+			"k":        "private-pass-key",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(joinPin); err != nil {
+		t.Fatalf("HandleBlockPin(group join): %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/group-chat/group-metaid-join-list?groupId=private_group&metaId=member_global")
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			MetaId string `json:"metaId"`
+			Items  []struct {
+				JoinPinId      string `json:"joinPinId"`
+				JoinType       string `json:"joinType"`
+				JoinTimestamp  int64  `json:"joinTimestamp"`
+				GroupState     int64  `json:"groupState"`
+				Address        string `json:"address"`
+				Referrer       string `json:"referrer"`
+				K              string `json:"k"`
+				BlockHeight    int64  `json:"blockHeight"`
+				Chain          string `json:"chain"`
+				ByGlobalMetaId string `json:"byGlobalMetaId"`
+				ByMetaId       string `json:"byMetaId"`
+				ByAddress      string `json:"byAddress"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.MetaId != "member_global" {
+		t.Fatalf("expected metaId=member_global, got %q", resp.Data.MetaId)
+	}
+
+	var joinItemFound bool
+	for _, item := range resp.Data.Items {
+		if item.JoinPinId != joinPin.Id {
+			continue
+		}
+		joinItemFound = true
+		if item.K != "private-pass-key" {
+			t.Fatalf("expected k to be preserved, got %q in %#v", item.K, item)
+		}
+		if item.Referrer != "creator_global" {
+			t.Fatalf("expected referrer=creator_global, got %q", item.Referrer)
+		}
+		if item.JoinType != "join" {
+			t.Fatalf("expected joinType=join, got %q", item.JoinType)
+		}
+		if item.GroupState != 1 {
+			t.Fatalf("expected groupState=1, got %d", item.GroupState)
+		}
+		if item.ByGlobalMetaId != "member_global" || item.ByMetaId != "member_local" || item.ByAddress != "addr_member" {
+			t.Fatalf("expected by-user aliases to be stored, got %#v", item)
+		}
+	}
+	if !joinItemFound {
+		t.Fatalf("expected join item %s in %#v", joinPin.Id, resp.Data.Items)
+	}
+}
+
+func TestGroupListAndLatestChatInfoUseMemberIdentityAliases(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	if err := agg.SaveGroup(&Group{
+		GroupId:       "alias_group",
+		GroupName:     "Alias Group",
+		Avatar:        "alias_icon",
+		Creator:       "addr_creator",
+		CreatorMetaId: "creator_local",
+		MemberCount:   1,
+		JoinType:      "0",
+		CreatedAt:     1000,
+		Chain:         "mvc",
+		BlockHeight:   100,
+	}); err != nil {
+		t.Fatalf("SaveGroup: %v", err)
+	}
+	if err := agg.SaveGroupMember("alias_group", "member_local", &GroupMember{
+		MetaId:       "member_local",
+		GlobalMetaId: "member_global",
+		Address:      "addr_member",
+		Timestamp:    1000,
+	}); err != nil {
+		t.Fatalf("SaveGroupMember: %v", err)
+	}
+	if err := agg.SaveChatMessage(&ChatMessage{
+		TxId:         "alias_chat",
+		PinId:        "alias_chati0",
+		GroupId:      "alias_group",
+		MetaId:       "member_local",
+		GlobalMetaId: "member_global",
+		Address:      "addr_member",
+		Protocol:     "/protocols/simplegroupchat",
+		Content:      "alias message",
+		ContentType:  "text/plain",
+		ChatType:     "msg",
+		Timestamp:    2000,
+		Chain:        "mvc",
+		BlockHeight:  200,
+		Index:        1,
+	}); err != nil {
+		t.Fatalf("SaveChatMessage: %v", err)
+	}
+
+	for _, identity := range []string{"member_local", "member_global", "addr_member"} {
+		groups, _, total, err := agg.GetGroupList(identity, "", 20)
+		if err != nil {
+			t.Fatalf("GetGroupList(%s): %v", identity, err)
+		}
+		if total != 1 || len(groups) != 1 || groups[0].GroupId != "alias_group" {
+			t.Fatalf("GetGroupList(%s) = total %d groups %#v, want alias_group", identity, total, groups)
+		}
+
+		latest, err := agg.GetUserLatestChatInfoList(identity)
+		if err != nil {
+			t.Fatalf("GetUserLatestChatInfoList(%s): %v", identity, err)
+		}
+		var found bool
+		for _, item := range latest {
+			if item.Type == "1" && item.GroupId == "alias_group" {
+				found = true
+				if item.Content != "alias message" {
+					t.Fatalf("latest content for %s = %q, want alias message", identity, item.Content)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("GetUserLatestChatInfoList(%s) missing alias_group in %#v", identity, latest)
+		}
+	}
+}
+
+func TestGroupChannelListUsesChannelPinMetadataAndNewestMessage(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	createPin := &aggregator.PinInscription{
+		Id:            "channel_group_create:i0",
+		Path:          "/protocols/simplegroupcreate",
+		Operation:     "create",
+		CreateAddress: "addr_creator",
+		CreateMetaId:  "creator_local",
+		GlobalMetaId:  "creator_global",
+		ChainName:     "mvc",
+		Timestamp:     1000,
+		GenesisHeight: 100,
+		ContentBody: mustMarshal(t, map[string]interface{}{
+			"groupId":   "channel_group",
+			"groupName": "Channel Group",
+			"type":      "0",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(createPin); err != nil {
+		t.Fatalf("HandleBlockPin(group create): %v", err)
+	}
+
+	channelPin := &aggregator.PinInscription{
+		Id:            "channel_create:i0",
+		Path:          "/protocols/simplegroupchannel",
+		Operation:     "create",
+		CreateAddress: "addr_creator",
+		CreateMetaId:  "creator_local",
+		GlobalMetaId:  "creator_global",
+		ChainName:     "mvc",
+		Timestamp:     1500,
+		GenesisHeight: 150,
+		ContentBody: mustMarshal(t, map[string]interface{}{
+			"groupId":     "channel_group",
+			"channelId":   "",
+			"channelName": "Announcements",
+			"channelIcon": "metafile://channel-icon",
+			"channelNote": "Pinned channel note",
+			"channelType": 1,
+		}),
+	}
+	if _, err := agg.HandleBlockPin(channelPin); err != nil {
+		t.Fatalf("HandleBlockPin(channel create): %v", err)
+	}
+
+	chatPin := &aggregator.PinInscription{
+		Id:            "channel_chat:i0",
+		Path:          "/protocols/simplegroupchat",
+		Operation:     "create",
+		CreateAddress: "addr_member",
+		CreateMetaId:  "member_local",
+		GlobalMetaId:  "member_global",
+		ChainName:     "mvc",
+		Timestamp:     2000,
+		GenesisHeight: 200,
+		ContentBody: mustMarshal(t, SimpleGroupChat{
+			GroupId:     "channel_group",
+			ChannelId:   channelPin.Id,
+			Content:     "channel latest message",
+			ContentType: "text/plain",
+			Encryption:  "none",
+		}),
+	}
+	if _, err := agg.HandleBlockPin(chatPin); err != nil {
+		t.Fatalf("HandleBlockPin(channel chat): %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/group-chat/group-channel-list?groupId=channel_group")
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Total int64                    `json:"total"`
+			List  []map[string]interface{} `json:"list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.Total != 1 || len(resp.Data.List) != 1 {
+		t.Fatalf("expected one channel, got total=%d list=%#v", resp.Data.Total, resp.Data.List)
+	}
+	channel := resp.Data.List[0]
+	if channel["channelId"] != channelPin.Id {
+		t.Fatalf("channelId = %v, want %s", channel["channelId"], channelPin.Id)
+	}
+	if channel["channelName"] != "Announcements" || channel["channelIcon"] != "metafile://channel-icon" || channel["channelNote"] != "Pinned channel note" {
+		t.Fatalf("channel metadata not preserved: %#v", channel)
+	}
+	if channelType, _ := channel["channelType"].(float64); int64(channelType) != 1 {
+		t.Fatalf("channelType = %v, want 1 in %#v", channel["channelType"], channel)
+	}
+	if channel["channelNewestContent"] != "channel latest message" || channel["channelNewestPinId"] != chatPin.Id {
+		t.Fatalf("channel newest message not populated: %#v", channel)
+	}
+	if channel["createUserMetaId"] != "creator_local" || channel["createUserGlobalMetaId"] != "creator_global" || channel["createUserAddress"] != "addr_creator" {
+		t.Fatalf("channel creator aliases not populated: %#v", channel)
+	}
+}
+
 // --- AC10: Community query ---
 
 func TestCommunityQuery(t *testing.T) {

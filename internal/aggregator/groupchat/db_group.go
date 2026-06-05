@@ -211,12 +211,12 @@ func (a *Aggregator) GetGroupList(metaId string, cursorStr string, size int64) (
 		if len(parts) != 2 {
 			return nil
 		}
-		if parts[1] != metaId {
-			return nil
-		}
 
 		var m GroupMember
 		if e := json.Unmarshal(value, &m); e != nil {
+			return nil
+		}
+		if !groupMemberMatchesIdentity(metaId, &m) {
 			return nil
 		}
 		if !m.IsRemoved {

@@ -85,21 +85,27 @@ type UserLatestChatInfo struct {
 type GroupChannel struct {
 	ChannelId                 string `json:"channelId"`
 	GroupId                   string `json:"groupId"`
+	TxId                      string `json:"txId,omitempty"`
+	PinId                     string `json:"pinId,omitempty"`
 	ChannelName               string `json:"channelName"`
 	ChannelIcon               string `json:"channelIcon,omitempty"`
 	ChannelNote               string `json:"channelNote,omitempty"`
-	ChannelType               string `json:"channelType,omitempty"`
+	ChannelType               int64  `json:"channelType"`
+	ChannelNewestTxId         string `json:"channelNewestTxId,omitempty"`
 	ChannelNewestPinId        string `json:"channelNewestPinId,omitempty"`
+	ChannelNewestProtocol     string `json:"channelNewestProtocol,omitempty"`
 	ChannelNewestContent      string `json:"channelNewestContent,omitempty"`
 	ChannelNewestTimestamp    int64  `json:"channelNewestTimestamp,omitempty"`
 	ChannelNewestMetaId       string `json:"channelNewestMetaId,omitempty"`
 	ChannelNewestGlobalMetaId string `json:"channelNewestGlobalMetaId,omitempty"`
 	CreateUserMetaId          string `json:"createUserMetaId,omitempty"`
 	CreateUserGlobalMetaId    string `json:"createUserGlobalMetaId,omitempty"`
+	CreateUserAddress         string `json:"createUserAddress,omitempty"`
 	Timestamp                 int64  `json:"timestamp,omitempty"`
 	Chain                     string `json:"chain,omitempty"`
 	BlockHeight               int64  `json:"blockHeight,omitempty"`
 	Index                     int64  `json:"index,omitempty"`
+	Version                   string `json:"version,omitempty"`
 }
 
 const (
@@ -292,6 +298,15 @@ func (a *Aggregator) GetChannelChatListByIndex(groupId, channelId string, startI
 
 func (a *Aggregator) GetGroupChannelList(groupId string) ([]*GroupChannel, error) {
 	byChannel := make(map[string]*GroupChannel)
+	storedChannels, err := a.getStoredGroupChannels(groupId)
+	if err != nil {
+		return nil, err
+	}
+	for _, stored := range storedChannels {
+		ch := *stored
+		byChannel[ch.ChannelId] = &ch
+	}
+
 	for _, msg := range a.collectGroupMessages(groupId) {
 		if msg.ChannelId == "" {
 			continue
@@ -302,21 +317,36 @@ func (a *Aggregator) GetGroupChannelList(groupId string) ([]*GroupChannel, error
 				ChannelId:   msg.ChannelId,
 				GroupId:     groupId,
 				ChannelName: msg.ChannelId,
-				ChannelType: "normal",
+				ChannelType: 0,
 			}
 			byChannel[msg.ChannelId] = ch
 		}
 		if msg.Timestamp >= ch.ChannelNewestTimestamp {
+			ch.ChannelNewestTxId = msg.TxId
 			ch.ChannelNewestPinId = msg.PinId
+			ch.ChannelNewestProtocol = msg.Protocol
 			ch.ChannelNewestContent = msg.Content
 			ch.ChannelNewestTimestamp = msg.Timestamp
 			ch.ChannelNewestMetaId = msg.MetaId
 			ch.ChannelNewestGlobalMetaId = msg.GlobalMetaId
-			ch.CreateUserMetaId = msg.MetaId
-			ch.CreateUserGlobalMetaId = msg.GlobalMetaId
-			ch.Timestamp = msg.Timestamp
-			ch.Chain = msg.Chain
-			ch.BlockHeight = msg.BlockHeight
+			if ch.CreateUserMetaId == "" {
+				ch.CreateUserMetaId = msg.MetaId
+			}
+			if ch.CreateUserGlobalMetaId == "" {
+				ch.CreateUserGlobalMetaId = msg.GlobalMetaId
+			}
+			if ch.CreateUserAddress == "" {
+				ch.CreateUserAddress = msg.Address
+			}
+			if ch.Timestamp == 0 {
+				ch.Timestamp = msg.Timestamp
+			}
+			if ch.Chain == "" {
+				ch.Chain = msg.Chain
+			}
+			if ch.BlockHeight == 0 {
+				ch.BlockHeight = msg.BlockHeight
+			}
 			ch.Index = msg.Index
 		}
 	}
@@ -326,13 +356,35 @@ func (a *Aggregator) GetGroupChannelList(groupId string) ([]*GroupChannel, error
 		channels = append(channels, ch)
 	}
 	sort.SliceStable(channels, func(i, j int) bool {
-		return channels[i].ChannelNewestTimestamp > channels[j].ChannelNewestTimestamp
+		return channelSortTimestamp(channels[i]) > channelSortTimestamp(channels[j])
 	})
 	return channels, nil
 }
 
 func (a *Aggregator) GetGroupMetaIdJoinList(groupId, metaId string) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{}, nil
+	items, err := a.collectGroupMetaIdJoinItems(groupId, metaId)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]interface{}{
+			"joinPinId":      item.JoinPinId,
+			"joinType":       item.JoinType,
+			"joinTimestamp":  item.JoinTimestamp,
+			"groupState":     item.GroupState,
+			"address":        item.Address,
+			"referrer":       item.Referrer,
+			"k":              item.K,
+			"blockHeight":    item.BlockHeight,
+			"chain":          item.Chain,
+			"byGlobalMetaId": item.ByGlobalMetaId,
+			"byMetaId":       item.ByMetaId,
+			"byAddress":      item.ByAddress,
+		})
+	}
+	return result, nil
 }
 
 func (a *Aggregator) SearchGroupsAndUsers(query string, size int) ([]map[string]interface{}, error) {
@@ -396,12 +448,12 @@ func (a *Aggregator) GetUserLatestChatInfoList(metaId string) ([]*UserLatestChat
 		if len(parts) != 2 {
 			return nil
 		}
-		if parts[1] != metaId {
-			return nil
-		}
 
 		var m GroupMember
 		if e := json.Unmarshal(value, &m); e != nil {
+			return nil
+		}
+		if !groupMemberMatchesIdentity(metaId, &m) {
 			return nil
 		}
 		if m.IsRemoved {

@@ -23,6 +23,7 @@ type Server struct {
 	stopCh              chan struct{}
 	profileLookup       ProfileLookup
 	profileAssetBaseURL string
+	sendToUserHook      func(metaId string, msg *PushEnvelope)
 
 	snapshotProviderMu sync.RWMutex
 	snapshotProvider   presence.SnapshotProvider
@@ -269,6 +270,9 @@ func notifyEventTargetIds(evt *aggregator.NotifyEvent) []string {
 
 // SendToUser sends a push envelope to all connections of a given metaid.
 func (s *Server) SendToUser(metaId string, msg *PushEnvelope) {
+	if s.sendToUserHook != nil {
+		s.sendToUserHook(metaId, msg)
+	}
 	// We need to access the internal connection manager to find sockets.
 	// Since we don't expose the manager's internal state, we iterate through
 	// all sockets on the default namespace and check their handshake query.

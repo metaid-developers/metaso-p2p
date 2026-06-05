@@ -211,6 +211,38 @@ func TestNotifyEventTargetIdsFallbackWithoutTargetIds(t *testing.T) {
 	}
 }
 
+func TestRouteNotifyEventGroupChatFansOutTargetIds(t *testing.T) {
+	srv, _ := newTestRouter(t)
+	defer srv.Shutdown()
+
+	var got []string
+	srv.sendToUserHook = func(metaId string, msg *PushEnvelope) {
+		got = append(got, metaId)
+		if msg.M != "WS_SERVER_NOTIFY_GROUP_CHAT" {
+			t.Fatalf("message type = %q, want WS_SERVER_NOTIFY_GROUP_CHAT", msg.M)
+		}
+		if msg.C != 0 {
+			t.Fatalf("message code = %d, want 0", msg.C)
+		}
+		payload, ok := msg.D.(map[string]string)
+		if !ok || payload["pinId"] != "pin-1" {
+			t.Fatalf("payload = %#v, want pinId pin-1", msg.D)
+		}
+	}
+
+	srv.routeNotifyEvent(&aggregator.NotifyEvent{
+		Type:      "WS_SERVER_NOTIFY_GROUP_CHAT",
+		GroupId:   "group-1",
+		TargetIds: []string{"member_local", "member_global", "addr_member"},
+		Payload:   map[string]string{"pinId": "pin-1"},
+	})
+
+	want := []string{"member_local", "member_global", "addr_member"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("routeNotifyEvent sent to %#v, want %#v", got, want)
+	}
+}
+
 // TestOnlineStats verifies the presence stats endpoint returns the correct format.
 func TestOnlineStats(t *testing.T) {
 	srv, router := newTestRouter(t)

@@ -33,6 +33,10 @@ func (a *Aggregator) dispatchPin(pin *aggregator.PinInscription) (*aggregator.No
 	case strings.HasSuffix(pathLower, "simplegroupcreate"):
 		return a.handleGroupCreate(pin)
 
+	// Group channel create/update
+	case strings.HasSuffix(pathLower, "simplegroupchannel"):
+		return a.handleGroupChannel(pin)
+
 	// Group admin/role changes
 	case strings.HasSuffix(pathLower, "simplegroupadmin"):
 		return a.handleGroupAdmin(pin)
@@ -65,14 +69,24 @@ type SimpleCommunity struct {
 }
 
 type SimpleGroupCreate struct {
-	GroupId     string `json:"groupId"`
-	GroupName   string `json:"groupName"`
-	GroupIcon   string `json:"groupIcon"`
-	GroupNote   string `json:"groupNote"`
-	GroupType   string `json:"groupType"`
-	Status      string `json:"status"`
-	JoinType    string `json:"joinType"`
-	CommunityId string `json:"communityId"`
+	GroupId     string      `json:"groupId"`
+	GroupName   string      `json:"groupName"`
+	GroupIcon   string      `json:"groupIcon"`
+	GroupNote   string      `json:"groupNote"`
+	GroupType   string      `json:"groupType"`
+	Status      string      `json:"status"`
+	JoinType    interface{} `json:"joinType"`
+	Type        interface{} `json:"type"`
+	CommunityId string      `json:"communityId"`
+}
+
+type SimpleGroupChannel struct {
+	GroupId     string      `json:"groupId"`
+	ChannelId   string      `json:"channelId"`
+	ChannelName string      `json:"channelName"`
+	ChannelIcon string      `json:"channelIcon"`
+	ChannelNote string      `json:"channelNote"`
+	ChannelType interface{} `json:"channelType"`
 }
 
 type SimpleGroupAdmin struct {
@@ -99,6 +113,7 @@ type SimpleGroupJoin struct {
 	GroupId  string      `json:"groupId"`
 	Referrer string      `json:"referrer"`
 	State    interface{} `json:"state"` // 1 = join, -1 = leave
+	K        string      `json:"k"`
 }
 
 // Pin handler functions.
@@ -162,7 +177,7 @@ func (a *Aggregator) handleGroupCreate(pin *aggregator.PinInscription) (*aggrega
 		CreatorMetaId: metaId,
 		MemberCount:   1,
 		CommunityId:   sgc.CommunityId,
-		JoinType:      sgc.JoinType,
+		JoinType:      firstProtocolString(sgc.JoinType, sgc.Type),
 		CreatedAt:     pin.Timestamp,
 		Chain:         pin.ChainName,
 		BlockHeight:   pin.GenesisHeight,
@@ -198,7 +213,73 @@ func (a *Aggregator) handleGroupCreate(pin *aggregator.PinInscription) (*aggrega
 		return nil, err
 	}
 
+	if err := a.SaveGroupMetaIdJoinItem(groupId, &GroupMetaIdJoinItem{
+		JoinPinId:      pin.Id,
+		JoinType:       "create",
+		JoinTimestamp:  pin.Timestamp,
+		GroupState:     1,
+		Address:        pin.CreateAddress,
+		BlockHeight:    pin.GenesisHeight,
+		Chain:          pin.ChainName,
+		ByGlobalMetaId: pin.GlobalMetaId,
+		ByMetaId:       metaId,
+		ByAddress:      pin.CreateAddress,
+	}); err != nil {
+		return nil, err
+	}
+
 	log.Printf("[groupchat] group created: %s", groupId)
+	return nil, nil
+}
+
+func (a *Aggregator) handleGroupChannel(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	var sgc SimpleGroupChannel
+	if err := json.Unmarshal(pin.ContentBody, &sgc); err != nil {
+		log.Printf("[groupchat] failed to parse simplegroupchannel: %v", err)
+		return nil, nil
+	}
+
+	groupId := sgc.GroupId
+	if groupId == "" {
+		return nil, nil
+	}
+
+	channelId := sgc.ChannelId
+	if channelId == "" {
+		channelId = pin.Id
+	}
+
+	metaId := pin.CreateMetaId
+	if metaId == "" {
+		metaId = pin.MetaId
+	}
+
+	channel := &GroupChannel{
+		ChannelId:              channelId,
+		GroupId:                groupId,
+		TxId:                   extractTxId(pin.Id),
+		PinId:                  pin.Id,
+		ChannelName:            sgc.ChannelName,
+		ChannelIcon:            sgc.ChannelIcon,
+		ChannelNote:            sgc.ChannelNote,
+		ChannelType:            protocolInt64Value(sgc.ChannelType, 0),
+		CreateUserMetaId:       metaId,
+		CreateUserGlobalMetaId: pin.GlobalMetaId,
+		CreateUserAddress:      pin.CreateAddress,
+		Timestamp:              pin.Timestamp,
+		Chain:                  pin.ChainName,
+		BlockHeight:            pin.GenesisHeight,
+		Index:                  -1,
+	}
+	if channel.ChannelName == "" {
+		channel.ChannelName = channelId
+	}
+
+	if err := a.SaveGroupChannel(channel); err != nil {
+		return nil, err
+	}
+
+	log.Printf("[groupchat] group channel saved: channelId=%s groupId=%s", channelId, groupId)
 	return nil, nil
 }
 
@@ -416,6 +497,29 @@ func (a *Aggregator) handleGroupJoin(pin *aggregator.PinInscription) (*aggregato
 	joinState := float64(1)
 	if state, ok := sgj.State.(float64); ok {
 		joinState = state
+	}
+
+	groupState := int64(1)
+	joinType := "join"
+	if joinState != 1 {
+		groupState = -1
+		joinType = "leave"
+	}
+	if err := a.SaveGroupMetaIdJoinItem(groupId, &GroupMetaIdJoinItem{
+		JoinPinId:      pin.Id,
+		JoinType:       joinType,
+		JoinTimestamp:  pin.Timestamp,
+		GroupState:     groupState,
+		Address:        pin.CreateAddress,
+		Referrer:       sgj.Referrer,
+		K:              sgj.K,
+		BlockHeight:    pin.GenesisHeight,
+		Chain:          pin.ChainName,
+		ByGlobalMetaId: pin.GlobalMetaId,
+		ByMetaId:       metaId,
+		ByAddress:      pin.CreateAddress,
+	}); err != nil {
+		return nil, err
 	}
 
 	if joinState == 1 {
