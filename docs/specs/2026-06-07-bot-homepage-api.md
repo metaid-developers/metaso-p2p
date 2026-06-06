@@ -24,6 +24,8 @@ Business errors:
 | `40400` | bot homepage not found |
 | `50000` | aggregation unavailable |
 
+Business errors use the same JSON envelope with HTTP 200. Clients should inspect `code` rather than treating HTTP 200 as application success.
+
 `/api/info/*` keeps its meta-file-system-compatible `code=1` success convention. This endpoint uses native metaso-p2p `code=0`.
 
 ## Query
@@ -43,6 +45,7 @@ Business errors:
 
 Required top-level fields:
 
+- `schemaVersion`
 - `resolvedAt`
 - `globalMetaId`
 - `canonical`

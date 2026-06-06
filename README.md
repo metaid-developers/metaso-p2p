@@ -10,10 +10,11 @@ Chain RPC + ZMQ  →  Indexer Engine  →  Aggregator Registry
                                          ├── GroupChat Aggregator    (HTTP + push)
                                          ├── PrivateChat Aggregator  (HTTP + push)
                                          ├── Notify Aggregator       (HTTP)
-                                         └── SkillService Aggregator (HTTP, Bot Hub)
-                                              │
+                                         ├── SkillService Aggregator (HTTP, Bot Hub)
+                                         └── BotHomepage Aggregator  (HTTP, OAC Bot Browser)
+
                                          Socket.IO Server  →  idchat clients
-                                         HTTP / JSON       →  IDBots Bot Hub
+                                         HTTP / JSON       →  IDBots Bot Hub + OAC Bot Browser
 ```
 
 - **Chain adapters** (`internal/chain/`) — RPC + parsing for BTC, MVC, DOGE, OPCAT
@@ -78,7 +79,7 @@ Key sections:
 See [`docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`](docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md) for the full v1 contract.
 
 ### Bot Homepage
-- `GET /api/bot-homepage/globalmetaid/:globalMetaId` - render-ready Bot homepage aggregation for OAC Bot Browser
+- `GET /api/bot-homepage/globalmetaid/:globalMetaId` — render-ready Bot homepage aggregation for OAC Bot Browser
 
 See [`docs/specs/2026-06-07-bot-homepage-api.md`](docs/specs/2026-06-07-bot-homepage-api.md) for the full v1 contract.
 
