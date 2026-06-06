@@ -76,6 +76,9 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		}
 		out.Services = services
 		out.Proofs.Services = serviceProofs
+		if len(serviceProofs) > 0 && out.Proofs.VerificationState != "partial" {
+			out.Proofs.VerificationState = "partial"
+		}
 		out.Warnings = warnings
 	}
 	out.Actions = buildActions(out.Profile.ChatPubkey, len(out.Services), canonical.GlobalMetaId)

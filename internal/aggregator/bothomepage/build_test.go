@@ -288,6 +288,12 @@ func TestBuildHomepageIncludesProviderServices(t *testing.T) {
 	if lister.gotParams.ChainName != "mvc" {
 		t.Fatalf("ChainName = %q, want mvc", lister.gotParams.ChainName)
 	}
+	if lister.gotParams.SortBy != "updated" {
+		t.Fatalf("SortBy = %q, want updated", lister.gotParams.SortBy)
+	}
+	if lister.gotParams.Order != "desc" {
+		t.Fatalf("Order = %q, want desc", lister.gotParams.Order)
+	}
 
 	if len(got.Services) != 1 {
 		t.Fatalf("Services length = %d, want 1", len(got.Services))
@@ -307,6 +313,57 @@ func TestBuildHomepageIncludesProviderServices(t *testing.T) {
 	}
 	if len(got.Proofs.Services) != 1 {
 		t.Fatalf("Proofs.Services length = %d, want 1", len(got.Proofs.Services))
+	}
+}
+
+func TestBuildHomepageServiceProofsMarkVerificationPartial(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:  "idqBot",
+		Name:          "IDQ Bot",
+		ChatPublicKey: "02chatpubkey",
+	}})
+	agg.SetServiceLister(&recordingServiceLister{result: &skillservice.ListResult{List: []skillservice.ServiceListItem{{
+		Id:                 "svc-1",
+		CurrentPinId:       "svc-pin:i0",
+		SourceServicePinId: "source-svc-pin:i0",
+		DisplayName:        "Question Answering",
+		ServiceName:        "qa",
+	}}}})
+
+	got, err := agg.Build("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Proofs.VerificationState != "partial" {
+		t.Fatalf("Proofs.VerificationState = %q, want partial", got.Proofs.VerificationState)
+	}
+	if len(got.Proofs.Services) != 1 {
+		t.Fatalf("Proofs.Services length = %d, want 1", len(got.Proofs.Services))
+	}
+	if !containsWarning(got.Warnings, "txid/contentHash") {
+		t.Fatalf("Warnings = %v, want missing txid/contentHash warning", got.Warnings)
+	}
+}
+
+func TestBuildHomepageServiceListerErrorReturnsAggregationUnavailable(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "IDQ Bot",
+	}})
+	agg.SetServiceLister(&recordingServiceLister{err: errors.New("list unavailable")})
+
+	_, err := agg.Build("idqBot", DefaultOptions())
+	if !errors.Is(err, ErrAggregationUnavailable) {
+		t.Fatalf("Build error = %v, want ErrAggregationUnavailable", err)
 	}
 }
 
