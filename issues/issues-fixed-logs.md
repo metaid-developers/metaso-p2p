@@ -4,13 +4,13 @@ This file records how downstream-reported issues under `issues/` were handled
 in this repository. Keep the original issue files unchanged as the reporter's
 evidence, and add maintainer-side resolution notes here.
 
-## 2026-06-01 - Bothub production meta-socket endpoint gap
+## 2026-06-01 - Bothub production metaso-p2p endpoint gap
 
-- Issue: `2026-06-01-bothub-production-meta-socket-endpoint-gap.md`
+- Issue: `2026-06-01-bothub-production-metaso-p2p-endpoint-gap.md`
 - Status: Code/API fixed; deployment host assignment remains an ops/runtime
   action.
 - Maintainer check:
-  - The request is reasonable. Bothub should use a meta-socket root base URL
+  - The request is reasonable. Bothub should use a metaso-p2p root base URL
     and should not depend on `https://api.idchat.io/chat-api`.
   - Existing code already exposed CORS globally, `/healthz`, BotHub
     skill-service routes, and Socket.IO at `/socket/socket.io`.
@@ -32,7 +32,7 @@ evidence, and add maintainer-side resolution notes here.
   - Kept old `/api/group-chat/...` and `/chat-api/group-chat/...` routes
     working.
   - Documented Bothub's endpoint contract in
-    `docs/BOTHUB_META_SOCKET_ENDPOINT.md`.
+    `docs/BOTHUB_METASO_P2P_ENDPOINT.md`.
   - Updated `docs/DEPLOY.md` and `docs/IDCHAT_API_CONTRACT.md` with the root
     base URL rule, canonical private-chat routes, reverse-proxy shape, and
     acceptance commands.
@@ -42,9 +42,9 @@ evidence, and add maintainer-side resolution notes here.
     `internal/api`.
   - `CGO_ENABLED=0 go test ./internal/aggregator/privatechat ./internal/api ./internal/aggregator/skillservice -count=1`
   - `git diff --check`
-  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/meta-socket ./cmd/meta-socket`
+  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/metaso-p2p ./cmd/metaso-p2p`
   - Restarted local launch agent
-    `com.metaid.meta-socket.mvc30d.18091`.
+    `com.metaid.metaso-p2p.mvc30d.18091`.
   - Local canonical private-chat checks on `127.0.0.1:18091`:
     - `/api/private-chat/messages?...` returned `code=0`, `total=57`.
     - `/api/private-chat/messages/by-index?...` returned `code=0`,
@@ -55,7 +55,7 @@ evidence, and add maintainer-side resolution notes here.
   - Canonical route CORS preflight returned HTTP `204` with
     `Access-Control-Allow-Origin: *`.
   - Bothub smoke passed:
-    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`.
+    `METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p`.
 
 ## 2026-06-01 - Bothub AI_Sunny provider chat identity gap
 
@@ -91,9 +91,9 @@ evidence, and add maintainer-side resolution notes here.
 - Verification:
   - `CGO_ENABLED=0 go test ./internal/aggregator/skillservice ./internal/aggregator/privatechat ./internal/aggregator/userinfo ./internal/api -count=1`
   - `git diff --check`
-  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/meta-socket ./cmd/meta-socket`
+  - `CGO_ENABLED=0 go build -o /Users/tusm/.local/bin/metaso-p2p ./cmd/metaso-p2p`
   - Restarted local launch agent
-    `com.metaid.meta-socket.mvc30d.18091`.
+    `com.metaid.metaso-p2p.mvc30d.18091`.
   - Local detail now returns `provider.globalMetaId` as
     `idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz` and `provider.address` as
     `1GrqX7K9jdnUor8hAoAfDx99uFH2tT75Za`.
@@ -108,7 +108,7 @@ evidence, and add maintainer-side resolution notes here.
   - Local indexer was caught up: local height `175640`, remote height
     `175640`, lag `0`.
   - Bothub smoke passed:
-    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`.
+    `METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p`.
 
 ## 2026-06-01 - Bothub paid service payment metadata gap
 
@@ -146,7 +146,7 @@ evidence, and add maintainer-side resolution notes here.
   - Added red/green regression coverage for restoring indexer height after
     reopening the Pebble store.
   - `CGO_ENABLED=0 go test ./internal/aggregator/skillservice ./internal/aggregator/userinfo ./internal/indexer ./internal/storage -count=1`
-  - Rebuilt and restarted the local `com.metaid.meta-socket.mvc30d.18091`
+  - Rebuilt and restarted the local `com.metaid.metaso-p2p.mvc30d.18091`
     service.
   - The tested service detail now returns `settlementKind="native"`,
     `paymentChain="mvc"`, and
@@ -160,21 +160,21 @@ evidence, and add maintainer-side resolution notes here.
 - Maintainer check:
   - Current repo state was clean on `main`, with this issue file already present
     in the latest docs commit.
-  - Local launchd meta-socket was running on `127.0.0.1:18091`, and `/healthz`
+  - Local launchd metaso-p2p was running on `127.0.0.1:18091`, and `/healthz`
     returned `code=0`.
   - The same local service returned `code=0` and
     `schemaVersion=botHubSkillService.v1` for
     `/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc&includeInactive=true`,
     but `data.list` was empty.
   - The local service was launched with
-    `META_SOCKET_BLOCK_INDEX_ENABLED=false` and a temporary empty Pebble data
+    `METASO_P2P_BLOCK_INDEX_ENABLED=false` and a temporary empty Pebble data
     dir, so it cannot discover real `/protocols/skill-service` pins.
-  - `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket` in
+  - `METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p` in
     Bothub reproduced the downstream blocker: `skill-service list returned an
     empty list`.
   - The previously verified 30-day MVC real-data instance used
-    `/tmp/meta-socket-mvc-30d-pebble` and
-    `com.codex.meta-socket.mvc30d.18091`; that temporary data dir and old
+    `/tmp/metaso-p2p-mvc-30d-pebble` and
+    `com.codex.metaso-p2p.mvc30d.18091`; that temporary data dir and old
     launchd job were no longer present on this Mac.
   - `https://api.idchat.io/api/bot-hub/skill-service/list?...` still returned
     nginx `502 Bad Gateway`.
@@ -188,22 +188,22 @@ evidence, and add maintainer-side resolution notes here.
   - No code change is recommended for this repo solely to satisfy the current
     empty-list symptom. Returning fake or seeded services from the production
     aggregator would hide the real readiness gap.
-  - Keep Bothub pointed at native meta-socket shape:
+  - Keep Bothub pointed at native metaso-p2p shape:
     `<base>/api/bot-hub/skill-service/*`. The `/chat-api` compatibility prefix
     remains the idchat group/private chat surface; using it as
-    `META_SOCKET_BASE_URL` for Bothub builds `/chat-api/api/bot-hub/*`, which is
+    `METASO_P2P_BASE_URL` for Bothub builds `/chat-api/api/bot-hub/*`, which is
     not a mounted BotHub route.
   - Remaining action is runtime/deployment readiness: run an acceptance or
-    production meta-socket instance with MVC block indexing enabled and real RPC
+    production metaso-p2p instance with MVC block indexing enabled and real RPC
     credentials, or publish a documented staging/production base URL where
     native `/api/bot-hub/*` routes are healthy and backed by indexed
     `/protocols/skill-service` data.
 - Runtime follow-up:
   - Replaced the empty local launchd job with
-    `com.metaid.meta-socket.mvc30d.18091` on `127.0.0.1:18091`.
-  - Built the current binary to `/Users/tusm/.local/bin/meta-socket`.
+    `com.metaid.metaso-p2p.mvc30d.18091` on `127.0.0.1:18091`.
+  - Built the current binary to `/Users/tusm/.local/bin/metaso-p2p`.
   - Moved the MVC Pebble data dir out of `/tmp` to
-    `/Users/tusm/.local/var/meta-socket/mvc-30d-pebble`.
+    `/Users/tusm/.local/var/metaso-p2p/mvc-30d-pebble`.
   - Enabled MVC block indexing from height `170725`; logs show real pins being
     parsed and `groupchat`, `privatechat`, `userinfo`, and `skillservice`
     Pebble stores populated.
@@ -212,14 +212,14 @@ evidence, and add maintainer-side resolution notes here.
   - Public curl for `https://api.idchat.io/api/bot-hub/skill-service/list?...`,
     `https://api.idchat.io/chat-api/`, and
     `https://api.idchat.io/chat-api/bot-hub/skill-service/list?...`.
-  - `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`
+  - `METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p`
     reproduced the empty-list failure in Bothub.
   - After runtime restoration, local BotHub list returned a real
     `botHubSkillService.v1` item (`seedance-service`), detail returned
     `botHubSkillServiceDetail.v1` with provider data, and the documented group
     chat sample returned real chain rows.
   - After runtime restoration,
-    `META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket`
+    `METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p`
     passed in Bothub.
 
 ## 2026-05-31 - Bothub aggregator readiness
@@ -236,7 +236,7 @@ evidence, and add maintainer-side resolution notes here.
   - `https://api.idchat.io/api/bot-hub/skill-service/list?...` still returned
     nginx `502 Bad Gateway`.
   - Starting the current local binary with
-    `META_SOCKET_HTTP_ADDR=127.0.0.1:18091` and a temporary Pebble data dir made
+    `METASO_P2P_HTTP_ADDR=127.0.0.1:18091` and a temporary Pebble data dir made
     `/healthz` return JSON `code=0`.
   - The same local run made
     `/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc&includeInactive=true`
@@ -250,11 +250,11 @@ evidence, and add maintainer-side resolution notes here.
     public endpoint returns 502.
   - No additional code change is needed for health/list/detail JSON availability
     in this checkout.
-  - Remaining action is deployment/runtime: run a current meta-socket instance
+  - Remaining action is deployment/runtime: run a current metaso-p2p instance
     for Bothub acceptance, or publish a replacement base URL. The repo default
     port remains `:8080`; Bothub's `127.0.0.1:18091` expectation is an
     environment-specific acceptance port and must be set via
-    `META_SOCKET_HTTP_ADDR=127.0.0.1:18091`.
+    `METASO_P2P_HTTP_ADDR=127.0.0.1:18091`.
 - Verification:
   - `CGO_ENABLED=0 go test ./internal/aggregator/skillservice ./internal/aggregator/userinfo`
   - Local temporary `127.0.0.1:18091` health/list/detail curl checks.

@@ -11,7 +11,7 @@ import (
 	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/btcsuite/btcd/wire"
 
-	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
 )
 
 // Chain implements chain.Chain for Bitcoin (BTC).

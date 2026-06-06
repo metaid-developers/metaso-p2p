@@ -3,7 +3,7 @@ package groupchat
 import (
 	"log"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // sendNotifyEvent sends a notify event on the aggregator's channel if the channel is not full.

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Bothub Task 4 release-hardening checks could not verify real meta-socket service readiness on 2026-05-31. The local meta-socket HTTP service was not listening on `127.0.0.1:18091`, and the public `api.idchat.io` Bot Hub service list endpoint returned `502 Bad Gateway`.
+Bothub Task 4 release-hardening checks could not verify real metaso-p2p service readiness on 2026-05-31. The local metaso-p2p HTTP service was not listening on `127.0.0.1:18091`, and the public `api.idchat.io` Bot Hub service list endpoint returned `502 Bad Gateway`.
 
 This blocks Bothub from proving that mock-disabled service list, service detail, provider orderability, and provider chat-key hydration work against current live data.
 
@@ -10,7 +10,7 @@ This blocks Bothub from proving that mock-disabled service list, service detail,
 
 - Date checked: 2026-05-31 22:11 CST / 2026-05-31 14:11 UTC
 - Bothub revision: `ac5a113`
-- meta-socket revision: `dfe28c4`
+- metaso-p2p revision: `dfe28c4`
 - Local expected base URL: `http://127.0.0.1:18091`
 - Public base URL checked: `https://api.idchat.io`
 
@@ -19,7 +19,7 @@ This blocks Bothub from proving that mock-disabled service list, service detail,
 Listener scan from the Bothub release-hardening worktree:
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | rg "(18091|5176|vite|meta-socket)" || true
+lsof -nP -iTCP -sTCP:LISTEN | rg "(18091|5176|vite|metaso-p2p)" || true
 ```
 
 Result:
@@ -68,14 +68,14 @@ Connection: keep-alive
 Local smoke check:
 
 ```bash
-META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket
+METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p
 ```
 
 Result:
 
 ```text
-$ node scripts/smoke-meta-socket.mjs
-[smoke:meta-socket] smoke failed: healthz request failed (http://127.0.0.1:18091/healthz): fetch failed
+$ node scripts/smoke-metaso-p2p.mjs
+[smoke:metaso-p2p] smoke failed: healthz request failed (http://127.0.0.1:18091/healthz): fetch failed
 [ELIFECYCLE] Command failed with exit code 1.
 ```
 
@@ -91,7 +91,7 @@ LIST {"ok":true,"status":502,"text":"<html>\r\n<head><title>502 Bad Gateway</tit
 Mock-disabled Bothub browser check:
 
 ```bash
-VITE_META_SOCKET_BASE_URL=/meta-socket VITE_USE_AGGREGATOR_MOCK=false VITE_USE_WS_MOCK=false pnpm dev -- --host 127.0.0.1
+VITE_METASO_P2P_BASE_URL=/metaso-p2p VITE_USE_AGGREGATOR_MOCK=false VITE_USE_WS_MOCK=false pnpm dev -- --host 127.0.0.1
 ```
 
 Vite selected `http://localhost:5177/` because `5176` was already in use. The page showed `Could not load services` with detail `Failed to execute 'json' on 'Response': Unexpected end of JSON input`.
@@ -145,11 +145,11 @@ data.provider = {
 From the Bothub repo:
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | rg "(18091|5176|vite|meta-socket)" || true
+lsof -nP -iTCP -sTCP:LISTEN | rg "(18091|5176|vite|metaso-p2p)" || true
 curl -sS -i http://127.0.0.1:18091/healthz || true
 curl -sS -i 'https://api.idchat.io/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc&includeInactive=true' || true
-META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm smoke:meta-socket
-VITE_META_SOCKET_BASE_URL=/meta-socket VITE_USE_AGGREGATOR_MOCK=false VITE_USE_WS_MOCK=false pnpm dev -- --host 127.0.0.1
+METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm smoke:metaso-p2p
+VITE_METASO_P2P_BASE_URL=/metaso-p2p VITE_USE_AGGREGATOR_MOCK=false VITE_USE_WS_MOCK=false pnpm dev -- --host 127.0.0.1
 ```
 
 Then open the served Bothub URL and confirm whether real services load. In this run, the app showed an honest service-loading error and Vite logged `ECONNREFUSED 127.0.0.1:18091`.

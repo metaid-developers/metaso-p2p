@@ -7,12 +7,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
 )
 
 // registerRoutes mounts the Bot Hub skill-service endpoints.
 //
-// Response envelope follows meta-socket native conventions: code=0 on
+// Response envelope follows metaso-p2p native conventions: code=0 on
 // success, code in {40000, 40400, 50000} on failure, HTTP 200 in all
 // cases except true infrastructure failures. The /api/bot-hub/skill-
 // service/* family does NOT inherit the code=1 success convention used

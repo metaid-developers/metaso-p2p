@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make meta-socket's idchat compatibility surface close the P0 gaps from `docs/IDCHAT_BACKEND_HARDENING_PLAN.md` so idchat can be pointed at `socket.metaid.io` without frontend code changes.
+**Goal:** Make metaso-p2p's idchat compatibility surface close the P0 gaps from `docs/IDCHAT_BACKEND_HARDENING_PLAN.md` so idchat can be pointed at `socket.metaid.io` without frontend code changes.
 
-**Architecture:** Keep native meta-socket routes intact and harden only the compatibility layer exposed under `/chat-api/group-chat/*`, `/push-base/*`, and Socket.IO. Reuse existing groupchat, privatechat, and socket stores instead of adding a parallel compatibility database. Add contract tests around idchat-visible response envelopes before changing production handlers.
+**Architecture:** Keep native metaso-p2p routes intact and harden only the compatibility layer exposed under `/chat-api/group-chat/*`, `/push-base/*`, and Socket.IO. Reuse existing groupchat, privatechat, and socket stores instead of adding a parallel compatibility database. Add contract tests around idchat-visible response envelopes before changing production handlers.
 
 **Tech Stack:** Go, Gin, Pebble-backed aggregators, Socket.IO server, existing `CGO_ENABLED=0 go test ./...` verification.
 

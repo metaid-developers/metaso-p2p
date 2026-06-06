@@ -3,7 +3,7 @@
 ## Purpose and Scope
 
 This runbook verifies the local federated presence path without publishing real
-registry pins on chain. It starts two local `meta-socket` nodes with different
+registry pins on chain. It starts two local `metaso-p2p` nodes with different
 HTTP ports and different deterministic test private keys, points discovery at a
 local mock MANAPI response, connects one Socket.IO client to each node, then
 checks local and global presence views.
@@ -12,7 +12,7 @@ The smoke covers:
 
 - Local Socket.IO presence on each node.
 - MANAPI discovery of the other local node.
-- Remote presence snapshot pull from `/.well-known/metasocket/presence`.
+- Remote presence snapshot pull from `/.well-known/metaso-p2p/presence`.
 - Global online list and stats aggregation.
 
 It does not prove real MVC registry publishing. The local mock Metalet endpoint
@@ -37,7 +37,7 @@ Use six terminals from the repository root:
 
 Prerequisites:
 
-- Go toolchain for `go run ./cmd/meta-socket`. The node commands below set
+- Go toolchain for `go run ./cmd/metaso-p2p`. The node commands below set
   `CGO_ENABLED=0` so this smoke still runs on macOS environments with a broken
   cgo SDK setup.
 - Python 3 for the local mock server. On macOS, use `/usr/bin/python3` if PATH
@@ -106,25 +106,25 @@ import json
 import time
 
 NODE_A = {
-    "protocol": "metasocket-node",
+    "protocol": "metaso-p2p-node",
     "version": "1.0.0",
     "nodeId": "mvc:1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH",
     "network": "mvc-mainnet",
     "publicBaseUrl": "http://127.0.0.1:18091",
     "socketUrl": "http://127.0.0.1:18091/socket/socket.io",
-    "presenceUrl": "http://127.0.0.1:18091/.well-known/metasocket/presence",
+    "presenceUrl": "http://127.0.0.1:18091/.well-known/metaso-p2p/presence",
     "publicKey": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     "capabilities": ["presence-v1"],
 }
 
 NODE_B = {
-    "protocol": "metasocket-node",
+    "protocol": "metaso-p2p-node",
     "version": "1.0.0",
     "nodeId": "mvc:1cMh228HTCiwS8ZsaakH8A8wze1JR5ZsP",
     "network": "mvc-mainnet",
     "publicBaseUrl": "http://127.0.0.1:18092",
     "socketUrl": "http://127.0.0.1:18092/socket/socket.io",
-    "presenceUrl": "http://127.0.0.1:18092/.well-known/metasocket/presence",
+    "presenceUrl": "http://127.0.0.1:18092/.well-known/metaso-p2p/presence",
     "publicKey": "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
     "capabilities": ["presence-v1"],
 }
@@ -146,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/pin/path/list":
             query = parse_qs(parsed.query)
             requested_path = query.get("path", [""])[0]
-            if requested_path != "/protocols/metasocket-node":
+            if requested_path != "/protocols/metaso-p2p-node":
                 return self.send_json({"code": 1, "message": "ok", "data": {"list": None, "nextCursor": "", "total": 0}})
 
             now_ms = int(time.time() * 1000)
@@ -159,7 +159,7 @@ class Handler(BaseHTTPRequestHandler):
                 pins.append({
                     "id": "mock-node-%s-pin" % ("a" if idx == 0 else "b"),
                     "operation": "create",
-                    "path": "/protocols/metasocket-node",
+                    "path": "/protocols/metaso-p2p-node",
                     "contentType": "application/json",
                     "chainName": "mvc",
                     "timestamp": int(time.time()) + idx,
@@ -186,47 +186,47 @@ PY
 Check the mock response:
 
 ```bash
-curl -s 'http://127.0.0.1:18090/pin/path/list?path=/protocols/metasocket-node&size=5' | jq .
+curl -s 'http://127.0.0.1:18090/pin/path/list?path=/protocols/metaso-p2p-node&size=5' | jq .
 ```
 
 ## Terminal 2: Node A
 
 ```bash
 CGO_ENABLED=0 \
-META_SOCKET_HTTP_ADDR=127.0.0.1:18091 \
-META_SOCKET_PEBBLE_ENABLED=false \
-META_SOCKET_FEDERATION_ENABLED=true \
-META_SOCKET_FEDERATION_NETWORK=mvc-mainnet \
-META_SOCKET_FEDERATION_NODE_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001 \
-META_SOCKET_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18091 \
-META_SOCKET_FEDERATION_MANAPI_BASE_URL='http://127.0.0.1:18090/pin/path/list?path={protocol-path}&size={size}' \
-META_SOCKET_FEDERATION_METALET_BASE_URL=http://127.0.0.1:18090 \
-META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP=true \
-META_SOCKET_FEDERATION_DISCOVERY_INTERVAL=5s \
-META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL=5s \
-META_SOCKET_FEDERATION_PRESENCE_TTL=60s \
-META_SOCKET_FEDERATION_REQUEST_TIMEOUT=2s \
-go run ./cmd/meta-socket
+METASO_P2P_HTTP_ADDR=127.0.0.1:18091 \
+METASO_P2P_PEBBLE_ENABLED=false \
+METASO_P2P_FEDERATION_ENABLED=true \
+METASO_P2P_FEDERATION_NETWORK=mvc-mainnet \
+METASO_P2P_FEDERATION_NODE_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001 \
+METASO_P2P_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18091 \
+METASO_P2P_FEDERATION_MANAPI_BASE_URL='http://127.0.0.1:18090/pin/path/list?path={protocol-path}&size={size}' \
+METASO_P2P_FEDERATION_METALET_BASE_URL=http://127.0.0.1:18090 \
+METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP=true \
+METASO_P2P_FEDERATION_DISCOVERY_INTERVAL=5s \
+METASO_P2P_FEDERATION_PRESENCE_PULL_INTERVAL=5s \
+METASO_P2P_FEDERATION_PRESENCE_TTL=60s \
+METASO_P2P_FEDERATION_REQUEST_TIMEOUT=2s \
+go run ./cmd/metaso-p2p
 ```
 
 ## Terminal 3: Node B
 
 ```bash
 CGO_ENABLED=0 \
-META_SOCKET_HTTP_ADDR=127.0.0.1:18092 \
-META_SOCKET_PEBBLE_ENABLED=false \
-META_SOCKET_FEDERATION_ENABLED=true \
-META_SOCKET_FEDERATION_NETWORK=mvc-mainnet \
-META_SOCKET_FEDERATION_NODE_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000002 \
-META_SOCKET_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18092 \
-META_SOCKET_FEDERATION_MANAPI_BASE_URL='http://127.0.0.1:18090/pin/path/list?path={protocol-path}&size={size}' \
-META_SOCKET_FEDERATION_METALET_BASE_URL=http://127.0.0.1:18090 \
-META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP=true \
-META_SOCKET_FEDERATION_DISCOVERY_INTERVAL=5s \
-META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL=5s \
-META_SOCKET_FEDERATION_PRESENCE_TTL=60s \
-META_SOCKET_FEDERATION_REQUEST_TIMEOUT=2s \
-go run ./cmd/meta-socket
+METASO_P2P_HTTP_ADDR=127.0.0.1:18092 \
+METASO_P2P_PEBBLE_ENABLED=false \
+METASO_P2P_FEDERATION_ENABLED=true \
+METASO_P2P_FEDERATION_NETWORK=mvc-mainnet \
+METASO_P2P_FEDERATION_NODE_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000002 \
+METASO_P2P_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18092 \
+METASO_P2P_FEDERATION_MANAPI_BASE_URL='http://127.0.0.1:18090/pin/path/list?path={protocol-path}&size={size}' \
+METASO_P2P_FEDERATION_METALET_BASE_URL=http://127.0.0.1:18090 \
+METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP=true \
+METASO_P2P_FEDERATION_DISCOVERY_INTERVAL=5s \
+METASO_P2P_FEDERATION_PRESENCE_PULL_INTERVAL=5s \
+METASO_P2P_FEDERATION_PRESENCE_TTL=60s \
+METASO_P2P_FEDERATION_REQUEST_TIMEOUT=2s \
+go run ./cmd/metaso-p2p
 ```
 
 ## Terminals 4 and 5: Socket.IO Clients
@@ -342,19 +342,19 @@ curl -s 'http://127.0.0.1:18092/socket/online/stats?scope=global' | jq .
 Well-known presence snapshot on A:
 
 ```bash
-curl -s 'http://127.0.0.1:18091/.well-known/metasocket/presence' | jq .
+curl -s 'http://127.0.0.1:18091/.well-known/metaso-p2p/presence' | jq .
 ```
 
 Well-known presence snapshot on B:
 
 ```bash
-curl -s 'http://127.0.0.1:18092/.well-known/metasocket/presence' | jq .
+curl -s 'http://127.0.0.1:18092/.well-known/metaso-p2p/presence' | jq .
 ```
 
 Default live MANAPI empty-path check:
 
 ```bash
-curl -s 'https://manapi.metaid.io/pin/path/list?path=/protocols/metasocket-node&size=5' | jq .
+curl -s 'https://manapi.metaid.io/pin/path/list?path=/protocols/metaso-p2p-node&size=5' | jq .
 ```
 
 When no real node registry pins are published yet, the live MANAPI check may
@@ -394,10 +394,10 @@ An empty list is also acceptable:
 - Node A global stats includes `totalConnections`, `uniqueMetaIds`, and
   `nodes`. With one client per node, expect values equivalent to
   `totalConnections=2`, `uniqueMetaIds=2`, and `nodes=2`.
-- The presence snapshots expose `protocol=metasocket-presence`, each node's
+- The presence snapshots expose `protocol=metaso-p2p-presence`, each node's
   `nodeId`, a non-empty `signature`, and the node's local `items`.
 - The mock MANAPI entries are accepted because their registry payload has
-  `protocol=metasocket-node`, version `1.0.0`, matching `mvc-mainnet`,
+  `protocol=metaso-p2p-node`, version `1.0.0`, matching `mvc-mainnet`,
   parseable compressed public keys, `presence-v1`, and unexpired `validUntil`.
 - The live MANAPI check can remain empty until real registry pins are published.
 
@@ -407,10 +407,10 @@ An empty list is also acceptable:
   local online list, or the well-known presence snapshot. They only prevent real
   chain registry publish/renew.
 - Local HTTP `publicBaseUrl` and `presenceUrl` values require
-  `META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP=true`.
+  `METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP=true`.
 - Discovery and pull are interval-based. After starting clients, wait at least
-  one `META_SOCKET_FEDERATION_DISCOVERY_INTERVAL` plus one
-  `META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL`.
+  one `METASO_P2P_FEDERATION_DISCOVERY_INTERVAL` plus one
+  `METASO_P2P_FEDERATION_PRESENCE_PULL_INTERVAL`.
 - Use the Socket.IO path `/socket/socket.io`. If the client connects to the
   root path or `/socket.io`, the primary smoke path is not being exercised.
 - If global list shows only the local metaid, check the mock MANAPI response,

@@ -1,4 +1,4 @@
-module github.com/metaid-developers/meta-socket
+module github.com/metaid-developers/metaso-p2p
 
 go 1.26
 

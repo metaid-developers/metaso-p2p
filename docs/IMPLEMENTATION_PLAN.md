@@ -1,10 +1,10 @@
-# meta-socket Implementation Plan
+# metaso-p2p Implementation Plan
 
 Complements `docs/GOAL_DRIVEN.md` (authoritative on phases and acceptance criteria). This document provides module-level architecture specifications.
 
 ## 1. Context
 
-meta-socket is a **modular, PebbleDB-backed middleware** for the MetaID protocol, replacing show-now-tmp as the backend for idchat.
+metaso-p2p is a **modular, PebbleDB-backed middleware** for the MetaID protocol, replacing show-now-tmp as the backend for idchat.
 
 ## 2. Architecture Principles
 
@@ -77,7 +77,7 @@ Chain RPC + ZMQ → Indexer Engine → Aggregator Registry
 
 ### 4.9 Config (`internal/config/config.go`)
 
-✅ Done. Env-based (`META_SOCKET_*`).
+✅ Done. Env-based (`METASO_P2P_*`).
 
 ## 5. Implementation Phases
 

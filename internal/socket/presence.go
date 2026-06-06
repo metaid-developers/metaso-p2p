@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const defaultPresenceSnapshotPath = "/.well-known/metasocket/presence"
+const defaultPresenceSnapshotPath = "/.well-known/metaso-p2p/presence"
 
 // HandleOnlineStats returns the total number of active connections.
 func (s *Server) HandleOnlineStats(c *gin.Context) {

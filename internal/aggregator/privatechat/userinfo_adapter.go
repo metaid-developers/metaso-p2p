@@ -1,6 +1,6 @@
 package privatechat
 
-import "github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
+import "github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 
 type userInfoLookupAdapter struct {
 	ui *userinfo.Aggregator

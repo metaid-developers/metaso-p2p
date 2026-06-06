@@ -1,7 +1,7 @@
 package skillservice
 
 import (
-	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 )
 
 // userInfoLookupAdapter is the thin bridge between the userinfo aggregator

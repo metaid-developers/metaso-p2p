@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // TestUserInfoLookupAdapter_EndToEnd exercises the real userinfo
@@ -137,9 +137,9 @@ func TestUserInfoLookupAdapter_RemoteFallbackSuppliesDetailChatKey(t *testing.T)
 	}))
 	defer remote.Close()
 
-	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
-	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
-	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+	t.Setenv("METASO_P2P_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("METASO_P2P_PROFILE_MODE", "local-first")
+	t.Setenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
 
 	store := storage.NewPebbleStore(t.TempDir())
 	defer store.Close()

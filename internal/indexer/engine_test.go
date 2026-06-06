@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // mockChain is a minimal chain.Chain for engine tests.

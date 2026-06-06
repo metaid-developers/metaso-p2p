@@ -9,9 +9,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // setupTestAggregator creates a test-ready userinfo aggregator with a real Pebble store and cache.
@@ -462,9 +462,9 @@ func TestUserProfile_JSONFieldNames(t *testing.T) {
 }
 
 // TestHandleMetaIdInfo_MetafileIndexerPrefix verifies the userinfo handlers
-// respond on both `/api/info/...` (native meta-socket prefix) and
+// respond on both `/api/info/...` (native metaso-p2p prefix) and
 // `/metafile-indexer/api/info/...` (meta-file-system drop-in prefix) so idchat
-// can flip `metafileIndexerApi` to meta-socket with zero TypeScript changes.
+// can flip `metafileIndexerApi` to metaso-p2p with zero TypeScript changes.
 func TestHandleMetaIdInfo_MetafileIndexerPrefix(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
@@ -523,9 +523,9 @@ func TestHandleMetaIdInfo_RemoteFallbackFillsMissingChatKey(t *testing.T) {
 	}))
 	defer remote.Close()
 
-	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
-	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
-	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+	t.Setenv("METASO_P2P_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("METASO_P2P_PROFILE_MODE", "local-first")
+	t.Setenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
 
 	agg, store, router := setupTestAggregator(t)
 	defer store.Close()
@@ -596,9 +596,9 @@ func TestHandleGlobalMetaIdInfo_LegacyAddressFallbackFillsMissingChatKey(t *test
 	}))
 	defer remote.Close()
 
-	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
-	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
-	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+	t.Setenv("METASO_P2P_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("METASO_P2P_PROFILE_MODE", "local-first")
+	t.Setenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
 
 	agg, store, router := setupTestAggregator(t)
 	defer store.Close()
@@ -661,9 +661,9 @@ func TestHandleGlobalMetaIdInfo_RemoteFallbackRefreshesLegacyAvatar(t *testing.T
 	}))
 	defer remote.Close()
 
-	t.Setenv("META_SOCKET_PROFILE_REMOTE_BASE_URL", remote.URL)
-	t.Setenv("META_SOCKET_PROFILE_MODE", "local-first")
-	t.Setenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+	t.Setenv("METASO_P2P_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("METASO_P2P_PROFILE_MODE", "local-first")
+	t.Setenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
 
 	agg, store, router := setupTestAggregator(t)
 	defer store.Close()

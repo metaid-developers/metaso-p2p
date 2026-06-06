@@ -35,10 +35,10 @@ type remoteProfileQuery struct {
 type remoteProfileQueries []remoteProfileQuery
 
 func (a *Aggregator) configureRemoteProfileLookupFromEnv() {
-	a.profileMode = normaliseProfileMode(os.Getenv("META_SOCKET_PROFILE_MODE"))
-	a.allowRemoteFallback = parseBoolEnvDefault(os.Getenv("META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK"), true)
+	a.profileMode = normaliseProfileMode(os.Getenv("METASO_P2P_PROFILE_MODE"))
+	a.allowRemoteFallback = parseBoolEnvDefault(os.Getenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK"), true)
 
-	baseURL := strings.TrimSpace(os.Getenv("META_SOCKET_PROFILE_REMOTE_BASE_URL"))
+	baseURL := strings.TrimSpace(os.Getenv("METASO_P2P_PROFILE_REMOTE_BASE_URL"))
 	if baseURL == "" || a.profileMode == "local-only" {
 		return
 	}

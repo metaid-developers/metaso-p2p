@@ -25,10 +25,10 @@ func TestDefaultFederationConfigDisabled(t *testing.T) {
 	if cfg.Federation.MANAPIBaseURL != "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}" {
 		t.Fatalf("expected default MANAPI base URL template, got %q", cfg.Federation.MANAPIBaseURL)
 	}
-	if cfg.Federation.RegistryPath != "/protocols/metasocket-node" {
+	if cfg.Federation.RegistryPath != "/protocols/metaso-p2p-node" {
 		t.Fatalf("expected default registry path, got %q", cfg.Federation.RegistryPath)
 	}
-	if cfg.Federation.PresencePath != "/.well-known/metasocket/presence" {
+	if cfg.Federation.PresencePath != "/.well-known/metaso-p2p/presence" {
 		t.Fatalf("expected default presence path, got %q", cfg.Federation.PresencePath)
 	}
 	if cfg.Federation.RegistryRenewInterval != 6*time.Hour {
@@ -55,24 +55,24 @@ func TestDefaultFederationConfigDisabled(t *testing.T) {
 }
 
 func TestLoadFederationEnv(t *testing.T) {
-	t.Setenv("META_SOCKET_FEDERATION_ENABLED", "true")
-	t.Setenv("META_SOCKET_FEDERATION_NETWORK", "mvc-testnet")
-	t.Setenv("META_SOCKET_FEDERATION_NODE_PRIVATE_KEY", "node-private-key")
-	t.Setenv("META_SOCKET_FEDERATION_PUBLIC_BASE_URL", "https://socket.example")
-	t.Setenv("META_SOCKET_FEDERATION_MANAPI_BASE_URL", "https://manapi.example/pin/path/list?path={protocol-path}&size={size}")
-	t.Setenv("META_SOCKET_FEDERATION_METALET_BASE_URL", "https://metalet.example")
-	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_PATH", "/protocols/custom-node")
-	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_PATH", "/presence")
-	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_RENEW_INTERVAL", "7h")
-	t.Setenv("META_SOCKET_FEDERATION_REGISTRY_VALID_FOR", "25h")
-	t.Setenv("META_SOCKET_FEDERATION_DISCOVERY_INTERVAL", "6m")
-	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL", "21s")
-	t.Setenv("META_SOCKET_FEDERATION_PRESENCE_TTL", "91s")
-	t.Setenv("META_SOCKET_FEDERATION_REQUEST_TIMEOUT", "4s")
-	t.Setenv("META_SOCKET_FEDERATION_DEFAULT_SCOPE", "local")
-	t.Setenv("META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP", "true")
-	t.Setenv("META_SOCKET_FEDERATION_MAX_PEERS", "77")
-	t.Setenv("META_SOCKET_FEDERATION_MAX_SNAPSHOT_BYTES", "123456")
+	t.Setenv("METASO_P2P_FEDERATION_ENABLED", "true")
+	t.Setenv("METASO_P2P_FEDERATION_NETWORK", "mvc-testnet")
+	t.Setenv("METASO_P2P_FEDERATION_NODE_PRIVATE_KEY", "node-private-key")
+	t.Setenv("METASO_P2P_FEDERATION_PUBLIC_BASE_URL", "https://socket.example")
+	t.Setenv("METASO_P2P_FEDERATION_MANAPI_BASE_URL", "https://manapi.example/pin/path/list?path={protocol-path}&size={size}")
+	t.Setenv("METASO_P2P_FEDERATION_METALET_BASE_URL", "https://metalet.example")
+	t.Setenv("METASO_P2P_FEDERATION_REGISTRY_PATH", "/protocols/custom-node")
+	t.Setenv("METASO_P2P_FEDERATION_PRESENCE_PATH", "/presence")
+	t.Setenv("METASO_P2P_FEDERATION_REGISTRY_RENEW_INTERVAL", "7h")
+	t.Setenv("METASO_P2P_FEDERATION_REGISTRY_VALID_FOR", "25h")
+	t.Setenv("METASO_P2P_FEDERATION_DISCOVERY_INTERVAL", "6m")
+	t.Setenv("METASO_P2P_FEDERATION_PRESENCE_PULL_INTERVAL", "21s")
+	t.Setenv("METASO_P2P_FEDERATION_PRESENCE_TTL", "91s")
+	t.Setenv("METASO_P2P_FEDERATION_REQUEST_TIMEOUT", "4s")
+	t.Setenv("METASO_P2P_FEDERATION_DEFAULT_SCOPE", "local")
+	t.Setenv("METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP", "true")
+	t.Setenv("METASO_P2P_FEDERATION_MAX_PEERS", "77")
+	t.Setenv("METASO_P2P_FEDERATION_MAX_SNAPSHOT_BYTES", "123456")
 
 	cfg, err := Load()
 	if err != nil {
@@ -181,7 +181,7 @@ func TestValidateFederationRequiresDiscoveryAndWalletURLsWhenEnabled(t *testing.
 		{
 			name: "MANAPI base URL missing protocol path placeholder",
 			mutate: func(cfg *Config) {
-				cfg.Federation.MANAPIBaseURL = "https://manapi.example/pin/path/list?path=/protocols/metasocket-node&size={size}"
+				cfg.Federation.MANAPIBaseURL = "https://manapi.example/pin/path/list?path=/protocols/metaso-p2p-node&size={size}"
 			},
 		},
 		{
@@ -199,13 +199,13 @@ func TestValidateFederationRequiresDiscoveryAndWalletURLsWhenEnabled(t *testing.
 		{
 			name: "registry path must start with slash",
 			mutate: func(cfg *Config) {
-				cfg.Federation.RegistryPath = "protocols/metasocket-node"
+				cfg.Federation.RegistryPath = "protocols/metaso-p2p-node"
 			},
 		},
 		{
 			name: "presence path must start with slash",
 			mutate: func(cfg *Config) {
-				cfg.Federation.PresencePath = ".well-known/metasocket/presence"
+				cfg.Federation.PresencePath = ".well-known/metaso-p2p/presence"
 			},
 		},
 		{
@@ -320,7 +320,7 @@ func validFederationConfig() Config {
 }
 
 func TestLoadBlockIndexEnv(t *testing.T) {
-	t.Setenv("META_SOCKET_BLOCK_INDEX_ENABLED", "true")
+	t.Setenv("METASO_P2P_BLOCK_INDEX_ENABLED", "true")
 
 	chains := []struct {
 		name          string
@@ -335,52 +335,52 @@ func TestLoadBlockIndexEnv(t *testing.T) {
 	}{
 		{
 			name:          "btc",
-			enabledEnv:    "META_SOCKET_BLOCK_INDEX_BTC_ENABLED",
-			hostEnv:       "META_SOCKET_BLOCK_INDEX_BTC_RPC_HOST",
-			userEnv:       "META_SOCKET_BLOCK_INDEX_BTC_RPC_USER",
-			passEnv:       "META_SOCKET_BLOCK_INDEX_BTC_RPC_PASS",
-			postModeEnv:   "META_SOCKET_BLOCK_INDEX_BTC_RPC_HTTP_POST_MODE",
-			disableTLSEnv: "META_SOCKET_BLOCK_INDEX_BTC_RPC_DISABLE_TLS",
-			heightEnv:     "META_SOCKET_BLOCK_INDEX_BTC_INITIAL_HEIGHT",
+			enabledEnv:    "METASO_P2P_BLOCK_INDEX_BTC_ENABLED",
+			hostEnv:       "METASO_P2P_BLOCK_INDEX_BTC_RPC_HOST",
+			userEnv:       "METASO_P2P_BLOCK_INDEX_BTC_RPC_USER",
+			passEnv:       "METASO_P2P_BLOCK_INDEX_BTC_RPC_PASS",
+			postModeEnv:   "METASO_P2P_BLOCK_INDEX_BTC_RPC_HTTP_POST_MODE",
+			disableTLSEnv: "METASO_P2P_BLOCK_INDEX_BTC_RPC_DISABLE_TLS",
+			heightEnv:     "METASO_P2P_BLOCK_INDEX_BTC_INITIAL_HEIGHT",
 			assert: func(t *testing.T, cfg Config) {
 				assertChainRPCConfig(t, cfg.BlockIndex.BTC, "btc.example:8332", "btc-user", "btc-pass", 101)
 			},
 		},
 		{
 			name:          "mvc",
-			enabledEnv:    "META_SOCKET_BLOCK_INDEX_MVC_ENABLED",
-			hostEnv:       "META_SOCKET_BLOCK_INDEX_MVC_RPC_HOST",
-			userEnv:       "META_SOCKET_BLOCK_INDEX_MVC_RPC_USER",
-			passEnv:       "META_SOCKET_BLOCK_INDEX_MVC_RPC_PASS",
-			postModeEnv:   "META_SOCKET_BLOCK_INDEX_MVC_RPC_HTTP_POST_MODE",
-			disableTLSEnv: "META_SOCKET_BLOCK_INDEX_MVC_RPC_DISABLE_TLS",
-			heightEnv:     "META_SOCKET_BLOCK_INDEX_MVC_INITIAL_HEIGHT",
+			enabledEnv:    "METASO_P2P_BLOCK_INDEX_MVC_ENABLED",
+			hostEnv:       "METASO_P2P_BLOCK_INDEX_MVC_RPC_HOST",
+			userEnv:       "METASO_P2P_BLOCK_INDEX_MVC_RPC_USER",
+			passEnv:       "METASO_P2P_BLOCK_INDEX_MVC_RPC_PASS",
+			postModeEnv:   "METASO_P2P_BLOCK_INDEX_MVC_RPC_HTTP_POST_MODE",
+			disableTLSEnv: "METASO_P2P_BLOCK_INDEX_MVC_RPC_DISABLE_TLS",
+			heightEnv:     "METASO_P2P_BLOCK_INDEX_MVC_INITIAL_HEIGHT",
 			assert: func(t *testing.T, cfg Config) {
 				assertChainRPCConfig(t, cfg.BlockIndex.MVC, "mvc.example:9882", "mvc-user", "mvc-pass", 202)
 			},
 		},
 		{
 			name:          "doge",
-			enabledEnv:    "META_SOCKET_BLOCK_INDEX_DOGE_ENABLED",
-			hostEnv:       "META_SOCKET_BLOCK_INDEX_DOGE_RPC_HOST",
-			userEnv:       "META_SOCKET_BLOCK_INDEX_DOGE_RPC_USER",
-			passEnv:       "META_SOCKET_BLOCK_INDEX_DOGE_RPC_PASS",
-			postModeEnv:   "META_SOCKET_BLOCK_INDEX_DOGE_RPC_HTTP_POST_MODE",
-			disableTLSEnv: "META_SOCKET_BLOCK_INDEX_DOGE_RPC_DISABLE_TLS",
-			heightEnv:     "META_SOCKET_BLOCK_INDEX_DOGE_INITIAL_HEIGHT",
+			enabledEnv:    "METASO_P2P_BLOCK_INDEX_DOGE_ENABLED",
+			hostEnv:       "METASO_P2P_BLOCK_INDEX_DOGE_RPC_HOST",
+			userEnv:       "METASO_P2P_BLOCK_INDEX_DOGE_RPC_USER",
+			passEnv:       "METASO_P2P_BLOCK_INDEX_DOGE_RPC_PASS",
+			postModeEnv:   "METASO_P2P_BLOCK_INDEX_DOGE_RPC_HTTP_POST_MODE",
+			disableTLSEnv: "METASO_P2P_BLOCK_INDEX_DOGE_RPC_DISABLE_TLS",
+			heightEnv:     "METASO_P2P_BLOCK_INDEX_DOGE_INITIAL_HEIGHT",
 			assert: func(t *testing.T, cfg Config) {
 				assertChainRPCConfig(t, cfg.BlockIndex.DOGE, "doge.example:23116", "doge-user", "doge-pass", 303)
 			},
 		},
 		{
 			name:          "opcat",
-			enabledEnv:    "META_SOCKET_BLOCK_INDEX_OPCAT_ENABLED",
-			hostEnv:       "META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HOST",
-			userEnv:       "META_SOCKET_BLOCK_INDEX_OPCAT_RPC_USER",
-			passEnv:       "META_SOCKET_BLOCK_INDEX_OPCAT_RPC_PASS",
-			postModeEnv:   "META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HTTP_POST_MODE",
-			disableTLSEnv: "META_SOCKET_BLOCK_INDEX_OPCAT_RPC_DISABLE_TLS",
-			heightEnv:     "META_SOCKET_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT",
+			enabledEnv:    "METASO_P2P_BLOCK_INDEX_OPCAT_ENABLED",
+			hostEnv:       "METASO_P2P_BLOCK_INDEX_OPCAT_RPC_HOST",
+			userEnv:       "METASO_P2P_BLOCK_INDEX_OPCAT_RPC_USER",
+			passEnv:       "METASO_P2P_BLOCK_INDEX_OPCAT_RPC_PASS",
+			postModeEnv:   "METASO_P2P_BLOCK_INDEX_OPCAT_RPC_HTTP_POST_MODE",
+			disableTLSEnv: "METASO_P2P_BLOCK_INDEX_OPCAT_RPC_DISABLE_TLS",
+			heightEnv:     "METASO_P2P_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT",
 			assert: func(t *testing.T, cfg Config) {
 				assertChainRPCConfig(t, cfg.BlockIndex.OPCAT, "opcat.example:18443", "opcat-user", "opcat-pass", 404)
 			},
@@ -422,15 +422,15 @@ func TestLoadBlockIndexEnv(t *testing.T) {
 }
 
 func TestLoadOPCATZMQEnv(t *testing.T) {
-	t.Setenv("META_SOCKET_ZMQ_ENABLED", "true")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_ENABLED", "true")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_ENDPOINT", "tcp://opcat.example:18442")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_TOPIC", "hashblock")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_RPC_HOST", "opcat.example:18443")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_RPC_USER", "opcat-user")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_RPC_PASS", "opcat-pass")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_RPC_HTTP_POST_MODE", "false")
-	t.Setenv("META_SOCKET_ZMQ_OPCAT_RPC_DISABLE_TLS", "false")
+	t.Setenv("METASO_P2P_ZMQ_ENABLED", "true")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_ENABLED", "true")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_ENDPOINT", "tcp://opcat.example:18442")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_TOPIC", "hashblock")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_RPC_HOST", "opcat.example:18443")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_RPC_USER", "opcat-user")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_RPC_PASS", "opcat-pass")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_RPC_HTTP_POST_MODE", "false")
+	t.Setenv("METASO_P2P_ZMQ_OPCAT_RPC_DISABLE_TLS", "false")
 
 	cfg, err := Load()
 	if err != nil {

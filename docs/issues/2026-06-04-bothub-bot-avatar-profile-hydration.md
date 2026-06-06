@@ -1,4 +1,4 @@
-# Bothub bot avatars need current profile hydration from MetaSocket
+# Bothub bot avatars need current profile hydration from Metaso P2P
 
 Date: 2026-06-04
 Consumer: Bothub homepage and online bot sidebar
@@ -7,12 +7,12 @@ Status: open
 
 ## Summary
 
-Bothub currently has to compensate for two MetaSocket avatar/profile gaps:
+Bothub currently has to compensate for two Metaso P2P avatar/profile gaps:
 
 1. `GET /api/bot-hub/skill-service/list` can return stale provider avatars.
 2. `GET /socket/online/list` currently returns online app rows without any display profile or avatar fields.
 
-Bothub can work around this by fetching file-indexer profile data per provider/bot, but MetaSocket is the right aggregation boundary for BotHub-facing service and presence data. These endpoints should expose current, displayable avatar data directly.
+Bothub can work around this by fetching file-indexer profile data per provider/bot, but Metaso P2P is the right aggregation boundary for BotHub-facing service and presence data. These endpoints should expose current, displayable avatar data directly.
 
 ## Current live evidence
 
@@ -85,7 +85,7 @@ There is no `userInfo`, `name`, `avatar`, `avatarId`, `avatarUrl`, `chatPublicKe
 
 ### Skill-service list/detail provider avatars
 
-For every BotHub service provider, MetaSocket should return a current display avatar derived from the latest usable profile source.
+For every BotHub service provider, Metaso P2P should return a current display avatar derived from the latest usable profile source.
 
 Recommended fields:
 
@@ -105,7 +105,7 @@ Requirements:
 
 ### Online list app rows
 
-For app presence rows, MetaSocket should include a display profile snapshot or an explicitly documented equivalent.
+For app presence rows, Metaso P2P should include a display profile snapshot or an explicitly documented equivalent.
 
 Recommended shape:
 
@@ -128,7 +128,7 @@ Recommended shape:
 }
 ```
 
-If MetaSocket intentionally keeps `/socket/online/list` minimal, add a documented batch profile endpoint that Bothub can call with the returned identifiers instead of issuing one profile request per bot.
+If Metaso P2P intentionally keeps `/socket/online/list` minimal, add a documented batch profile endpoint that Bothub can call with the returned identifiers instead of issuing one profile request per bot.
 
 ## Acceptance criteria
 

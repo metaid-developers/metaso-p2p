@@ -1,4 +1,4 @@
-# Handoff — meta-socket v1 开发完成，待办事项
+# Handoff — metaso-p2p v1 开发完成，待办事项
 
 本项目已完成 7 个 Phase 的开发，45 个 Go 源文件、10 个测试文件、98 个测试全部通过。
 以下事项因沙箱环境限制无法完成，需在其他环境操作。
@@ -6,7 +6,7 @@
 ## 环境准备
 
 ```bash
-cd /Users/tusm/Documents/MetaID_Projects/meta-socket
+cd /Users/tusm/Documents/MetaID_Projects/metaso-p2p
 git log --oneline -8   # 确认 8 个 commit 都在
 ```
 
@@ -37,27 +37,27 @@ git push origin main
 
 ```bash
 # Phase 2
-echo '{"content": "meta-socket Phase 2 完成 — Socket.IO 服务器: zishang520/socket.io v2 双路径, PC≤3 App≤3 设备限制, ping/heartbeat_ack 心跳, {M,C:0,D} 推送信封, 房间广播, 在线状态 API, 35s 超时清理, 优雅关闭, 10 单元测试 PASS。commit a383884"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 2 完成 — Socket.IO 服务器: zishang520/socket.io v2 双路径, PC≤3 App≤3 设备限制, ping/heartbeat_ack 心跳, {M,C:0,D} 推送信封, 房间广播, 在线状态 API, 35s 超时清理, 优雅关闭, 10 单元测试 PASS。commit a383884"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 
 # Phase 3
-echo '{"content": "meta-socket Phase 3 完成 — BTC链索引+UserInfo端到端: pkg/idaddress/ GlobalMetaId编解码(id-前缀), BTC indexer完整MetaID witness解析, Indexer engine高度持久化+恢复, UserInfo GlobalMetaId生成+cache命中/失效, 51测试PASS(5包)。commit 839fce3"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 3 完成 — BTC链索引+UserInfo端到端: pkg/idaddress/ GlobalMetaId编解码(id-前缀), BTC indexer完整MetaID witness解析, Indexer engine高度持久化+恢复, UserInfo GlobalMetaId生成+cache命中/失效, 51测试PASS(5包)。commit 839fce3"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 
 # Phase 4
-echo '{"content": "meta-socket Phase 4 完成 — GroupChat聚合器: 6种Pin协议分发(community/group/admin/block/chat/join), PebbleDB CRUD+游标分页, 25 HTTP端点匹配idchat契约, WS_SERVER_NOTIFY_GROUP_CHAT/ROLE推送, 14测试PASS。commit eee5cc9"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 4 完成 — GroupChat聚合器: 6种Pin协议分发(community/group/admin/block/chat/join), PebbleDB CRUD+游标分页, 25 HTTP端点匹配idchat契约, WS_SERVER_NOTIFY_GROUP_CHAT/ROLE推送, 14测试PASS。commit eee5cc9"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 
 # Phase 5
-echo '{"content": "meta-socket Phase 5 完成 — PrivateChat聚合器: simplemsg+simpleprivateblock Pin处理, 双向键设计pchat:<lower>:<higher>:<ts>:<txId>, private-chat-list/homes/group-paths端点, 游标分页+无交叉泄漏, WS_SERVER_NOTIFY_PRIVATE_CHAT推送, 18测试PASS。commit 6fe511b"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 5 完成 — PrivateChat聚合器: simplemsg+simpleprivateblock Pin处理, 双向键设计pchat:<lower>:<higher>:<ts>:<txId>, private-chat-list/homes/group-paths端点, 游标分页+无交叉泄漏, WS_SERVER_NOTIFY_PRIVATE_CHAT推送, 18测试PASS。commit 6fe511b"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 
 # Phase 6
-echo '{"content": "meta-socket Phase 6 完成 — 全链适配MVC/DOGE/OPCAT: MVC SegWit witness(ChainName=mvc), DOGE SegWit+AuxPoW(ChainName=doge), OPCAT OP_RETURN blob解析(ChainName=opcat), 每条链完整Chain+Indexer接口, 14测试PASS。commit 0a9a2cb"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 6 完成 — 全链适配MVC/DOGE/OPCAT: MVC SegWit witness(ChainName=mvc), DOGE SegWit+AuxPoW(ChainName=doge), OPCAT OP_RETURN blob解析(ChainName=opcat), 每条链完整Chain+Indexer接口, 14测试PASS。commit 0a9a2cb"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 
 # Phase 7
-echo '{"content": "meta-socket Phase 7 完成 — Docker+部署文档: 多阶段构建golang:1.26-alpine→alpine:3.21, config.example.toml全量配置, docs/DEPLOY.md部署指南, docs/IDCHAT_CONFIG_CHANGE.md迁移清单。commit 20d9666"}' > /tmp/req.json
+echo '{"content": "metaso-p2p Phase 7 完成 — Docker+部署文档: 多阶段构建golang:1.26-alpine→alpine:3.21, config.example.toml全量配置, docs/DEPLOY.md部署指南, docs/IDCHAT_CONFIG_CHANGE.md迁移清单。commit 20d9666"}' > /tmp/req.json
 $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 ```
 
@@ -66,20 +66,20 @@ $HOME/.metabot/bin/metabot buzz post --from eric --request-file /tmp/req.json
 ## 3. Docker 构建验证
 
 ```bash
-cd /Users/tusm/Documents/MetaID_Projects/meta-socket
-docker build -t meta-socket .
-docker images meta-socket   # 确认大小 < 50MB（实测约 40MB）
+cd /Users/tusm/Documents/MetaID_Projects/metaso-p2p
+docker build -t metaso-p2p .
+docker images metaso-p2p   # 确认大小 < 50MB（实测约 40MB）
 ```
 
 ---
 
 ## 4. 集成测试（真实 Socket.IO WebSocket 连接）
 
-启动 meta-socket 后用 Socket.IO 客户端验证：
+启动 metaso-p2p 后用 Socket.IO 客户端验证：
 
 ```bash
 # 启动服务
-go build ./cmd/meta-socket/ && ./meta-socket
+go build ./cmd/metaso-p2p/ && ./metaso-p2p
 
 # 另一个终端：用 Node.js socket.io-client v4 测试
 node -e "
@@ -107,7 +107,7 @@ socket.emit('ping');
 
 ## 5. idchat 端到端验证（Master Criteria #3）
 
-配置 idchat 指向 meta-socket（参 `docs/IDCHAT_CONFIG_CHANGE.md`），验证 10 个场景：
+配置 idchat 指向 metaso-p2p（参 `docs/IDCHAT_CONFIG_CHANGE.md`），验证 10 个场景：
 
 - [ ] a. Socket.IO 连接 → 收到 heartbeat_ack
 - [ ] b. 群聊消息 → 群成员收到 WS_SERVER_NOTIFY_GROUP_CHAT

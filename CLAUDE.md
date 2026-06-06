@@ -24,12 +24,12 @@ It provides:
 ## Build & Test Commands
 
 ```bash
-go build ./cmd/meta-socket/    # Build the binary
+go build ./cmd/metaso-p2p/    # Build the binary
 go test ./...                   # Run all tests
 go test ./internal/storage/     # Run a specific package
 ```
 
-All configuration uses environment variables with the `META_SOCKET_` prefix. See `internal/config/config.go`.
+All configuration uses environment variables with the `METASO_P2P_` prefix. See `internal/config/config.go`.
 
 ## Architecture
 
@@ -55,8 +55,8 @@ Key principles:
 
 | Directory | Purpose |
 |---|---|
-| `cmd/meta-socket/main.go` | Entry point: bootstraps store, cache, aggregators, HTTP server |
-| `internal/config/` | Env-based config (`META_SOCKET_*`), validation, defaults |
+| `cmd/metaso-p2p/main.go` | Entry point: bootstraps store, cache, aggregators, HTTP server |
+| `internal/config/` | Env-based config (`METASO_P2P_*`), validation, defaults |
 | `internal/storage/` | Namespaced PebbleDB wrapper (Set/Get/Delete/ScanPrefix) |
 | `internal/cache/` | Two-level cache: L1 (LRU in-memory) + L2 (Pebble) |
 | `internal/api/` | Unified JSON response format `{code, data, message, processingTime}` |

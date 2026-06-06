@@ -4,21 +4,21 @@
 
 Bothub can send a real free order to AI_Sunny's online service and IDChat shows
 that AI_Sunny receives and replies to the order. However, Bothub Delivery cannot
-hydrate the provider reply from the local meta-socket private-chat API because
+hydrate the provider reply from the local metaso-p2p private-chat API because
 the BotHub service detail exposes AI_Sunny as `1Grq...`, while the live IDChat
 conversation uses `idq14hm...`.
 
 This looks like a provider identity alias/canonical-chat-peer gap in the
-meta-socket contract. Bothub is correctly using the provider identity returned
+metaso-p2p contract. Bothub is correctly using the provider identity returned
 by `/api/bot-hub/skill-service/detail`, but that identity is not sufficient to
 read the current provider conversation.
 
 ## Environment
 
 - Date checked: 2026-06-01 19:32 CST
-- meta-socket base URL: `http://127.0.0.1:18091`
+- metaso-p2p base URL: `http://127.0.0.1:18091`
 - Bothub dev URL: `http://127.0.0.1:5177/`
-- Bothub env: `VITE_META_SOCKET_BASE_URL=/meta-socket`,
+- Bothub env: `VITE_METASO_P2P_BASE_URL=/metaso-p2p`,
   `VITE_USE_AGGREGATOR_MOCK=false`, `VITE_USE_WS_MOCK=false`
 - Wallet used for UI acceptance: `SunnyFung` /
   `idq1zfazvxaq69uw6txe3ewce30ewyhy9a7mzykgv0`
@@ -65,7 +65,7 @@ curl http://127.0.0.1:18091/healthz
 Result:
 
 ```json
-{"code":0,"data":{"service":"meta-socket","status":"ok","version":"dev"},"message":"","processingTime":1780313535516}
+{"code":0,"data":{"service":"metaso-p2p","status":"ok","version":"dev"},"message":"","processingTime":1780313535516}
 ```
 
 Local service detail returns the provider/payment/chat identity as `1Grq...`:
@@ -208,12 +208,12 @@ Meta-socket should provide one of the following:
 
 - Buyer-side sending works.
 - AI_Sunny receives and responds to the order.
-- Bothub Delivery cannot show the provider response from the local meta-socket
+- Bothub Delivery cannot show the provider response from the local metaso-p2p
   runtime because it has no reliable provider chat peer id from the BotHub
   detail contract.
 
 This is not a request for Bothub to point at `https://api.idchat.io/chat-api`
-for BotHub marketplace data. Bothub should keep using the native meta-socket
+for BotHub marketplace data. Bothub should keep using the native metaso-p2p
 `/api/bot-hub/*` and local/private-chat APIs; those APIs need a canonical
 identity bridge for this provider.
 
@@ -222,7 +222,7 @@ identity bridge for this provider.
 - The AI_Sunny service detail exposes the private-chat peer id that contains
   the current order/status rows, or the local private-chat endpoint resolves
   the returned provider id to the current chat rows.
-- Using only local meta-socket APIs, Bothub can fetch the buyer order pin
+- Using only local metaso-p2p APIs, Bothub can fetch the buyer order pin
   `5d429d59f5c984735d897be27f197abff44dc55fc757a8f2d22031241b6179c7i0`
   and at least one AI_Sunny status/reply pin for the same conversation.
 - BotHub Delivery can move the AI_Sunny acceptance order beyond the saved

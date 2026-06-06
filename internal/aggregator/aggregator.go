@@ -3,8 +3,8 @@ package aggregator
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // PinInscription is a parsed MetaID protocol entry from a blockchain transaction.

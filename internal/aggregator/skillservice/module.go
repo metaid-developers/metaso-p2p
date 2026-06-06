@@ -5,9 +5,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // Aggregator implements aggregator.Aggregator for the Bot Hub skill-service
@@ -81,8 +81,9 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 // RegisterRoutes mounts /bot-hub/skill-service/* on the supplied router
 // group. The router in internal/api/router.go calls this with the /api
 // group, so the externally visible paths are
-//   GET /api/bot-hub/skill-service/list
-//   GET /api/bot-hub/skill-service/detail/:serviceId
+//
+//	GET /api/bot-hub/skill-service/list
+//	GET /api/bot-hub/skill-service/detail/:serviceId
 //
 // M1 ships placeholder handlers that return code=0 with an empty payload;
 // real handlers land in M5 (list) and M6 (detail).

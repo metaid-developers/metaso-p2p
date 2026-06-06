@@ -20,10 +20,10 @@ func buildMetaIDWitnessTx(t *testing.T) *wire.MsgTx {
 	// followed by the MetaID data pushes.
 	// Script: 0x00 0x63 [push "metaid"] 0x68
 	builder := txscript.NewScriptBuilder()
-	builder.AddOp(txscript.OP_FALSE)   // 0x00
-	builder.AddOp(txscript.OP_IF)      // 0x63
-	builder.AddData([]byte("metaid"))  // protocol ID
-	builder.AddOp(txscript.OP_ENDIF)   // 0x68
+	builder.AddOp(txscript.OP_FALSE)  // 0x00
+	builder.AddOp(txscript.OP_IF)     // 0x63
+	builder.AddData([]byte("metaid")) // protocol ID
+	builder.AddOp(txscript.OP_ENDIF)  // 0x68
 
 	witnessScript, err := builder.Script()
 	if err != nil {
@@ -50,15 +50,15 @@ func buildMetaIDWitnessTx(t *testing.T) *wire.MsgTx {
 	// MetaID protocol data is embedded after the standard items.
 	// For tests, we put everything in the witness:
 	witnessData := [][]byte{
-		[]byte("dummy-sig"),                    // signature placeholder
-		[]byte("dummy-pubkey"),                 // pubkey placeholder
-		[]byte("metaid"),                       // protocol marker
-		[]byte("init"),                         // operation
-		[]byte("/"),                            // path
-		[]byte("0"),                            // encryption
-		[]byte("0"),                            // version
-		[]byte("text/plain"),                   // content type
-		[]byte("hello metaid world"),           // content body
+		[]byte("dummy-sig"),          // signature placeholder
+		[]byte("dummy-pubkey"),       // pubkey placeholder
+		[]byte("metaid"),             // protocol marker
+		[]byte("init"),               // operation
+		[]byte("/"),                  // path
+		[]byte("0"),                  // encryption
+		[]byte("0"),                  // version
+		[]byte("text/plain"),         // content type
+		[]byte("hello metaid world"), // content body
 	}
 	// Prepend the witness script (P2WSH requires it).
 	fullWitness := append([][]byte{witnessScript}, witnessData...)
@@ -138,8 +138,8 @@ func TestCatchPinsByTx_InfoNamePin(t *testing.T) {
 	witnessData := [][]byte{
 		[]byte("sig"), []byte("pubkey"),
 		[]byte("metaid"),
-		[]byte("create"),        // operation
-		[]byte("/info/name"),    // path
+		[]byte("create"),     // operation
+		[]byte("/info/name"), // path
 		[]byte("0"), []byte("0"),
 		[]byte("text/plain"),
 		[]byte("Alice"),
@@ -250,8 +250,8 @@ func TestCatchPinsByTx_InitPin(t *testing.T) {
 	witnessData := [][]byte{
 		[]byte("sig"), []byte("pubkey"),
 		[]byte("metaid"),
-		[]byte("init"),    // operation
-		[]byte("/"),       // path (init)
+		[]byte("init"), // operation
+		[]byte("/"),    // path (init)
 		[]byte("0"), []byte("0"),
 		[]byte("text/plain"),
 		[]byte(""),
@@ -284,11 +284,11 @@ func TestIsMetaIDOutput(t *testing.T) {
 	// A MetaID protocol script starts with OP_RETURN or OP_FALSE.
 	// isMetaIDOutput is a coarse check that returns true for any pkScript >= 6 bytes.
 	tests := []struct {
-		name    string
-		script  []byte
-		wantOK  bool
+		name   string
+		script []byte
+		wantOK bool
 	}{
-		{"empty", []byte{}, true},   // len < 6 but function always returns true (simplified)
+		{"empty", []byte{}, true}, // len < 6 but function always returns true (simplified)
 		{"short", []byte{0, 0, 0}, true},
 		{"valid length", make([]byte, 10), true},
 	}

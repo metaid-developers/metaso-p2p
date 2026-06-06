@@ -2,17 +2,17 @@
 
 ## 背景
 
-当前 `meta-socket` 的在线列表是实例本地视角。HTTP 入口在
+当前 `metaso-p2p` 的在线列表是实例本地视角。HTTP 入口在
 `internal/socket/presence.go`，`/socket/online/list` 调用
 `ConnectionManager.OnlineList(page, size)`，而 `ConnectionManager` 只维护当前
 Go 进程内的 Socket.IO 连接表。因此：
 
-- `a.com` 返回的是连接到 `a.com` 这台 `meta-socket` 实例的在线用户。
+- `a.com` 返回的是连接到 `a.com` 这台 `metaso-p2p` 实例的在线用户。
 - `b.com` 返回的是连接到 `b.com` 这台实例的在线用户。
 - 多个开源部署节点之间目前没有共享在线状态。
 
-我们要实现的是：任意用户只连接某一个 MetaSocket 节点，也能看到全网所有
-MetaSocket 节点汇总后的 AI Agent 在线状态。
+我们要实现的是：任意用户只连接某一个 Metaso P2P 节点，也能看到全网所有
+Metaso P2P 节点汇总后的 AI Agent 在线状态。
 
 ## 目标
 
@@ -35,9 +35,9 @@ MetaSocket 节点汇总后的 AI Agent 在线状态。
 
 ```mermaid
 flowchart LR
-  A["MetaSocket node a.com"] -->|"publish node registry pin"| C["MVC chain"]
-  B["MetaSocket node b.com"] -->|"publish node registry pin"| C
-  C -->|"query /protocols/metasocket-node"| D["MANAPI"]
+  A["Metaso P2P node a.com"] -->|"publish node registry pin"| C["MVC chain"]
+  B["Metaso P2P node b.com"] -->|"publish node registry pin"| C
+  C -->|"query /protocols/metaso-p2p-node"| D["MANAPI"]
   A -->|"discover nodes"| D
   B -->|"discover nodes"| D
   A -->|"GET presence snapshot"| B
@@ -46,14 +46,14 @@ flowchart LR
   B -->|"local aggregate"| BAPI["/socket/online/list?scope=global"]
 ```
 
-链上只记录“有哪些 MetaSocket 节点以及如何访问它们”。在线状态仍然由节点的
+链上只记录“有哪些 Metaso P2P 节点以及如何访问它们”。在线状态仍然由节点的
 HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 ## 链上节点注册协议
 
 ### Path
 
-`/protocols/metasocket-node`
+`/protocols/metaso-p2p-node`
 
 ### Operation
 
@@ -72,13 +72,13 @@ HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 ```json
 {
-  "protocol": "metasocket-node",
+  "protocol": "metaso-p2p-node",
   "version": "1.0.0",
   "nodeId": "mvc:1ExampleNodeAddress",
   "network": "mvc-mainnet",
   "publicBaseUrl": "https://a.com",
   "socketUrl": "https://a.com/socket/socket.io",
-  "presenceUrl": "https://a.com/.well-known/metasocket/presence",
+  "presenceUrl": "https://a.com/.well-known/metaso-p2p/presence",
   "publicKey": "02abcdef...",
   "capabilities": ["presence-v1"],
   "publishedAt": 1780000000000,
@@ -90,7 +90,7 @@ HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 | Field | Required | 说明 |
 | --- | --- | --- |
-| `protocol` | yes | 固定为 `metasocket-node` |
+| `protocol` | yes | 固定为 `metaso-p2p-node` |
 | `version` | yes | 协议版本；当前 `1.0.0` |
 | `nodeId` | yes | 稳定节点 ID，建议 `mvc:<wallet-address>` |
 | `network` | yes | `mvc-mainnet` 或 `mvc-testnet` |
@@ -117,7 +117,7 @@ HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 每个节点必须暴露：
 
-`GET /.well-known/metasocket/presence`
+`GET /.well-known/metaso-p2p/presence`
 
 也可以在配置里覆盖，但 registry payload 的 `presenceUrl` 必须给出最终 URL。
 
@@ -125,7 +125,7 @@ HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 ```json
 {
-  "protocol": "metasocket-presence",
+  "protocol": "metaso-p2p-presence",
   "version": "1.0.0",
   "nodeId": "mvc:1ExampleNodeAddress",
   "generatedAt": 1780000000000,
@@ -147,7 +147,7 @@ HTTP endpoint 实时提供，其他节点按 TTL 聚合。
 
 | Field | Required | 说明 |
 | --- | --- | --- |
-| `protocol` | yes | 固定为 `metasocket-presence` |
+| `protocol` | yes | 固定为 `metaso-p2p-presence` |
 | `version` | yes | 当前 `1.0.0` |
 | `nodeId` | yes | 必须匹配 registry 里的 `nodeId` |
 | `generatedAt` | yes | 快照生成时间，毫秒 |
@@ -231,8 +231,8 @@ nodePrivateKey = ""
 publicBaseUrl = ""
 manapiBaseUrl = "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"
 metaletBaseUrl = "https://www.metalet.space"
-registryPath = "/protocols/metasocket-node"
-presencePath = "/.well-known/metasocket/presence"
+registryPath = "/protocols/metaso-p2p-node"
+presencePath = "/.well-known/metaso-p2p/presence"
 registryRenewInterval = "6h"
 registryValidFor = "24h"
 discoveryInterval = "5m"
@@ -244,13 +244,13 @@ defaultScope = "global"
 
 关键环境变量建议：
 
-- `META_SOCKET_FEDERATION_ENABLED`
-- `META_SOCKET_FEDERATION_NETWORK`
-- `META_SOCKET_FEDERATION_NODE_PRIVATE_KEY`
-- `META_SOCKET_FEDERATION_PUBLIC_BASE_URL`
-- `META_SOCKET_FEDERATION_MANAPI_BASE_URL`
-- `META_SOCKET_FEDERATION_METALET_BASE_URL`
-- `META_SOCKET_FEDERATION_DEFAULT_SCOPE`
+- `METASO_P2P_FEDERATION_ENABLED`
+- `METASO_P2P_FEDERATION_NETWORK`
+- `METASO_P2P_FEDERATION_NODE_PRIVATE_KEY`
+- `METASO_P2P_FEDERATION_PUBLIC_BASE_URL`
+- `METASO_P2P_FEDERATION_MANAPI_BASE_URL`
+- `METASO_P2P_FEDERATION_METALET_BASE_URL`
+- `METASO_P2P_FEDERATION_DEFAULT_SCOPE`
 
 ## MVC 上链适配
 
@@ -260,7 +260,7 @@ defaultScope = "global"
 - `/Users/tusm/Documents/MetaID_Projects/chat-assistant-service/common/common_mvc_tx.go`
 - `/Users/tusm/Documents/MetaID_Projects/meta-file-system/common/common_mvc_tx.go`
 
-但不要直接搬整个服务。`meta-socket` 当前已有 `btcsuite/btcd` 依赖和 MVC indexer，
+但不要直接搬整个服务。`metaso-p2p` 当前已有 `btcsuite/btcd` 依赖和 MVC indexer，
 可以实现一个小型 publisher：
 
 1. 根据 `nodePrivateKey` 推导 address / publicKey。
@@ -288,21 +288,21 @@ Metalet wallet API 约束来自
 
 ## MANAPI Discovery
 
-Discovery adapter 通过 MANAPI 拉取 `/protocols/metasocket-node` pins。第一版默认使用
+Discovery adapter 通过 MANAPI 拉取 `/protocols/metaso-p2p-node` pins。第一版默认使用
 MANAPI path-list endpoint template：
 
 ```text
 https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}
 ```
 
-`{protocol-path}` 替换为 `/protocols/metasocket-node`，`{size}` 默认替换为
+`{protocol-path}` 替换为 `/protocols/metaso-p2p-node`，`{size}` 默认替换为
 `100`。默认展开后的测试 URL 是：
 
 ```text
-https://manapi.metaid.io/pin/path/list?path=/protocols/metasocket-node&size=100
+https://manapi.metaid.io/pin/path/list?path=/protocols/metaso-p2p-node&size=100
 ```
 
-该 URL 也可以用于人工检测 `metasocket-node` 协议是否已经成功上链。
+该 URL 也可以用于人工检测 `metaso-p2p-node` 协议是否已经成功上链。
 
 MANAPI response 的第一版适配目标：
 
@@ -373,4 +373,4 @@ Discovery adapter 处理规则：
 - 生产运维：中等，需要节点安装时配置私钥、public base URL、MANAPI base URL、Metalet base URL。
 
 这个方案比传统 P2P 节点发现更简单：不需要 NAT 穿透、DHT、peer gossip 或长连接维护。
-它利用链上身份和 HTTP endpoint 完成发现与拉取，符合 MetaSocket 作为开源多域名服务的部署形态。
+它利用链上身份和 HTTP endpoint 完成发现与拉取，符合 Metaso P2P 作为开源多域名服务的部署形态。

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Bothub buyer checkout needs the provider chat public key before it can send an encrypted order request through `/protocols/simplemsg`. Current local meta-socket paid service responses do not expose a provider chat key in either skill-service detail or the compatible user info endpoints, so Bothub cannot reach the Metalet payment prompt for paid orders.
+Bothub buyer checkout needs the provider chat public key before it can send an encrypted order request through `/protocols/simplemsg`. Current local metaso-p2p paid service responses do not expose a provider chat key in either skill-service detail or the compatible user info endpoints, so Bothub cannot reach the Metalet payment prompt for paid orders.
 
 This blocks the caller-side product flow:
 
@@ -14,7 +14,7 @@ This blocks the caller-side product flow:
 
 ## Environment
 
-- meta-socket: local service at `http://127.0.0.1:18091`
+- metaso-p2p: local service at `http://127.0.0.1:18091`
 - Bothub: `main` after merge commit `a583c28`
 - Date checked: 2026-05-30
 

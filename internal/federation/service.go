@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metaid-developers/meta-socket/internal/config"
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
-// Service wires federation components into the meta-socket lifecycle.
+// Service wires federation components into the metaso-p2p lifecycle.
 type Service struct {
 	enabled bool
 	nodeID  string

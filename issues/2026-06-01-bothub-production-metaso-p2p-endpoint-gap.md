@@ -1,15 +1,15 @@
-# Bothub needs a first-party production/staging meta-socket endpoint
+# Bothub needs a first-party production/staging metaso-p2p endpoint
 
 ## Summary
 
 Bothub should not depend on `https://api.idchat.io` or idchat `/chat-api/` for
 release or production. Bothub is a pure frontend buyer app whose backend
-contract is meta-socket. The local `http://127.0.0.1:18091` runtime now passes
+contract is metaso-p2p. The local `http://127.0.0.1:18091` runtime now passes
 Bothub smoke with real indexed data, but there is still no documented non-local
-production/staging meta-socket base URL that Bothub can use for release
+production/staging metaso-p2p base URL that Bothub can use for release
 acceptance or hosted deployment.
 
-Please provide a meta-socket-owned production/staging endpoint, or document the
+Please provide a metaso-p2p-owned production/staging endpoint, or document the
 deployment target Bothub should use, with the native routes listed below. While
 doing so, please also promote private chat to its own canonical API namespace so
 new Bothub code does not need to depend on the historical `/api/group-chat/...`
@@ -18,7 +18,7 @@ private-chat paths.
 ## Why this is not an idchat dependency
 
 Earlier Bothub checks probed `https://api.idchat.io` only as a diagnostic while
-the local meta-socket runtime was unavailable or catching up. That should not be
+the local metaso-p2p runtime was unavailable or catching up. That should not be
 treated as a product dependency.
 
 Known observations:
@@ -26,10 +26,10 @@ Known observations:
 - `https://api.idchat.io/chat-api/` is a group/private chat compatibility
   surface.
 - idchat `/chat-api/` does not expose BotHub skill-service routes.
-- Bothub should not set `VITE_META_SOCKET_BASE_URL` to
+- Bothub should not set `VITE_METASO_P2P_BASE_URL` to
   `https://api.idchat.io/chat-api` because it builds unmounted paths like
   `/chat-api/api/bot-hub/*`.
-- Any idchat-like ability Bothub needs should be provided by meta-socket.
+- Any idchat-like ability Bothub needs should be provided by metaso-p2p.
 
 ## Required Meta-Socket Surface
 
@@ -49,7 +49,7 @@ The assigned base URL should support:
 Bothub needs private-chat history for Delivery recovery. It does not need
 group/channel/community chat product features.
 
-The current usable meta-socket routes are mounted under the historical
+The current usable metaso-p2p routes are mounted under the historical
 `/api/group-chat/...` namespace:
 
 - `GET /api/group-chat/chat/homes/:metaId`
@@ -86,13 +86,13 @@ The deployment should also:
 From the Bothub repo, this should pass against the assigned endpoint:
 
 ```bash
-META_SOCKET_BASE_URL=https://<meta-socket-host> pnpm smoke:meta-socket
+METASO_P2P_BASE_URL=https://<metaso-p2p-host> pnpm smoke:metaso-p2p
 ```
 
 For browser acceptance, Bothub should be able to run with:
 
 ```dotenv
-VITE_META_SOCKET_BASE_URL=https://<meta-socket-host>
+VITE_METASO_P2P_BASE_URL=https://<metaso-p2p-host>
 VITE_USE_AGGREGATOR_MOCK=false
 VITE_USE_WS_MOCK=false
 ```
@@ -103,9 +103,9 @@ without relying on idchat.
 Additional route checks expected before Bothub switches over:
 
 ```bash
-curl 'https://<meta-socket-host>/api/private-chat/homes/<buyer-metaId>'
-curl 'https://<meta-socket-host>/api/private-chat/messages?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&cursor=&size=5'
-curl 'https://<meta-socket-host>/api/private-chat/messages/by-index?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&startIndex=0&size=5'
+curl 'https://<metaso-p2p-host>/api/private-chat/homes/<buyer-metaId>'
+curl 'https://<metaso-p2p-host>/api/private-chat/messages?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&cursor=&size=5'
+curl 'https://<metaso-p2p-host>/api/private-chat/messages/by-index?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&startIndex=0&size=5'
 ```
 
 Each canonical route should return the same envelope/data shape as its existing
@@ -114,7 +114,7 @@ Each canonical route should return the same envelope/data shape as its existing
 ## Current Impact
 
 - Local/private beta can continue against `http://127.0.0.1:18091`.
-- Hosted production or staging release is blocked until meta-socket provides
+- Hosted production or staging release is blocked until metaso-p2p provides
   the assigned base URL or deployment/proxy instructions.
 - This is a backend/runtime ownership gap, not a request to add a Bothub
   backend and not a request to point Bothub at idchat.

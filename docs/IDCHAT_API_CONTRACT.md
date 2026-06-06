@@ -1,6 +1,6 @@
 # idchat API Contract
 
-Every HTTP endpoint and Socket.IO event idchat expects. meta-socket v1 must match this exactly.
+Every HTTP endpoint and Socket.IO event idchat expects. metaso-p2p v1 must match this exactly.
 
 Use `show-now-tmp` commit `1643a1a` as reference for any ambiguity in this doc.
 
@@ -25,7 +25,7 @@ HTTP status is always 200 (even for errors). The `code` field distinguishes succ
 ### Cursor-based
 Query: `?cursor=&size=20`. Response `data` contains `nextCursor` (string). Empty `nextCursor` or `""` = end of results. First request uses `cursor=` (empty).
 
-**Cursor encoding**: Since meta-socket uses PebbleDB (not MongoDB), cursor is a base64-encoded Pebble key or an opaque string. The client treats it as opaque — it must not be parsed. It must survive round-trips and be valid for subsequent `cursor=<value>` calls.
+**Cursor encoding**: Since metaso-p2p uses PebbleDB (not MongoDB), cursor is a base64-encoded Pebble key or an opaque string. The client treats it as opaque — it must not be parsed. It must survive round-trips and be valid for subsequent `cursor=<value>` calls.
 
 ### Index-based
 Query: `?startIndex=0&size=20`. Response `data` contains the slice starting at that index. No cursor needed.
@@ -45,7 +45,7 @@ All fields are strings. `avatar`, `nftAvatar`, `background` values are content p
 
 ### meta-file-system drop-in compatibility
 
-These three `/info/*` endpoints are an exception to the universal `code: 0 = success` envelope used by every other meta-socket endpoint. idchat's `metafileIndexerApi` client treats `code === 1` as success and any other value as failure (`idchat/src/api/man.ts`). To let idchat point its `metafileIndexerApi` URL at meta-socket without any TypeScript changes, the user-info handlers mirror meta-file-system's response shape exactly:
+These three `/info/*` endpoints are an exception to the universal `code: 0 = success` envelope used by every other metaso-p2p endpoint. idchat's `metafileIndexerApi` client treats `code === 1` as success and any other value as failure (`idchat/src/api/man.ts`). To let idchat point its `metafileIndexerApi` URL at metaso-p2p without any TypeScript changes, the user-info handlers mirror meta-file-system's response shape exactly:
 
 | Result | code | body |
 |---|---|---|
@@ -53,9 +53,9 @@ These three `/info/*` endpoints are an exception to the universal `code: 0 = suc
 | Not found | `40400` | `{code: 40400, message: "user not found"}` |
 | Invalid parameter | `40000` | `{code: 40000, message: "<param> is required"}` |
 
-The same three handlers are also mounted under `/metafile-indexer/api/info/*` so idchat can point its existing `metafileIndexerApi` URL (`<host>/metafile-indexer/api`) directly at meta-socket. The native `/api/info/*` paths are kept for new clients that follow meta-socket's standard prefix.
+The same three handlers are also mounted under `/metafile-indexer/api/info/*` so idchat can point its existing `metafileIndexerApi` URL (`<host>/metafile-indexer/api`) directly at metaso-p2p. The native `/api/info/*` paths are kept for new clients that follow metaso-p2p's standard prefix.
 
-All **other** meta-socket endpoints use `code: 0 = success`, matching idchat's `TalkApi` / `chat-notify` / `pushBase` clients. Native meta-socket clients use the `/api` prefix (`/api/group-chat/*`, `/api/push-base/*`); idchat compatibility aliases expose the same implemented handlers at `/chat-api/group-chat/*` and `/push-base/*`.
+All **other** metaso-p2p endpoints use `code: 0 = success`, matching idchat's `TalkApi` / `chat-notify` / `pushBase` clients. Native metaso-p2p clients use the `/api` prefix (`/api/group-chat/*`, `/api/push-base/*`); idchat compatibility aliases expose the same implemented handlers at `/chat-api/group-chat/*` and `/push-base/*`.
 
 ## 2. Group Chat (`/group-chat/*`)
 
@@ -113,7 +113,7 @@ The path table below omits the deployment prefix for readability.
 
 ## 3. Private Chat
 
-Native canonical prefix for new meta-socket clients: `/api/private-chat/*`
+Native canonical prefix for new metaso-p2p clients: `/api/private-chat/*`
 
 Historical group-chat compatibility prefix: `/api/group-chat/*`
 
@@ -194,5 +194,5 @@ and `D.txId` as the stable identity and de-duplication fields.
 ## 6. Health Check
 ```
 GET /healthz
-→ {"code": 0, "data": {"status": "ok", "service": "meta-socket", "version": "v1.0.0"}}
+→ {"code": 0, "data": {"status": "ok", "service": "metaso-p2p", "version": "v1.0.0"}}
 ```

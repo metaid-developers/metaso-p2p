@@ -5,11 +5,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/config"
-	"github.com/metaid-developers/meta-socket/internal/socket"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/socket"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // SetupRouter creates and configures the Gin router with all routes.
@@ -29,7 +29,7 @@ func SetupRouter(
 	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
 		RespSuccess(c, gin.H{
 			"status":  "ok",
-			"service": "meta-socket",
+			"service": "metaso-p2p",
 			"version": version,
 		})
 	})
@@ -51,7 +51,7 @@ func SetupRouter(
 		router.GET("/chat-api/group-chat/socket/stats", socketServer.HandleOnlineStats)
 	}
 
-	// Aggregator routes (mounted under /api/ prefix for native meta-socket clients).
+	// Aggregator routes (mounted under /api/ prefix for native metaso-p2p clients).
 	if aggRegistry != nil {
 		for _, a := range aggRegistry.All() {
 			a.RegisterRoutes(router.Group("/api"))
@@ -79,7 +79,7 @@ func SetupRouter(
 
 		// Also expose the userinfo aggregator under /metafile-indexer/api so
 		// idchat's `metafileIndexerApi` client (configured as
-		// `<metaFSBaseURL>/metafile-indexer/api`) can target meta-socket as a
+		// `<metaFSBaseURL>/metafile-indexer/api`) can target metaso-p2p as a
 		// drop-in replacement for the meta-file-system user info subset
 		// without any frontend code changes. Only `/info/*` routes are
 		// duplicated here; file upload / avatar content stay with

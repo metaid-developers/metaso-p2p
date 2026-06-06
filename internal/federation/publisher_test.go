@@ -50,7 +50,7 @@ func TestRegistryPayloadBuildsPublicURLsAndValidUntil(t *testing.T) {
 	if payload.SocketURL != "https://a.com/socket/socket.io" {
 		t.Fatalf("socketUrl: want derived socket URL got %q", payload.SocketURL)
 	}
-	if payload.PresenceURL != "https://a.com/.well-known/metasocket/presence" {
+	if payload.PresenceURL != "https://a.com/.well-known/metaso-p2p/presence" {
 		t.Fatalf("presenceUrl: want derived presence URL got %q", payload.PresenceURL)
 	}
 	if payload.PublicKey != mvcTestPublicKeyHex {

@@ -1,6 +1,6 @@
-# meta-socket configuration (TOML)
+# metaso-p2p configuration (TOML)
 #
-# All settings can also be set via META_SOCKET_* environment variables.
+# All settings can also be set via METASO_P2P_* environment variables.
 # Environment variables take precedence over values in this file.
 #
 # Default values shown below are the built-in defaults used when
@@ -11,16 +11,16 @@
 # ---------------------------------------------------------------------------
 [service]
 # Address the HTTP server listens on.
-# Env: META_SOCKET_HTTP_ADDR
+# Env: METASO_P2P_HTTP_ADDR
 httpAddr = ":8080"
 
 # Health check endpoint path (must start with "/").
-# Env: META_SOCKET_HEALTH_PATH
+# Env: METASO_P2P_HEALTH_PATH
 healthPath = "/healthz"
 
 # Maximum time to wait for in-flight requests during graceful shutdown.
 # Format: Go duration string (e.g. "10s", "30s").
-# Env: META_SOCKET_SHUTDOWN_TIMEOUT
+# Env: METASO_P2P_SHUTDOWN_TIMEOUT
 shutdownTimeout = "10s"
 
 # ---------------------------------------------------------------------------
@@ -29,52 +29,52 @@ shutdownTimeout = "10s"
 [socket]
 # Enable the Socket.IO server. When disabled, no real-time push or
 # connection handling is started.
-# Env: META_SOCKET_SOCKET_ENABLED
+# Env: METASO_P2P_SOCKET_ENABLED
 enabled = true
 
 # Primary Socket.IO path (must start with "/").
-# Env: META_SOCKET_SOCKET_PATH
+# Env: METASO_P2P_SOCKET_PATH
 primaryPath = "/socket/socket.io"
 
 # Legacy compatibility path (must start with "/").
-# Env: META_SOCKET_SOCKET_LEGACY_PATH
+# Env: METASO_P2P_SOCKET_LEGACY_PATH
 legacyPath = "/socket.io"
 
 # When true, group-chat room broadcast events (join/leave) are emitted.
-# Env: META_SOCKET_SOCKET_ROOM_BROADCAST_ENABLED
+# Env: METASO_P2P_SOCKET_ROOM_BROADCAST_ENABLED
 roomBroadcastEnabled = true
 
 # Maximum concurrent Socket.IO connections.
-# Env: META_SOCKET_SOCKET_MAX_CONNECTIONS
+# Env: METASO_P2P_SOCKET_MAX_CONNECTIONS
 maxConnections = 10000
 
 # Maximum "pc" type connections per user (metaid).
-# Env: META_SOCKET_SOCKET_MAX_PC_PER_USER
+# Env: METASO_P2P_SOCKET_MAX_PC_PER_USER
 maxPcPerUser = 3
 
 # Maximum "app" type connections per user (metaid).
-# Env: META_SOCKET_SOCKET_MAX_APP_PER_USER
+# Env: METASO_P2P_SOCKET_MAX_APP_PER_USER
 maxAppPerUser = 3
 
 # Interval between server-to-client pings.
 # Format: Go duration string (e.g. "2s").
-# Env: META_SOCKET_SOCKET_PING_INTERVAL
+# Env: METASO_P2P_SOCKET_PING_INTERVAL
 pingInterval = "2s"
 
 # How long the server waits for a pong before disconnecting.
 # Format: Go duration string (e.g. "5s").
-# Env: META_SOCKET_SOCKET_PING_TIMEOUT
+# Env: METASO_P2P_SOCKET_PING_TIMEOUT
 pingTimeout = "5s"
 
 # Allow Engine.IO v3 clients to connect (needed by idchat).
-# Env: META_SOCKET_SOCKET_ALLOW_EIO3
+# Env: METASO_P2P_SOCKET_ALLOW_EIO3
 allowEio3 = true
 
 # Optional extra auth key for push endpoints.
 # When set, the X-Signature header on push endpoints must match
 # SHA256("metaso.network") and X-Public-Key must match this value.
 # Leave empty to skip push auth verification (test/development mode).
-# Env: META_SOCKET_SOCKET_EXTRA_PUSH_AUTH_KEY
+# Env: METASO_P2P_SOCKET_EXTRA_PUSH_AUTH_KEY
 extraPushAuthKey = ""
 
 # ---------------------------------------------------------------------------
@@ -83,11 +83,11 @@ extraPushAuthKey = ""
 [pebble]
 # Enable PebbleDB persistent storage. When disabled, all data is
 # in-memory only and lost on restart.
-# Env: META_SOCKET_PEBBLE_ENABLED
+# Env: METASO_P2P_PEBBLE_ENABLED
 enabled = true
 
 # Directory for PebbleDB data files. Created if it does not exist.
-# Env: META_SOCKET_PEBBLE_DATA_DIR
+# Env: METASO_P2P_PEBBLE_DATA_DIR
 dataDir = "./data/pebble"
 
 # ---------------------------------------------------------------------------
@@ -95,11 +95,11 @@ dataDir = "./data/pebble"
 # ---------------------------------------------------------------------------
 [cache]
 # Maximum number of entries in the L1 in-memory LRU cache.
-# Env: META_SOCKET_CACHE_MAX_ENTRIES (int)
+# Env: METASO_P2P_CACHE_MAX_ENTRIES (int)
 maxEntries = 10000
 
 # Default TTL (time-to-live) in seconds for cached entries.
-# Env: META_SOCKET_CACHE_DEFAULT_TTL_SECONDS (int)
+# Env: METASO_P2P_CACHE_DEFAULT_TTL_SECONDS (int)
 defaultTtlSeconds = 300
 
 # ---------------------------------------------------------------------------
@@ -108,23 +108,23 @@ defaultTtlSeconds = 300
 [profile]
 # Enable profile resolution. When disabled, user info endpoints return
 # empty data.
-# Env: META_SOCKET_PROFILE_ENABLED
+# Env: METASO_P2P_PROFILE_ENABLED
 enabled = true
 
 # Resolution mode:
 #   "local-first"  – query local indexer first, fall back to remote.
 #   "remote-only"  – always query the remote base URL.
 #   "local-only"   – never query remote.
-# Env: META_SOCKET_PROFILE_MODE
+# Env: METASO_P2P_PROFILE_MODE
 mode = "local-first"
 
 # Base URL of the remote profile service (used in remote / fallback modes).
-# Env: META_SOCKET_PROFILE_REMOTE_BASE_URL
+# Env: METASO_P2P_PROFILE_REMOTE_BASE_URL
 remoteBaseURL = ""
 
 # When mode is "local-first" and local lookup returns nothing, whether to
 # try the remote service.
-# Env: META_SOCKET_PROFILE_ALLOW_REMOTE_FALLBACK
+# Env: METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK
 allowRemoteFallback = true
 
 # ---------------------------------------------------------------------------
@@ -132,23 +132,23 @@ allowRemoteFallback = true
 # ---------------------------------------------------------------------------
 [groupChat]
 # Enable message migration endpoints (copy messages between PebbleDB stores).
-# Env: META_SOCKET_GROUPCHAT_MIGRATION_ENABLED
+# Env: METASO_P2P_GROUPCHAT_MIGRATION_ENABLED
 migrationEnabled = true
 
 # Enable backup endpoints.
-# Env: META_SOCKET_GROUPCHAT_BACKUP_ENABLED
+# Env: METASO_P2P_GROUPCHAT_BACKUP_ENABLED
 backupEnabled = false
 
 # Enable lucky-bag feature (P0 exclusion – disabled by default).
-# Env: META_SOCKET_GROUPCHAT_LUCKYBAG_ENABLED
+# Env: METASO_P2P_GROUPCHAT_LUCKYBAG_ENABLED
 luckyBagEnabled = false
 
 # Enable gRPC endpoints (P0 exclusion – disabled by default).
-# Env: META_SOCKET_GROUPCHAT_GRPC_ENABLED
+# Env: METASO_P2P_GROUPCHAT_GRPC_ENABLED
 grpcEnabled = false
 
 # Enable heavy/slow API endpoints (P0 exclusion – disabled by default).
-# Env: META_SOCKET_GROUPCHAT_HEAVY_API_ENABLED
+# Env: METASO_P2P_GROUPCHAT_HEAVY_API_ENABLED
 heavyApiEnabled = false
 
 # ---------------------------------------------------------------------------
@@ -156,88 +156,88 @@ heavyApiEnabled = false
 # ---------------------------------------------------------------------------
 [federation]
 # Enable federated presence publishing and peer discovery.
-# Env: META_SOCKET_FEDERATION_ENABLED
+# Env: METASO_P2P_FEDERATION_ENABLED
 enabled = false
 
 # Network label advertised for this node.
-# Env: META_SOCKET_FEDERATION_NETWORK
+# Env: METASO_P2P_FEDERATION_NETWORK
 network = "mvc-mainnet"
 
 # Private key used to sign this node's registry and presence payloads.
 # Required when federation is enabled.
-# Env: META_SOCKET_FEDERATION_NODE_PRIVATE_KEY
+# Env: METASO_P2P_FEDERATION_NODE_PRIVATE_KEY
 nodePrivateKey = ""
 
 # Public HTTPS base URL where other nodes can reach this server.
 # Required when federation is enabled.
-# Env: META_SOCKET_FEDERATION_PUBLIC_BASE_URL
+# Env: METASO_P2P_FEDERATION_PUBLIC_BASE_URL
 publicBaseUrl = ""
 
 # MANAPI path-list URL template used for node registry discovery.
 # Must contain "{protocol-path}" and "{size}" when federation is enabled.
-# Env: META_SOCKET_FEDERATION_MANAPI_BASE_URL
+# Env: METASO_P2P_FEDERATION_MANAPI_BASE_URL
 manapiBaseUrl = "https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"
 
 # Metalet API base URL used for wallet/signing-adjacent node workflows.
 # Required when federation is enabled.
-# Env: META_SOCKET_FEDERATION_METALET_BASE_URL
+# Env: METASO_P2P_FEDERATION_METALET_BASE_URL
 metaletBaseUrl = "https://www.metalet.space"
 
 # MetaID protocol path where this node publishes registry records.
 # Must start with "/" when federation is enabled.
-# Env: META_SOCKET_FEDERATION_REGISTRY_PATH
-registryPath = "/protocols/metasocket-node"
+# Env: METASO_P2P_FEDERATION_REGISTRY_PATH
+registryPath = "/protocols/metaso-p2p-node"
 
 # HTTP path for this node's presence snapshot.
 # Must start with "/" when federation is enabled.
-# Env: META_SOCKET_FEDERATION_PRESENCE_PATH
-presencePath = "/.well-known/metasocket/presence"
+# Env: METASO_P2P_FEDERATION_PRESENCE_PATH
+presencePath = "/.well-known/metaso-p2p/presence"
 
 # How often this node renews its registry record.
 # Format: Go duration string (e.g. "6h").
-# Env: META_SOCKET_FEDERATION_REGISTRY_RENEW_INTERVAL
+# Env: METASO_P2P_FEDERATION_REGISTRY_RENEW_INTERVAL
 registryRenewInterval = "6h"
 
 # How long registry records should be treated as valid.
 # Format: Go duration string (e.g. "24h").
-# Env: META_SOCKET_FEDERATION_REGISTRY_VALID_FOR
+# Env: METASO_P2P_FEDERATION_REGISTRY_VALID_FOR
 registryValidFor = "24h"
 
 # How often peer discovery runs.
 # Format: Go duration string (e.g. "5m").
-# Env: META_SOCKET_FEDERATION_DISCOVERY_INTERVAL
+# Env: METASO_P2P_FEDERATION_DISCOVERY_INTERVAL
 discoveryInterval = "5m"
 
 # How often remote presence snapshots are pulled.
 # Format: Go duration string (e.g. "20s").
-# Env: META_SOCKET_FEDERATION_PRESENCE_PULL_INTERVAL
+# Env: METASO_P2P_FEDERATION_PRESENCE_PULL_INTERVAL
 presencePullInterval = "20s"
 
 # Time-to-live for imported remote presence entries.
 # Format: Go duration string (e.g. "90s").
-# Env: META_SOCKET_FEDERATION_PRESENCE_TTL
+# Env: METASO_P2P_FEDERATION_PRESENCE_TTL
 presenceTTL = "90s"
 
 # Timeout for outbound federation HTTP requests.
 # Format: Go duration string (e.g. "3s").
-# Env: META_SOCKET_FEDERATION_REQUEST_TIMEOUT
+# Env: METASO_P2P_FEDERATION_REQUEST_TIMEOUT
 requestTimeout = "3s"
 
 # Default presence scope for this node. Allowed values: "local", "global".
-# Env: META_SOCKET_FEDERATION_DEFAULT_SCOPE
+# Env: METASO_P2P_FEDERATION_DEFAULT_SCOPE
 defaultScope = "global"
 
 # Allow non-HTTPS federation URLs for development or private networks.
-# Env: META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP
+# Env: METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP
 allowInsecureHttp = false
 
 # Maximum number of peers to retain. 0 means no explicit config limit yet.
-# Env: META_SOCKET_FEDERATION_MAX_PEERS
+# Env: METASO_P2P_FEDERATION_MAX_PEERS
 maxPeers = 0
 
 # Maximum accepted remote presence snapshot size in bytes. 0 means no
 # explicit config limit yet.
-# Env: META_SOCKET_FEDERATION_MAX_SNAPSHOT_BYTES
+# Env: METASO_P2P_FEDERATION_MAX_SNAPSHOT_BYTES
 maxSnapshotBytes = 0
 
 # ---------------------------------------------------------------------------
@@ -249,37 +249,37 @@ maxSnapshotBytes = 0
 # ---------------------------------------------------------------------------
 [blockIndex]
 # Master toggle for the entire block-indexing engine.
-# Env: META_SOCKET_BLOCK_INDEX_ENABLED
+# Env: METASO_P2P_BLOCK_INDEX_ENABLED
 enabled = false
 
   # --- Bitcoin (BTC) ---
   [blockIndex.btc]
   # Enable BTC chain indexing.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_ENABLED
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_ENABLED
   enabled = false
 
   # BTC JSON-RPC endpoint (host:port).
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HOST
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_RPC_HOST
   rpcHost = "127.0.0.1:8332"
 
   # BTC RPC username.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_USER
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_RPC_USER
   rpcUser = ""
 
   # BTC RPC password.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_PASS
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_RPC_PASS
   rpcPass = ""
 
   # Use HTTP POST mode for RPC requests (vs. standard JSON-RPC).
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_HTTP_POST_MODE
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_RPC_HTTP_POST_MODE
   rpcHttpPostMode = true
 
   # Disable TLS for the RPC connection.
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_RPC_DISABLE_TLS
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_RPC_DISABLE_TLS
   rpcDisableTls = true
 
   # Block height to start scanning from (0 = current chain tip).
-  # Env: META_SOCKET_BLOCK_INDEX_BTC_INITIAL_HEIGHT
+  # Env: METASO_P2P_BLOCK_INDEX_BTC_INITIAL_HEIGHT
   initialHeight = 0
 
   # --- MicroVision Chain (MVC) ---
@@ -291,13 +291,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
-  # Env: META_SOCKET_BLOCK_INDEX_MVC_ENABLED,
-  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_HOST,
-  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_USER,
-  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_PASS,
-  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_BLOCK_INDEX_MVC_RPC_DISABLE_TLS,
-  #      META_SOCKET_BLOCK_INDEX_MVC_INITIAL_HEIGHT
+  # Env: METASO_P2P_BLOCK_INDEX_MVC_ENABLED,
+  #      METASO_P2P_BLOCK_INDEX_MVC_RPC_HOST,
+  #      METASO_P2P_BLOCK_INDEX_MVC_RPC_USER,
+  #      METASO_P2P_BLOCK_INDEX_MVC_RPC_PASS,
+  #      METASO_P2P_BLOCK_INDEX_MVC_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_BLOCK_INDEX_MVC_RPC_DISABLE_TLS,
+  #      METASO_P2P_BLOCK_INDEX_MVC_INITIAL_HEIGHT
 
   # --- Dogecoin (DOGE) ---
   [blockIndex.doge]
@@ -308,13 +308,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
-  # Env: META_SOCKET_BLOCK_INDEX_DOGE_ENABLED,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_HOST,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_USER,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_PASS,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_RPC_DISABLE_TLS,
-  #      META_SOCKET_BLOCK_INDEX_DOGE_INITIAL_HEIGHT
+  # Env: METASO_P2P_BLOCK_INDEX_DOGE_ENABLED,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_RPC_HOST,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_RPC_USER,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_RPC_PASS,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_RPC_DISABLE_TLS,
+  #      METASO_P2P_BLOCK_INDEX_DOGE_INITIAL_HEIGHT
 
   # --- OPCAT ---
   [blockIndex.opcat]
@@ -325,13 +325,13 @@ enabled = false
   rpcHttpPostMode = true
   rpcDisableTls = true
   initialHeight = 0
-  # Env: META_SOCKET_BLOCK_INDEX_OPCAT_ENABLED,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HOST,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_USER,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_PASS,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_RPC_DISABLE_TLS,
-  #      META_SOCKET_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT
+  # Env: METASO_P2P_BLOCK_INDEX_OPCAT_ENABLED,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_RPC_HOST,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_RPC_USER,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_RPC_PASS,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_RPC_DISABLE_TLS,
+  #      METASO_P2P_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT
 
 # ---------------------------------------------------------------------------
 # [zmq]  ZeroMQ mempool monitoring
@@ -342,40 +342,40 @@ enabled = false
 # ---------------------------------------------------------------------------
 [zmq]
 # Master toggle for ZMQ mempool monitoring.
-# Env: META_SOCKET_ZMQ_ENABLED
+# Env: METASO_P2P_ZMQ_ENABLED
 enabled = false
 
   # --- Bitcoin (BTC) ZMQ ---
   [zmq.btc]
   # Enable BTC mempool ZMQ subscription.
-  # Env: META_SOCKET_ZMQ_BTC_ENABLED
+  # Env: METASO_P2P_ZMQ_BTC_ENABLED
   enabled = false
 
   # ZMQ PUB endpoint address (e.g. "tcp://127.0.0.1:28332").
-  # Env: META_SOCKET_ZMQ_BTC_ENDPOINT
+  # Env: METASO_P2P_ZMQ_BTC_ENDPOINT
   endpoint = ""
 
   # ZMQ topic to subscribe to (e.g. "rawtx", "hashblock").
-  # Env: META_SOCKET_ZMQ_BTC_TOPIC
+  # Env: METASO_P2P_ZMQ_BTC_TOPIC
   topic = "rawtx"
 
   # Fallback JSON-RPC host used by the indexer when ZMQ drops events.
-  # Env: META_SOCKET_ZMQ_BTC_RPC_HOST
+  # Env: METASO_P2P_ZMQ_BTC_RPC_HOST
   rpcHost = ""
 
   # RPC credentials for the ZMQ fallback host.
-  # Env: META_SOCKET_ZMQ_BTC_RPC_USER
+  # Env: METASO_P2P_ZMQ_BTC_RPC_USER
   rpcUser = ""
 
-  # Env: META_SOCKET_ZMQ_BTC_RPC_PASS
+  # Env: METASO_P2P_ZMQ_BTC_RPC_PASS
   rpcPass = ""
 
   # Use HTTP POST mode for RPC requests.
-  # Env: META_SOCKET_ZMQ_BTC_RPC_HTTP_POST_MODE
+  # Env: METASO_P2P_ZMQ_BTC_RPC_HTTP_POST_MODE
   rpcHttpPostMode = true
 
   # Disable TLS for the RPC connection.
-  # Env: META_SOCKET_ZMQ_BTC_RPC_DISABLE_TLS
+  # Env: METASO_P2P_ZMQ_BTC_RPC_DISABLE_TLS
   rpcDisableTls = true
 
   # --- MicroVision Chain (MVC) ZMQ ---
@@ -388,11 +388,11 @@ enabled = false
   rpcPass = ""
   rpcHttpPostMode = true
   rpcDisableTls = true
-  # Env: META_SOCKET_ZMQ_MVC_ENABLED, META_SOCKET_ZMQ_MVC_ENDPOINT,
-  #      META_SOCKET_ZMQ_MVC_TOPIC, META_SOCKET_ZMQ_MVC_RPC_HOST,
-  #      META_SOCKET_ZMQ_MVC_RPC_USER, META_SOCKET_ZMQ_MVC_RPC_PASS,
-  #      META_SOCKET_ZMQ_MVC_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_ZMQ_MVC_RPC_DISABLE_TLS
+  # Env: METASO_P2P_ZMQ_MVC_ENABLED, METASO_P2P_ZMQ_MVC_ENDPOINT,
+  #      METASO_P2P_ZMQ_MVC_TOPIC, METASO_P2P_ZMQ_MVC_RPC_HOST,
+  #      METASO_P2P_ZMQ_MVC_RPC_USER, METASO_P2P_ZMQ_MVC_RPC_PASS,
+  #      METASO_P2P_ZMQ_MVC_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_ZMQ_MVC_RPC_DISABLE_TLS
 
   # --- Dogecoin (DOGE) ZMQ ---
   [zmq.doge]
@@ -404,11 +404,11 @@ enabled = false
   rpcPass = ""
   rpcHttpPostMode = true
   rpcDisableTls = true
-  # Env: META_SOCKET_ZMQ_DOGE_ENABLED, META_SOCKET_ZMQ_DOGE_ENDPOINT,
-  #      META_SOCKET_ZMQ_DOGE_TOPIC, META_SOCKET_ZMQ_DOGE_RPC_HOST,
-  #      META_SOCKET_ZMQ_DOGE_RPC_USER, META_SOCKET_ZMQ_DOGE_RPC_PASS,
-  #      META_SOCKET_ZMQ_DOGE_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_ZMQ_DOGE_RPC_DISABLE_TLS
+  # Env: METASO_P2P_ZMQ_DOGE_ENABLED, METASO_P2P_ZMQ_DOGE_ENDPOINT,
+  #      METASO_P2P_ZMQ_DOGE_TOPIC, METASO_P2P_ZMQ_DOGE_RPC_HOST,
+  #      METASO_P2P_ZMQ_DOGE_RPC_USER, METASO_P2P_ZMQ_DOGE_RPC_PASS,
+  #      METASO_P2P_ZMQ_DOGE_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_ZMQ_DOGE_RPC_DISABLE_TLS
 
   # --- OPCAT ZMQ ---
   [zmq.opcat]
@@ -420,8 +420,8 @@ enabled = false
   rpcPass = ""
   rpcHttpPostMode = true
   rpcDisableTls = true
-  # Env: META_SOCKET_ZMQ_OPCAT_ENABLED, META_SOCKET_ZMQ_OPCAT_ENDPOINT,
-  #      META_SOCKET_ZMQ_OPCAT_TOPIC, META_SOCKET_ZMQ_OPCAT_RPC_HOST,
-  #      META_SOCKET_ZMQ_OPCAT_RPC_USER, META_SOCKET_ZMQ_OPCAT_RPC_PASS,
-  #      META_SOCKET_ZMQ_OPCAT_RPC_HTTP_POST_MODE,
-  #      META_SOCKET_ZMQ_OPCAT_RPC_DISABLE_TLS
+  # Env: METASO_P2P_ZMQ_OPCAT_ENABLED, METASO_P2P_ZMQ_OPCAT_ENDPOINT,
+  #      METASO_P2P_ZMQ_OPCAT_TOPIC, METASO_P2P_ZMQ_OPCAT_RPC_HOST,
+  #      METASO_P2P_ZMQ_OPCAT_RPC_USER, METASO_P2P_ZMQ_OPCAT_RPC_PASS,
+  #      METASO_P2P_ZMQ_OPCAT_RPC_HTTP_POST_MODE,
+  #      METASO_P2P_ZMQ_OPCAT_RPC_DISABLE_TLS

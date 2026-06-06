@@ -19,7 +19,7 @@ import (
 //   - "/content/<id>"     → "<baseURL>/<id>" (matches userinfo Avatar)
 //   - anything else       → "<baseURL>/<input>" (assume bare pin id)
 //
-// baseURL is configurable via META_SOCKET_ASSET_BASE_URL; the value is
+// baseURL is configurable via METASO_P2P_ASSET_BASE_URL; the value is
 // passed through config.BotHubConfig.AssetBaseURL. A trailing slash on
 // the base URL is tolerated.
 type AssetResolver struct {
@@ -58,7 +58,7 @@ func (r *AssetResolver) BaseURL() string {
 //
 // When baseURL is empty the function returns the input unchanged — this is
 // the test-time default and is safer than silently returning a partial
-// URL. Production deployments must configure META_SOCKET_ASSET_BASE_URL
+// URL. Production deployments must configure METASO_P2P_ASSET_BASE_URL
 // (config.Default sets it to the documented recommendation).
 func (r *AssetResolver) Resolve(asset string) string {
 	if r == nil {

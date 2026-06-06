@@ -7,20 +7,20 @@ import (
 	"log"
 	"strings"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // Pebble key layout for rating data
 //
-//   rating_pin:<chainName>:<ratingPinId>            → RatingPin JSON
-//                                                    (the raw rating record;
-//                                                    used as the dedup source
-//                                                    of truth and for future
-//                                                    "latest ratings" reads)
-//   rating_agg:<chainName>:<sourceServicePinId>     → RatingAggregate JSON
-//                                                    (sum / count, derived
-//                                                    incrementally — avg is
-//                                                    computed on read)
+//	rating_pin:<chainName>:<ratingPinId>            → RatingPin JSON
+//	                                                 (the raw rating record;
+//	                                                 used as the dedup source
+//	                                                 of truth and for future
+//	                                                 "latest ratings" reads)
+//	rating_agg:<chainName>:<sourceServicePinId>     → RatingAggregate JSON
+//	                                                 (sum / count, derived
+//	                                                 incrementally — avg is
+//	                                                 computed on read)
 const (
 	keyRatingPin = "rating_pin:"
 	keyRatingAgg = "rating_agg:"

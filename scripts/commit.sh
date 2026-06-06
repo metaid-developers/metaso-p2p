@@ -4,7 +4,7 @@ set -e
 
 git add -A
 git commit -m "$(cat <<'EOF'
-feat: meta-socket v2 architecture + goal-driven development docs
+feat: metaso-p2p v2 architecture + goal-driven development docs
 
 Clean rewrite. 14 Go source files (Phase 1 skeleton) + 3 docs.
 

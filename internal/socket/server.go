@@ -9,9 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 	sio "github.com/zishang520/socket.io/v2/socket"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/config"
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 // Server wraps the Socket.IO server with connection management and push capabilities.

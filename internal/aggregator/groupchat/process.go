@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // Dispatches pins to the appropriate handler based on pin.Path.

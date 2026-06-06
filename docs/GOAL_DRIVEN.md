@@ -1,8 +1,8 @@
-# meta-socket v1 — Goal-Driven 开发主文档
+# metaso-p2p v1 — Goal-Driven 开发主文档
 
 ## 总目标（Goal）
 
-构建 meta-socket v1：一个纯 PebbleDB、模块化聚合、多链索引的 MetaID 协议中间件。完成后 idchat 可直接对接使用（仅修改配置文件中的 URL，不改动任何业务逻辑源代码）。
+构建 metaso-p2p v1：一个纯 PebbleDB、模块化聚合、多链索引的 MetaID 协议中间件。完成后 idchat 可直接对接使用（仅修改配置文件中的 URL，不改动任何业务逻辑源代码）。
 
 ## 总验收标准（Master Criteria）
 
@@ -10,7 +10,7 @@ master agent 在以下条件**全部满足**时判定开发完成：
 
 1. **编译通过**：`go build ./...` 零错误零警告（Go 1.21+）。
 2. **单元测试全绿**：`go test ./...` 全部 PASS，覆盖率 ≥ 60%。
-3. **idchat 对接可用**：idchat 配置指向 meta-socket，完成以下 10 个场景无报错：
+3. **idchat 对接可用**：idchat 配置指向 metaso-p2p，完成以下 10 个场景无报错：
    a. 连接 Socket.IO → 收到 `heartbeat_ack`
    b. 群聊消息（链上确认后）→ 群成员收到 `WS_SERVER_NOTIFY_GROUP_CHAT`
    c. 私聊消息 → 对方收到 `WS_SERVER_NOTIFY_PRIVATE_CHAT`
@@ -22,7 +22,7 @@ master agent 在以下条件**全部满足**时判定开发完成：
    i. 解除屏蔽 → `/push-base/v1/push/remove_blocked_chat` 成功，列表更新
    j. 搜索用户 → `/group-chat/search-users?query=X` 返回匹配列表
 4. **HTTP 响应格式兼容**：所有端点返回 `{"code": 0, "data": ...}` 格式（成功），或 `{"code": <non-zero>, "message": "..."}`（错误）。404 场景返回 `{"code": 1, "message": "not found"}`。不允许返回裸 HTML、纯文本、或空 body。
-5. **数据持久化**：重启 meta-socket 后，Pebble 中数据不丢失，索引高度从断点恢复继续扫描。
+5. **数据持久化**：重启 metaso-p2p 后，Pebble 中数据不丢失，索引高度从断点恢复继续扫描。
 6. **无外部数据库**：仅需 PebbleDB 嵌入式引擎。不需要 MongoDB、MySQL、Redis 或任何外部数据库进程。
 7. **多链就绪**：BTC 链完整可用（区块扫描 + ZMQ mempool）。MVC/DOGE/OPCAT 的 Chain+Indexer 接口已实现且编译通过。
 
@@ -57,7 +57,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 **当前状态**：已完成。14 个 Go 源文件就位。main.go 仅依赖 Phase 1 包，可独立编译。已确认无循环导入。
 
 **包含的文件**：
-- `cmd/meta-socket/main.go` — 入口（仅依赖 Phase 1 包）
+- `cmd/metaso-p2p/main.go` — 入口（仅依赖 Phase 1 包）
 - `internal/storage/pebble.go` — PebbleStore
 - `internal/cache/cache.go` — 两级缓存
 - `internal/chain/adapter.go` — Chain + Indexer 接口
@@ -85,7 +85,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 - `internal/socket/presence.go` — 在线状态查询
 - `internal/socket/server_test.go` — Socket 测试
 - `internal/api/router.go` — 中央 Gin 路由
-- `cmd/meta-socket/main.go` — 集成 socket server
+- `cmd/metaso-p2p/main.go` — 集成 socket server
 
 **验收条款**：
 
@@ -104,7 +104,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 
 **参考代码**：
 - `show-now-tmp/common/socket_util/socket_manager.go`（连接管理逻辑，文件位于 show-now-tmp 仓库）
-- 旧 meta-socket 的 socket 实现已随 cleanup 删除，参考 show-now-tmp 即可
+- 旧 metaso-p2p 的 socket 实现已随 cleanup 删除，参考 show-now-tmp 即可
 
 ---
 
@@ -118,7 +118,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 - `internal/aggregator/userinfo/module.go` — 根据实际 Pin 格式微调
 - `pkg/idaddress/` — 从 show-now-tmp 移植 GlobalMetaId 编解码（`idaddress.go`, `bech32.go`, `converter.go`）
 - `internal/api/router.go` — 注册 UserInfo 路由
-- `cmd/meta-socket/main.go` — 集成索引引擎启动
+- `cmd/metaso-p2p/main.go` — 集成索引引擎启动
 - `internal/chain/bitcoin/indexer_test.go` — BTC CatchPins 单元测试
 - `internal/indexer/engine_test.go` — 引擎集成测试
 
@@ -239,9 +239,9 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 
 **验收条款**：
 
-- [ ] **Docker 构建**：`docker build -t meta-socket .` 成功。最终镜像基于 `scratch` 或 `alpine`，大小 < 50MB（实测 arm64 镜像约 40MB，主要来自 Go 静态二进制 ~30MB；进一步压缩需 UPX 或 scratch base，留待后续优化）。
-- [ ] **配置文档**：按 `DEPLOY.md` 操作，5 分钟内能在新机器上启动 meta-socket。
-- [ ] **idchat 对接**：修改 idchat 配置指向 meta-socket。完成 Master Criteria 中全部 10 个场景无报错。
+- [ ] **Docker 构建**：`docker build -t metaso-p2p .` 成功。最终镜像基于 `scratch` 或 `alpine`，大小 < 50MB（实测 arm64 镜像约 40MB，主要来自 Go 静态二进制 ~30MB；进一步压缩需 UPX 或 scratch base，留待后续优化）。
+- [ ] **配置文档**：按 `DEPLOY.md` 操作，5 分钟内能在新机器上启动 metaso-p2p。
+- [ ] **idchat 对接**：修改 idchat 配置指向 metaso-p2p。完成 Master Criteria 中全部 10 个场景无报错。
 - [ ] **idchat 改动范围**：允许修改 idchat 的 `config.json`（URL 字段）和环境变量。**禁止**修改 idchat 的任何 `.ts` / `.tsx` / `.vue` / `.js` 源文件。
 - [ ] **idchat 配置清单**：`docs/IDCHAT_CONFIG_CHANGE.md` 逐一列出需要修改的配置项及其新值。
 - [ ] **多链独立启停**：修改配置可分别启用/禁用每条链的索引和 ZMQ，不互相影响。
@@ -254,7 +254,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 2. **TDD**：先写测试，后写实现。测试必须在 `go test` 中 PASS。
 3. **提交附带验收报告**：在 commit message 中列出本 Phase 所有验收条款及其完成状态（勾选或注明 `SKIP` 及原因）。
 4. **不破坏已有接口**：不修改已通过验收的模块的公开接口。如需修改，先在 commit message 中说明原因，供 master agent 评估。
-5. **适配 meta-socket 架构**：参考代码标注在验收条款中。subagent 必须适配到 PebbleDB + 事件总线 + Aggregator 接口，不可直接复制 show-now-tmp 的 MongoDB 调用或回调模式。
+5. **适配 metaso-p2p 架构**：参考代码标注在验收条款中。subagent 必须适配到 PebbleDB + 事件总线 + Aggregator 接口，不可直接复制 show-now-tmp 的 MongoDB 调用或回调模式。
 6. **固定参考 commit**：show-now-tmp 参考 commit `1643a1a`，man-p2p 参考 commit `HEAD`（截至 2026-05）。meta-file-system 参考 commit `HEAD`。
 
 ## Master Agent 工作规范
@@ -274,7 +274,7 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 **关键设计原则**：
 - 聚合端只输出声明事实和可验证统计，不输出 `canOrder` / `available` / `disabledReason` 等动作许可裁决字段。
 - v1 强制同链版本链：create/modify/revoke 必须在同一 `chainName` 下；跨链 modify/revoke 等协议层补 `originalChainName` 后再支持。
-- 走 meta-socket 主体响应约定（`code=0` success，错误码 `40000/40400/50000`），不复用 `/api/info/*` 的 `code=1` 兼容模式。
+- 走 metaso-p2p 主体响应约定（`code=0` success，错误码 `40000/40400/50000`），不复用 `/api/info/*` 的 `code=1` 兼容模式。
 
 **Milestone（每个独立 commit + buzz）**：
 
@@ -284,12 +284,12 @@ Phase 4（GroupChat）的 Socket 推送验收需要 Phase 2（Socket）完成。
 | M1 | `internal/aggregator/skillservice/` 模块骨架；索引 `/protocols/skill-service`；`originalId` 同链折叠；PebbleDB 持久化当前服务视图 | 构造同链 create+modify+revoke pin → Pebble 中只剩 latest；revoke 默认不可见；缺失 `originalId` 走 fallback；跨链 originalId 不折叠并记 fallback 日志 |
 | M2 | provider profile 接入；in-process 读 `userinfo` 聚合；补 `providerName/providerAvatar/providerChatPubkey` | request path 不调外部 manapi；profile 缺失透传 null 不转裁决码 |
 | M3 | `/protocols/skill-service-rate` 索引与评分聚合；avg/count；`serviceID` 反查归一到 `sourceServicePinId` | 单测覆盖 source id / current id / 旧版本 id 三种 rating 输入 |
-| M4 | asset URL 解析；`META_SOCKET_ASSET_BASE_URL` 配置 | serviceIcon/providerAvatar 都返回可加载 URL；已是 http(s) URL 时原样透传 |
+| M4 | asset URL 解析；`METASO_P2P_ASSET_BASE_URL` 配置 | serviceIcon/providerAvatar 都返回可加载 URL；已是 http(s) URL 时原样透传 |
 | M5 | `GET /api/bot-hub/skill-service/list`；filter/sort/cursor paginate；错误码 envelope；`code=0 success` | 集成测试覆盖筛选、排序、分页、错误 code、`includeInactive` 边界 |
 | M6 | `GET /api/bot-hub/skill-service/detail/:serviceId`；`service` + `provider` 字段；`mrc20Ticker/Id` MRC20 路径 | 集成测试覆盖 currentPinId / sourceServicePinId 查询、缺失声明字段透传、MRC20 详情；不返回动作许可判断 |
 
 **第一阶段交付到 M6**。ratings 分页 / revisions 分页 / 订单统计 / 退款风险 / relatedServices / request schema 留到后续，明确产品需要再做。
 
 **前置依赖**：
-- `cmd/meta-socket/main.go` 必须 wire MVC indexer 才能真链验证（M5/M6 集成测试前补即可，M1-M4 用构造的 PIN 数据走单测）。
+- `cmd/metaso-p2p/main.go` 必须 wire MVC indexer 才能真链验证（M5/M6 集成测试前补即可，M1-M4 用构造的 PIN 数据走单测）。
 - skill-service 协议在 `internal/aggregator/` 注册顺序：现有 4 个 aggregator 之后追加 `skillservice.Aggregator`。

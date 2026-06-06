@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 type fakeLocalReader struct {
@@ -71,7 +71,7 @@ func TestSnapshotBuildsDeterministicLocalPresenceSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	want := `{"protocol":"metasocket-presence","version":"1.0.0","nodeId":"node-a","generatedAt":1710000001000,"ttlSeconds":30,"sequence":7,"items":[{"metaid":"meta-1","type":"pc","connectedAt":1710000000000,"lastSeenAt":1710000000500}],"signature":""}`
+	want := `{"protocol":"metaso-p2p-presence","version":"1.0.0","nodeId":"node-a","generatedAt":1710000001000,"ttlSeconds":30,"sequence":7,"items":[{"metaid":"meta-1","type":"pc","connectedAt":1710000000000,"lastSeenAt":1710000000500}],"signature":""}`
 	if string(raw) != want {
 		t.Fatalf("unexpected snapshot json:\nwant: %s\n got: %s", want, raw)
 	}

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 const (
@@ -26,7 +26,7 @@ func TestCanonicalSnapshotPayloadExcludesSignature(t *testing.T) {
 	if strings.Contains(string(payload), "signature") || strings.Contains(string(payload), "must-not-be-signed") {
 		t.Fatalf("canonical payload included signature data: %s", payload)
 	}
-	want := `{"protocol":"metasocket-presence","version":"1.0.0","nodeId":"node-a","generatedAt":1710000001000,"ttlSeconds":30,"sequence":7,"items":[{"metaid":"meta-1","type":"pc","connectedAt":1710000000000,"lastSeenAt":1710000000500}]}`
+	want := `{"protocol":"metaso-p2p-presence","version":"1.0.0","nodeId":"node-a","generatedAt":1710000001000,"ttlSeconds":30,"sequence":7,"items":[{"metaid":"meta-1","type":"pc","connectedAt":1710000000000,"lastSeenAt":1710000000500}]}`
 	if string(payload) != want {
 		t.Fatalf("canonical payload:\nwant: %s\n got: %s", want, payload)
 	}

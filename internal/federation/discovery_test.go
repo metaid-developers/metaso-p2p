@@ -66,7 +66,7 @@ func TestDiscoveryExpandsDefaultTemplateAndAcceptsMANAPIEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("store should contain accepted peer %s", nodeAID)
 	}
-	if stored.PresenceURL != "https://node-a.example/.well-known/metasocket/presence" {
+	if stored.PresenceURL != "https://node-a.example/.well-known/metaso-p2p/presence" {
 		t.Fatalf("stored presenceUrl: got %q", stored.PresenceURL)
 	}
 	stored.Capabilities[0] = "mutated"
@@ -186,9 +186,9 @@ func TestDiscoveryFiltersPinsDeduplicatesNewestAndAppliesRemovals(t *testing.T) 
 	store.UpsertPeer(expiredPeer)
 
 	oldDupe := discoveryRegistryPayload(t, "node-dupe", now)
-	oldDupe.PresenceURL = "https://old.example/.well-known/metasocket/presence"
+	oldDupe.PresenceURL = "https://old.example/.well-known/metaso-p2p/presence"
 	newDupe := discoveryRegistryPayload(t, "node-dupe", now)
-	newDupe.PresenceURL = "https://new.example/.well-known/metasocket/presence"
+	newDupe.PresenceURL = "https://new.example/.well-known/metaso-p2p/presence"
 	expired := discoveryRegistryPayload(t, "node-expired", now)
 	expired.ValidUntil = now.Add(-time.Second).UnixMilli()
 
@@ -450,11 +450,11 @@ func TestDiscoveryRejectsHTTPPresenceURLUnlessAllowedOrLocalhost(t *testing.T) {
 		allowHTTP    bool
 		wantAccepted bool
 	}{
-		{name: "reject remote http", presenceURL: "http://remote.example/.well-known/metasocket/presence", wantAccepted: false},
-		{name: "allow remote http when configured", presenceURL: "http://remote.example/.well-known/metasocket/presence", allowHTTP: true, wantAccepted: true},
-		{name: "allow localhost http", presenceURL: "http://localhost:8080/.well-known/metasocket/presence", wantAccepted: true},
-		{name: "allow 127 loopback http", presenceURL: "http://127.0.0.1:8080/.well-known/metasocket/presence", wantAccepted: true},
-		{name: "allow ipv6 loopback http", presenceURL: "http://[::1]:8080/.well-known/metasocket/presence", wantAccepted: true},
+		{name: "reject remote http", presenceURL: "http://remote.example/.well-known/metaso-p2p/presence", wantAccepted: false},
+		{name: "allow remote http when configured", presenceURL: "http://remote.example/.well-known/metaso-p2p/presence", allowHTTP: true, wantAccepted: true},
+		{name: "allow localhost http", presenceURL: "http://localhost:8080/.well-known/metaso-p2p/presence", wantAccepted: true},
+		{name: "allow 127 loopback http", presenceURL: "http://127.0.0.1:8080/.well-known/metaso-p2p/presence", wantAccepted: true},
+		{name: "allow ipv6 loopback http", presenceURL: "http://[::1]:8080/.well-known/metaso-p2p/presence", wantAccepted: true},
 	}
 
 	for _, tt := range tests {
@@ -681,7 +681,7 @@ func discoveryRegistryPayloadForNetwork(t *testing.T, alias string, now time.Tim
 		Network:       network,
 		PublicBaseURL: publicBaseURL,
 		SocketURL:     publicBaseURL + "/socket/socket.io",
-		PresenceURL:   publicBaseURL + "/.well-known/metasocket/presence",
+		PresenceURL:   publicBaseURL + "/.well-known/metaso-p2p/presence",
 		PublicKey:     publicKey,
 		Capabilities:  []string{"presence-v1"},
 		PublishedAt:   now.UnixMilli(),
@@ -721,7 +721,7 @@ func discoveryRegistryPrivateKeyHex(alias string) string {
 	case "node-b":
 		return mvcSecondPrivateKeyHex
 	default:
-		digest := sha256.Sum256([]byte("meta-socket discovery test identity:" + alias))
+		digest := sha256.Sum256([]byte("metaso-p2p discovery test identity:" + alias))
 		digest[0] = 1
 		return hex.EncodeToString(digest[:])
 	}
