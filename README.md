@@ -77,6 +77,11 @@ Key sections:
 
 See [`docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`](docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md) for the full v1 contract.
 
+### Bot Homepage
+- `GET /api/bot-homepage/globalmetaid/:globalMetaId` - render-ready Bot homepage aggregation for OAC Bot Browser
+
+See [`docs/specs/2026-06-07-bot-homepage-api.md`](docs/specs/2026-06-07-bot-homepage-api.md) for the full v1 contract.
+
 ## Development
 
 ```bash
