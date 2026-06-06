@@ -2,6 +2,7 @@ package bothomepage
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -28,6 +29,19 @@ type fakeServiceLister struct {
 func (f *fakeServiceLister) List(params skillservice.ListParams) (*skillservice.ListResult, error) {
 	f.params = params
 	return f.result, f.err
+}
+
+func TestBuildUserInfoLookupUnavailable(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(NewUserInfoLookupAdapter(nil))
+
+	_, err := agg.Build("idqBot", DefaultOptions())
+	if !errors.Is(err, ErrAggregationUnavailable) {
+		t.Fatalf("Build error = %v, want ErrAggregationUnavailable", err)
+	}
 }
 
 func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {

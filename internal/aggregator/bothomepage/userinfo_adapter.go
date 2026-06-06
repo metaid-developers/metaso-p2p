@@ -1,6 +1,12 @@
 package bothomepage
 
-import "github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+import (
+	"errors"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+)
+
+var errUserInfoLookupUnavailable = errors.New("userinfo lookup unavailable")
 
 // ProfileSnapshot is the profile subset needed to assemble a bot homepage.
 type ProfileSnapshot struct {
@@ -35,7 +41,7 @@ func NewUserInfoLookupAdapter(ui *userinfo.Aggregator) ProfileLookup {
 
 func (a *userInfoLookupAdapter) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
 	if a == nil || a.ui == nil {
-		return nil, nil
+		return nil, errUserInfoLookupUnavailable
 	}
 	p, err := a.ui.LookupByGlobalMetaId(globalMetaId)
 	return profileFromUserInfo(p), err
