@@ -8,6 +8,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
@@ -19,14 +20,16 @@ const (
 
 // Aggregator implements the read-only Bot homepage aggregation module.
 type Aggregator struct {
-	store         *storage.PebbleStore
-	cache         *cache.Cache[[]byte]
-	notifyCh      chan *aggregator.NotifyEvent
-	now           func() int64
-	profileLookup ProfileLookup
-	serviceLister ServiceLister
-	assetResolver *skillservice.AssetResolver
-	assetBaseURL  string
+	store          *storage.PebbleStore
+	cache          *cache.Cache[[]byte]
+	notifyCh       chan *aggregator.NotifyEvent
+	now            func() int64
+	profileLookup  ProfileLookup
+	serviceLister  ServiceLister
+	localPresence  presence.LocalReader
+	globalPresence presence.GlobalReader
+	assetResolver  *skillservice.AssetResolver
+	assetBaseURL   string
 }
 
 func (a *Aggregator) Name() string { return namespace }
@@ -53,6 +56,11 @@ func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 
 func (a *Aggregator) SetServiceLister(lister ServiceLister) {
 	a.serviceLister = lister
+}
+
+func (a *Aggregator) SetPresenceReaders(local presence.LocalReader, global presence.GlobalReader) {
+	a.localPresence = local
+	a.globalPresence = global
 }
 
 func (a *Aggregator) SetAssetBaseURL(baseURL string) {

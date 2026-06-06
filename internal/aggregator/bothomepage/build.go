@@ -43,6 +43,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		ChainName:    strings.TrimSpace(profile.ChainName),
 	}
 	outProfile := a.toProfile(profile, canonical.GlobalMetaId)
+	resolvedPresence := a.resolvePresence(*profile, opts.IncludePresence)
 	services := make([]Service, 0)
 	proofs := Proofs{
 		VerificationState: "unverified",
@@ -63,7 +64,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		Canonical:     canonical,
 		Profile:       outProfile,
 		Homepage:      toDefaultHomepage(outProfile),
-		Presence:      unknownPresence(),
+		Presence:      resolvedPresence,
 		Services:      services,
 		Proofs:        proofs,
 		Source:        a.source(resolvedAt),
