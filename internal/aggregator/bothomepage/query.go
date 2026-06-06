@@ -23,15 +23,21 @@ type Options struct {
 	ChainName               string
 }
 
-// ParseOptions normalizes and validates bot homepage query parameters.
-func ParseOptions(values url.Values) (Options, error) {
-	opts := Options{
+// DefaultOptions returns the default query expansion knobs for the Bot
+// homepage endpoint.
+func DefaultOptions() Options {
+	return Options{
 		IncludeServices: true,
 		ServiceSize:     defaultServiceSize,
 		IncludeProofs:   true,
 		IncludePresence: true,
-		ChainName:       strings.ToLower(strings.TrimSpace(values.Get("chainName"))),
 	}
+}
+
+// ParseOptions normalizes and validates bot homepage query parameters.
+func ParseOptions(values url.Values) (Options, error) {
+	opts := DefaultOptions()
+	opts.ChainName = strings.ToLower(strings.TrimSpace(values.Get("chainName")))
 
 	var err error
 	if opts.IncludeServices, err = parseBool(values, "includeServices", opts.IncludeServices); err != nil {

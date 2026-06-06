@@ -3,9 +3,30 @@ package bothomepage
 import (
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestParseOptionsDefaults(t *testing.T) {
+	defaults := DefaultOptions()
+	if !defaults.IncludeServices {
+		t.Fatal("DefaultOptions IncludeServices should be true")
+	}
+	if defaults.ServiceSize != 20 {
+		t.Fatalf("DefaultOptions ServiceSize = %d, want 20", defaults.ServiceSize)
+	}
+	if defaults.IncludeInactiveServices {
+		t.Fatal("DefaultOptions IncludeInactiveServices should be false")
+	}
+	if !defaults.IncludeProofs {
+		t.Fatal("DefaultOptions IncludeProofs should be true")
+	}
+	if !defaults.IncludePresence {
+		t.Fatal("DefaultOptions IncludePresence should be true")
+	}
+	if defaults.ChainName != "" {
+		t.Fatalf("DefaultOptions ChainName = %q, want empty", defaults.ChainName)
+	}
+
 	got, err := ParseOptions(url.Values{})
 	if err != nil {
 		t.Fatalf("ParseOptions returned error: %v", err)
@@ -57,6 +78,13 @@ func TestParseOptionsRejectsInvalidValues(t *testing.T) {
 }
 
 func TestAggregatorInterfaceSkeleton(t *testing.T) {
+	if cacheMaxEntries != 1000 {
+		t.Fatalf("cacheMaxEntries = %d, want 1000", cacheMaxEntries)
+	}
+	if cacheTTL != 30*time.Second {
+		t.Fatalf("cacheTTL = %s, want 30s", cacheTTL)
+	}
+
 	agg := &Aggregator{}
 	if agg.Name() != "bothomepage" {
 		t.Fatalf("Name() = %q, want bothomepage", agg.Name())
@@ -66,5 +94,25 @@ func TestAggregatorInterfaceSkeleton(t *testing.T) {
 	}
 	if evt, err := agg.HandleMempoolPin(nil); err != nil || evt != nil {
 		t.Fatalf("HandleMempoolPin(nil) = (%v, %v), want nil nil", evt, err)
+	}
+
+	customNow := func() int64 { return 42 }
+	agg.now = customNow
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	if got := agg.now(); got != 42 {
+		t.Fatalf("Init overwrote existing now: got %d, want 42", got)
+	}
+
+	agg = &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	if agg.now == nil {
+		t.Fatal("Init should set nil now")
+	}
+	if got := agg.now(); got <= 0 {
+		t.Fatalf("Init now() = %d, want unix milliseconds", got)
 	}
 }

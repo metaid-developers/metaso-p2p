@@ -12,8 +12,8 @@ import (
 
 const (
 	namespace       = "bothomepage"
-	cacheMaxEntries = 2000
-	cacheTTL        = 5 * time.Minute
+	cacheMaxEntries = 1000
+	cacheTTL        = 30 * time.Second
 )
 
 // Aggregator implements the read-only Bot homepage aggregation module.
@@ -21,7 +21,7 @@ type Aggregator struct {
 	store    *storage.PebbleStore
 	cache    *cache.Cache[[]byte]
 	notifyCh chan *aggregator.NotifyEvent
-	now      func() time.Time
+	now      func() int64
 }
 
 func (a *Aggregator) Name() string { return namespace }
@@ -32,7 +32,9 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 		a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, cacheTTL)
 	}
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 1)
-	a.now = time.Now
+	if a.now == nil {
+		a.now = func() int64 { return time.Now().UnixMilli() }
+	}
 	return nil
 }
 
