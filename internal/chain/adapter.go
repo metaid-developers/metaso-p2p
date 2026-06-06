@@ -9,7 +9,7 @@
 package chain
 
 import (
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // Chain provides RPC and ZMQ access to a blockchain node.

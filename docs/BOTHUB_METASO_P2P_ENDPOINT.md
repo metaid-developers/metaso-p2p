@@ -1,15 +1,15 @@
 # Bothub Meta-Socket Endpoint Contract
 
-Bothub must point at a meta-socket-owned root origin, not at
+Bothub must point at a metaso-p2p-owned root origin, not at
 `https://api.idchat.io` and not at an idchat `/chat-api` prefix.
 
 ```dotenv
-VITE_META_SOCKET_BASE_URL=https://<meta-socket-host>
+VITE_METASO_P2P_BASE_URL=https://<metaso-p2p-host>
 VITE_USE_AGGREGATOR_MOCK=false
 VITE_USE_WS_MOCK=false
 ```
 
-`VITE_META_SOCKET_BASE_URL` is the root host. Bothub appends native paths such
+`VITE_METASO_P2P_BASE_URL` is the root host. Bothub appends native paths such
 as `/api/bot-hub/...` and `/api/private-chat/...`.
 
 ## Required Routes
@@ -29,7 +29,7 @@ The canonical private-chat routes are aliases of the historical
 ## Deployment Shape
 
 Use a reverse proxy or load balancer that forwards the whole root origin to
-meta-socket. Do not mount meta-socket under `/chat-api`; that prefix is only an
+metaso-p2p. Do not mount metaso-p2p under `/chat-api`; that prefix is only an
 idchat compatibility surface for old chat clients.
 
 ```nginx
@@ -50,7 +50,7 @@ location /socket/socket.io/ {
 }
 ```
 
-meta-socket answers CORS preflight globally, so browser clients can call it
+metaso-p2p answers CORS preflight globally, so browser clients can call it
 directly from Bothub origins. Production operators may still restrict CORS at
 the proxy layer if they own a fixed allow-list.
 
@@ -59,17 +59,17 @@ the proxy layer if they own a fixed allow-list.
 From the Bothub repo:
 
 ```bash
-META_SOCKET_BASE_URL=https://<meta-socket-host> pnpm smoke:meta-socket
+METASO_P2P_BASE_URL=https://<metaso-p2p-host> pnpm smoke:metaso-p2p
 ```
 
 Additional route checks:
 
 ```bash
-curl 'https://<meta-socket-host>/healthz'
-curl 'https://<meta-socket-host>/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc'
-curl 'https://<meta-socket-host>/api/private-chat/homes/<buyer-metaId>'
-curl 'https://<meta-socket-host>/api/private-chat/messages?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&cursor=&size=5'
-curl 'https://<meta-socket-host>/api/private-chat/messages/by-index?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&startIndex=0&size=5'
+curl 'https://<metaso-p2p-host>/healthz'
+curl 'https://<metaso-p2p-host>/api/bot-hub/skill-service/list?size=3&chainName=mvc&sortBy=updated&order=desc'
+curl 'https://<metaso-p2p-host>/api/private-chat/homes/<buyer-metaId>'
+curl 'https://<metaso-p2p-host>/api/private-chat/messages?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&cursor=&size=5'
+curl 'https://<metaso-p2p-host>/api/private-chat/messages/by-index?metaId=<buyer-metaId>&otherMetaId=<provider-metaId>&startIndex=0&size=5'
 ```
 
 The data directory must be the real indexed MVC Pebble store, not an empty

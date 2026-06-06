@@ -7,22 +7,22 @@ but in live use the user does not see new Bot replies appear through WebSocket
 push in the currently open Delivery conversation.
 
 The current evidence suggests this is not simply a missing Delivery render
-listener. Bothub connects to the public meta-socket Socket.IO endpoint, receives
+listener. Bothub connects to the public metaso-p2p Socket.IO endpoint, receives
 heartbeats, and has code paths that merge `WS_SERVER_NOTIFY_PRIVATE_CHAT`
 payloads into Delivery state. Meta-socket needs to confirm whether private-chat
 push events are produced and routed correctly for BotHub order replies.
 
-Please verify and fix the meta-socket side of private-chat WebSocket delivery,
+Please verify and fix the metaso-p2p side of private-chat WebSocket delivery,
 especially target identity matching, push payload shape, and real-time indexer
 event production.
 
 ## Environment
 
 - Date checked: 2026-06-04 CST
-- Public meta-socket base URL: `https://socket.metaid.io`
-- Public meta-socket version from `/healthz`: `0b75c55`
+- Public metaso-p2p base URL: `https://socket.metaid.io`
+- Public metaso-p2p version from `/healthz`: `0b75c55`
 - Bothub env:
-  - `VITE_META_SOCKET_BASE_URL=https://socket.metaid.io`
+  - `VITE_METASO_P2P_BASE_URL=https://socket.metaid.io`
   - `VITE_USE_AGGREGATOR_MOCK=false`
   - `VITE_USE_WS_MOCK=false`
 - Observed connected buyer identity in prior Delivery QA:
@@ -39,14 +39,14 @@ curl -sS https://socket.metaid.io/healthz
 Result summary:
 
 ```json
-{"code":0,"data":{"service":"meta-socket","status":"ok","version":"0b75c55"}}
+{"code":0,"data":{"service":"metaso-p2p","status":"ok","version":"0b75c55"}}
 ```
 
 Bothub smoke against the public endpoint passes HTTP service checks and Socket.IO
 heartbeat:
 
 ```bash
-META_SOCKET_BASE_URL=https://socket.metaid.io pnpm smoke:meta-socket
+METASO_P2P_BASE_URL=https://socket.metaid.io pnpm smoke:metaso-p2p
 ```
 
 Result summary:
@@ -63,7 +63,7 @@ Result summary:
   },
   "privateChat": {
     "skipped": true,
-    "reason": "set META_SOCKET_PRIVATE_CHAT_METAID and META_SOCKET_PRIVATE_CHAT_OTHER_METAID to enable live private-chat checks"
+    "reason": "set METASO_P2P_PRIVATE_CHAT_METAID and METASO_P2P_PRIVATE_CHAT_OTHER_METAID to enable live private-chat checks"
   }
 }
 ```
@@ -201,7 +201,7 @@ log.Printf("[indexer] ZMQ loop started (placeholder)")
 
 If production relies only on block polling, private-chat "push" may happen only
 after block catch-up and only if the target client remains connected to the same
-meta-socket process at that time. This does not satisfy the user expectation
+metaso-p2p process at that time. This does not satisfy the user expectation
 that Bot replies appear live in an open Delivery conversation.
 
 Please confirm whether production has any real mempool/ZMQ path enabled outside
@@ -215,7 +215,7 @@ When a provider/Bot sends a private simplemsg reply to a buyer:
 2. The private-chat HTTP history endpoint can return the new row for the buyer
    and provider pair.
 3. If the buyer has an active Socket.IO connection under any canonical wallet
-   identity or known recipient alias, meta-socket emits one
+   identity or known recipient alias, metaso-p2p emits one
    `message` event with `M = "WS_SERVER_NOTIFY_PRIVATE_CHAT"`.
 4. The event payload is enough for Bothub to normalize it as a private-chat
    item, determine that it is addressed to the buyer, and merge it into the
@@ -246,7 +246,7 @@ Use a controlled pair of identities and one real or synthetic simplemsg pin:
 }
 ```
 
-Repeat with the recipient encoded as each identity form meta-socket supports:
+Repeat with the recipient encoded as each identity form metaso-p2p supports:
 
 - buyer `globalMetaId`
 - buyer MVC address
@@ -262,7 +262,7 @@ Repeat with the recipient encoded as each identity form meta-socket supports:
 - The push payload is compatible with the canonical private-chat item shape, or
   Bothub receives a documented stable push shape with enough identity/profile
   fields to normalize and render the message.
-- `META_SOCKET_BASE_URL=https://socket.metaid.io pnpm smoke:meta-socket` can be
+- `METASO_P2P_BASE_URL=https://socket.metaid.io pnpm smoke:metaso-p2p` can be
   extended with a live private-chat push check and pass against production or a
   staging endpoint.
 
@@ -272,5 +272,5 @@ Repeat with the recipient encoded as each identity form meta-socket supports:
   the open conversation.
 - Users may need refresh/history sync to discover replies, which makes Delivery
   feel incomplete even when HTTP history eventually contains the messages.
-- This should be fixed in meta-socket rather than adding a custom Bothub backend
+- This should be fixed in metaso-p2p rather than adding a custom Bothub backend
   or polling workaround unless push semantics are explicitly out of scope.

@@ -8,10 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/api"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // BlockedChat represents a blocked chat entry.
@@ -24,9 +24,9 @@ type BlockedChat struct {
 
 // UserBlockedChats is the stored block list for a user.
 type UserBlockedChats struct {
-	UserID      string        `json:"userId"`
+	UserID       string        `json:"userId"`
 	BlockedChats []BlockedChat `json:"blockedChats"`
-	UpdatedAt   int64         `json:"updatedAt"`
+	UpdatedAt    int64         `json:"updatedAt"`
 }
 
 // Aggregator manages chat blocking (user-initiated block/unblock).
@@ -88,7 +88,7 @@ func (a *Aggregator) handleGetBlockedChats(c *gin.Context) {
 	}
 	if blocked == nil {
 		blocked = &UserBlockedChats{
-			UserID:      metaID,
+			UserID:       metaID,
 			BlockedChats: []BlockedChat{},
 		}
 	}
@@ -149,8 +149,8 @@ func (a *Aggregator) handleAddBlockedChat(c *gin.Context) {
 
 func (a *Aggregator) handleRemoveBlockedChat(c *gin.Context) {
 	var req struct {
-		ChatID   string `json:"chatId"`
-		MetaID   string `json:"metaId"`
+		ChatID string `json:"chatId"`
+		MetaID string `json:"metaId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.RespErr(c, 1, "invalid request body")

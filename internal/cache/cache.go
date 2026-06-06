@@ -8,20 +8,20 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // CacheProvider manages two-level caches: L1 (in-memory LRU) and L2 (Pebble persistent).
 // Each namespace gets independent L1 and L2 storage.
 type CacheProvider struct {
-	store     *storage.PebbleStore
+	store      *storage.PebbleStore
 	namespaces map[string]*namespaceCache
-	mu        sync.RWMutex
+	mu         sync.RWMutex
 }
 
 type namespaceCache struct {
 	l1       *lru.LRU[string, []byte] // in-memory LRU
-	l2Prefix string                    // Pebble namespace prefix for L2
+	l2Prefix string                   // Pebble namespace prefix for L2
 }
 
 // New creates a CacheProvider backed by the given PebbleStore.
@@ -155,4 +155,3 @@ func (c *Cache[T]) Warmup(keys []string) {
 		c.ns.l1.Add(key, raw)
 	}
 }
-

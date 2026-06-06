@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build MVC-backed MetaSocket federation so any enabled node can expose a global online AI Agent list aggregated from all discovered MetaSocket nodes.
+**Goal:** Build MVC-backed Metaso P2P federation so any enabled node can expose a global online AI Agent list aggregated from all discovered Metaso P2P nodes.
 
-**Architecture:** MVC chain stores node registry pins at `/protocols/metasocket-node`; MANAPI reads those pins for peer discovery; each peer exposes a signed `/.well-known/metasocket/presence` snapshot; each node pulls snapshots, verifies signatures, and merges them with local `ConnectionManager` state. Federation is disabled by default and preserves current local-only behavior unless enabled.
+**Architecture:** MVC chain stores node registry pins at `/protocols/metaso-p2p-node`; MANAPI reads those pins for peer discovery; each peer exposes a signed `/.well-known/metaso-p2p/presence` snapshot; each node pulls snapshots, verifies signatures, and merges them with local `ConnectionManager` state. Federation is disabled by default and preserves current local-only behavior unless enabled.
 
 **Tech Stack:** Go 1.26, Gin, Socket.IO, btcsuite/btcd, MVC MetaID OP_RETURN pins, MANAPI HTTP client, Metalet wallet API UTXO/broadcast endpoints.
 
@@ -78,8 +78,8 @@ Modify:
 - `internal/socket/server.go`
   - Store optional `presence.GlobalReader`; do not import `internal/federation`.
 - `internal/api/router.go`
-  - Mount `/.well-known/metasocket/presence`.
-- `cmd/meta-socket/main.go`
+  - Mount `/.well-known/metaso-p2p/presence`.
+- `cmd/metaso-p2p/main.go`
   - Wire federation service startup/shutdown if this command is the runtime entrypoint.
 - `internal/socket/server_test.go`
   - Cover backward compatibility and global scope behavior.
@@ -99,7 +99,7 @@ Use this dependency direction:
 internal/socket      -> internal/presence
 internal/api         -> internal/presence
 internal/federation  -> internal/presence
-cmd/meta-socket      -> internal/federation, internal/socket, internal/api
+cmd/metaso-p2p      -> internal/federation, internal/socket, internal/api
 ```
 
 Forbidden:
@@ -178,8 +178,8 @@ Expected defaults:
 - `Enabled=false`
 - `Network="mvc-mainnet"`
 - `MANAPIBaseURL="https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}"`
-- `RegistryPath="/protocols/metasocket-node"`
-- `PresencePath="/.well-known/metasocket/presence"`
+- `RegistryPath="/protocols/metaso-p2p-node"`
+- `PresencePath="/.well-known/metaso-p2p/presence"`
 - `RegistryRenewInterval=6*time.Hour`
 - `RegistryValidFor=24*time.Hour`
 - `DiscoveryInterval=5*time.Minute`
@@ -225,7 +225,7 @@ type FederationConfig struct {
 }
 ```
 
-Environment variables must use `META_SOCKET_FEDERATION_*`.
+Environment variables must use `METASO_P2P_FEDERATION_*`.
 
 Enabled-mode validation must require:
 
@@ -381,10 +381,10 @@ type GlobalStats struct {
 Define federation protocol constants separately:
 
 ```go
-const ProtocolNode = "metasocket-node"
-const ProtocolPresence = "metasocket-presence"
-const RegistryPath = "/protocols/metasocket-node"
-const PresencePath = "/.well-known/metasocket/presence"
+const ProtocolNode = "metaso-p2p-node"
+const ProtocolPresence = "metaso-p2p-presence"
+const RegistryPath = "/protocols/metaso-p2p-node"
+const PresencePath = "/.well-known/metaso-p2p/presence"
 ```
 
 Create snapshot builder that accepts:
@@ -496,8 +496,8 @@ Then use `metabot-post-buzz`.
 
 Cover:
 
-- `GET /.well-known/metasocket/presence` returns 404 or disabled response when federation is disabled.
-- When federation is enabled with a fake snapshot provider, the endpoint returns protocol `metasocket-presence`.
+- `GET /.well-known/metaso-p2p/presence` returns 404 or disabled response when federation is disabled.
+- When federation is enabled with a fake snapshot provider, the endpoint returns protocol `metaso-p2p-presence`.
 - Endpoint response has no socket IDs.
 
 - [ ] **Step 2: Run tests and confirm failure**
@@ -732,7 +732,7 @@ Then use `metabot-post-buzz`.
 Cover:
 
 - Private key derives expected public key and address.
-- Registry payload builds an OP_RETURN MetaID pin at `/protocols/metasocket-node`.
+- Registry payload builds an OP_RETURN MetaID pin at `/protocols/metaso-p2p-node`.
 - Operation can be `create`, `modify`, or `revoke`.
 - Content type is `application/json`.
 - Transaction has owner output and change output.
@@ -838,7 +838,7 @@ Expected: PASS.
 
 ```bash
 git add internal/federation/publisher.go internal/federation/publisher_test.go internal/federation/types.go internal/federation/service.go
-git commit -m "feat: publish metasocket node registry"
+git commit -m "feat: publish metaso-p2p node registry"
 ```
 
 Then use `metabot-post-buzz`.
@@ -858,7 +858,7 @@ Use `httptest.Server` and cover:
 - Expands the default MANAPI URL template
   `https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}`
   into a request equivalent to
-  `/pin/path/list?path=/protocols/metasocket-node&size=100`.
+  `/pin/path/list?path=/protocols/metaso-p2p-node&size=100`.
 - URL-encodes the protocol path correctly if the implementation uses `url.Values`.
 - Accepts MANAPI response envelope `code=1,message=ok,data.list,nextCursor,total`.
 - Treats `data.list=null` as an empty peer list.
@@ -890,10 +890,10 @@ The first-version default discovery URL is a path-list template:
 https://manapi.metaid.io/pin/path/list?path={protocol-path}&size={size}
 ```
 
-For `/protocols/metasocket-node` with size `100`, the request should be equivalent to:
+For `/protocols/metaso-p2p-node` with size `100`, the request should be equivalent to:
 
 ```text
-https://manapi.metaid.io/pin/path/list?path=/protocols/metasocket-node&size=100
+https://manapi.metaid.io/pin/path/list?path=/protocols/metaso-p2p-node&size=100
 ```
 
 The response envelope shape is:
@@ -946,7 +946,7 @@ Expected: PASS.
 
 ```bash
 git add internal/federation/discovery.go internal/federation/discovery_test.go internal/federation/store.go internal/federation/types.go
-git commit -m "feat: discover metasocket peers"
+git commit -m "feat: discover metaso-p2p peers"
 ```
 
 Then use `metabot-post-buzz`.
@@ -1012,7 +1012,7 @@ Then use `metabot-post-buzz`.
 ## Task 11: Service Wiring and Lifecycle
 
 **Files:**
-- Modify: `cmd/meta-socket/main.go`
+- Modify: `cmd/metaso-p2p/main.go`
 - Modify: `internal/api/router.go`
 - Modify: `internal/api/router_test.go`
 - Modify: `internal/socket/server.go`
@@ -1031,7 +1031,7 @@ Cover:
 - [ ] **Step 2: Run tests and confirm failure**
 
 ```bash
-go test ./cmd/meta-socket ./internal/api ./internal/socket ./internal/federation -run 'Federation|Lifecycle|Shutdown' -count=1
+go test ./cmd/metaso-p2p ./internal/api ./internal/socket ./internal/federation -run 'Federation|Lifecycle|Shutdown' -count=1
 ```
 
 Expected: FAIL because runtime wiring does not exist.
@@ -1050,9 +1050,9 @@ In the command entrypoint:
 - [ ] **Step 4: Verify**
 
 ```bash
-go test ./cmd/meta-socket ./internal/api ./internal/socket ./internal/federation -run 'Federation|Lifecycle|Shutdown|Presence' -count=1
+go test ./cmd/metaso-p2p ./internal/api ./internal/socket ./internal/federation -run 'Federation|Lifecycle|Shutdown|Presence' -count=1
 go test ./... -count=1
-git diff --check -- cmd/meta-socket/main.go internal/api/router.go internal/api/router_test.go internal/socket/server.go internal/federation/service.go internal/federation/service_test.go
+git diff --check -- cmd/metaso-p2p/main.go internal/api/router.go internal/api/router_test.go internal/socket/server.go internal/federation/service.go internal/federation/service_test.go
 ```
 
 Expected: PASS.
@@ -1060,7 +1060,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit and post buzz**
 
 ```bash
-git add cmd/meta-socket/main.go internal/api/router.go internal/api/router_test.go internal/socket/server.go internal/federation/service.go internal/federation/service_test.go
+git add cmd/metaso-p2p/main.go internal/api/router.go internal/api/router_test.go internal/socket/server.go internal/federation/service.go internal/federation/service_test.go
 git commit -m "feat: wire federation service"
 ```
 
@@ -1095,22 +1095,22 @@ that real shape instead; otherwise use this mock response:
       {
         "id": "mock-node-a-pin",
         "operation": "create",
-        "path": "/protocols/metasocket-node",
+        "path": "/protocols/metaso-p2p-node",
         "contentType": "application/json",
         "chainName": "mvc",
         "timestamp": 1780000000,
         "contentBody": "",
-        "contentSummary": "{\"protocol\":\"metasocket-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-a\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18091\",\"socketUrl\":\"http://127.0.0.1:18091/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18091/.well-known/metasocket/presence\",\"publicKey\":\"02abcdef...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000000000,\"validUntil\":1780086400000}"
+        "contentSummary": "{\"protocol\":\"metaso-p2p-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-a\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18091\",\"socketUrl\":\"http://127.0.0.1:18091/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18091/.well-known/metaso-p2p/presence\",\"publicKey\":\"02abcdef...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000000000,\"validUntil\":1780086400000}"
       },
       {
         "id": "mock-node-b-pin",
         "operation": "create",
-        "path": "/protocols/metasocket-node",
+        "path": "/protocols/metaso-p2p-node",
         "contentType": "application/json",
         "chainName": "mvc",
         "timestamp": 1780000001,
         "contentBody": "",
-        "contentSummary": "{\"protocol\":\"metasocket-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-b\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18092\",\"socketUrl\":\"http://127.0.0.1:18092/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18092/.well-known/metasocket/presence\",\"publicKey\":\"02fedcba...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000001000,\"validUntil\":1780086401000}"
+        "contentSummary": "{\"protocol\":\"metaso-p2p-node\",\"version\":\"1.0.0\",\"nodeId\":\"mvc:node-b\",\"network\":\"mvc-testnet\",\"publicBaseUrl\":\"http://127.0.0.1:18092\",\"socketUrl\":\"http://127.0.0.1:18092/socket/socket.io\",\"presenceUrl\":\"http://127.0.0.1:18092/.well-known/metaso-p2p/presence\",\"publicKey\":\"02fedcba...\",\"capabilities\":[\"presence-v1\"],\"publishedAt\":1780000001000,\"validUntil\":1780086401000}"
       }
     ],
     "nextCursor": "",
@@ -1143,23 +1143,23 @@ If a script is added, it must not require production private keys. It should use
 Example shape:
 
 ```bash
-META_SOCKET_HTTP_ADDR=:18091 \
-META_SOCKET_FEDERATION_ENABLED=true \
-META_SOCKET_FEDERATION_NODE_PRIVATE_KEY=<node-a-test-private-key> \
-META_SOCKET_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18091 \
-META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP=true \
-go run ./cmd/meta-socket
+METASO_P2P_HTTP_ADDR=:18091 \
+METASO_P2P_FEDERATION_ENABLED=true \
+METASO_P2P_FEDERATION_NODE_PRIVATE_KEY=<node-a-test-private-key> \
+METASO_P2P_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18091 \
+METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP=true \
+go run ./cmd/metaso-p2p
 ```
 
 Run node B with a different test private key and port:
 
 ```bash
-META_SOCKET_HTTP_ADDR=:18092 \
-META_SOCKET_FEDERATION_ENABLED=true \
-META_SOCKET_FEDERATION_NODE_PRIVATE_KEY=<node-b-test-private-key> \
-META_SOCKET_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18092 \
-META_SOCKET_FEDERATION_ALLOW_INSECURE_HTTP=true \
-go run ./cmd/meta-socket
+METASO_P2P_HTTP_ADDR=:18092 \
+METASO_P2P_FEDERATION_ENABLED=true \
+METASO_P2P_FEDERATION_NODE_PRIVATE_KEY=<node-b-test-private-key> \
+METASO_P2P_FEDERATION_PUBLIC_BASE_URL=http://127.0.0.1:18092 \
+METASO_P2P_FEDERATION_ALLOW_INSECURE_HTTP=true \
+go run ./cmd/metaso-p2p
 ```
 
 Then query:
@@ -1195,7 +1195,7 @@ Then use `metabot-post-buzz`.
 
 ## Final Acceptance
 
-Run from `/Users/tusm/Documents/MetaID_Projects/meta-socket`:
+Run from `/Users/tusm/Documents/MetaID_Projects/metaso-p2p`:
 
 ```bash
 go test ./... -count=1

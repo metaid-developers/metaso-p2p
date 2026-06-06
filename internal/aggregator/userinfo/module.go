@@ -9,18 +9,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/api"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/storage"
-	"github.com/metaid-developers/meta-socket/pkg/idaddress"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 // UserProfile is the aggregated user info served to idchat.
 //
 // JSON tags mirror meta-file-system's MetaIDUserInfo shape so idchat's
 // existing `metafileIndexerApi` client (which expects `chatpubkey` /
-// `chatpubkeyId` in all-lowercase) can consume meta-socket as a drop-in
+// `chatpubkeyId` in all-lowercase) can consume metaso-p2p as a drop-in
 // replacement without any TypeScript changes.
 type UserProfile struct {
 	GlobalMetaID    string `json:"globalMetaId"`

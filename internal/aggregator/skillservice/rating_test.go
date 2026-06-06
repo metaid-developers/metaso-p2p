@@ -3,7 +3,7 @@ package skillservice
 import (
 	"testing"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // ratingPinOpts mirrors servicePinOpts but for /protocols/skill-service-rate.
@@ -130,7 +130,10 @@ func TestRating_ServiceIDIsOldVersion_NormalisedToSource(t *testing.T) {
 
 	seedService(t, agg, "mvc", "src:i0", "prov1")
 	// Two modifies: mod_a (older), mod_b (current).
-	for _, m := range []struct{ id string; ts int64 }{{"mod_a:i0", 1500}, {"mod_b:i0", 2000}} {
+	for _, m := range []struct {
+		id string
+		ts int64
+	}{{"mod_a:i0", 1500}, {"mod_b:i0", 2000}} {
 		if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
 			PinId: m.id, Operation: OperationModify,
 			ChainName: "mvc", ProviderMetaId: "prov1",

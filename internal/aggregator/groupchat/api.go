@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
 )
 
 // registerRoutes mounts all group-chat HTTP endpoints on the given router group.

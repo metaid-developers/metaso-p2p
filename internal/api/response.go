@@ -10,7 +10,7 @@ import (
 // MetaFile* codes are used by /info/* endpoints to stay wire-compatible with
 // meta-file-system, so idchat's `metafileIndexerApi` client (which treats
 // `code === 1` as success and any other code as failure) can consume
-// meta-socket as a drop-in replacement without TypeScript changes.
+// metaso-p2p as a drop-in replacement without TypeScript changes.
 const (
 	MetaFileSuccessCode      = 1
 	MetaFileInvalidParamCode = 40000

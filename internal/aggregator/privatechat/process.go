@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 // Protocol message structures parsed from Pin ContentBody.

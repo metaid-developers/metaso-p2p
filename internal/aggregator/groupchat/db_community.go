@@ -9,17 +9,17 @@ import (
 
 // Community represents a MetaID community.
 type Community struct {
-	CommunityId string `json:"communityId"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Cover       string `json:"cover,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-	Creator     string `json:"creator"`
+	CommunityId   string `json:"communityId"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Cover         string `json:"cover,omitempty"`
+	Icon          string `json:"icon,omitempty"`
+	Creator       string `json:"creator"`
 	CreatorMetaId string `json:"creatorMetaId"`
-	MemberCount int64  `json:"memberCount"`
-	CreatedAt   int64  `json:"createdAt"`
-	Chain       string `json:"chain,omitempty"`
-	BlockHeight int64  `json:"blockHeight"`
+	MemberCount   int64  `json:"memberCount"`
+	CreatedAt     int64  `json:"createdAt"`
+	Chain         string `json:"chain,omitempty"`
+	BlockHeight   int64  `json:"blockHeight"`
 }
 
 const (

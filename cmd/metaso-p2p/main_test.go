@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/metaid-developers/meta-socket/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
 )
 
 func TestEnabledBlockIndexChainNames(t *testing.T) {

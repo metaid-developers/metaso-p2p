@@ -11,7 +11,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 type signableSnapshot struct {

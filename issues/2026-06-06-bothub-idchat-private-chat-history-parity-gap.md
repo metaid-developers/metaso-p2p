@@ -6,7 +6,7 @@ Public `socket.metaid.io` can now return the latest AI_Sunny private-chat row
 that Bothub was missing, including pin
 `f96a3e0b725a95d52bd25e9eff26dd382d76ce71603afe69e72725fc1989f44ci0`.
 
-However, the meta-socket private-chat contract is still not IDChat-compatible
+However, the metaso-p2p private-chat contract is still not IDChat-compatible
 for the same two conversation participants. The same message has different
 participant identities, different index values, different `txId` semantics, and
 the homes endpoint exposes address aliases instead of the IDChat globalMetaId
@@ -14,28 +14,28 @@ peer. This causes BotHub/Delivery clients to split one human-bot conversation
 across address aliases unless the frontend performs extra profile lookups and
 canonicalization.
 
-Please fix or explicitly document the meta-socket private-chat API contract so
+Please fix or explicitly document the metaso-p2p private-chat API contract so
 caller-side apps can hydrate the same private-chat chain that IDChat displays.
 
 ## Environment
 
 - Date checked: 2026-06-06 CST
-- Public meta-socket base URL: `https://socket.metaid.io`
+- Public metaso-p2p base URL: `https://socket.metaid.io`
 - Public IDChat chat API: `https://api.idchat.io/chat-api`
 - Buyer / self globalMetaId:
   `idq1zfazvxaq69uw6txe3ewce30ewyhy9a7mzykgv0`
 - IDChat AI_Sunny peer globalMetaId:
   `idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz`
-- AI_Sunny address alias exposed by meta-socket homes/profile:
+- AI_Sunny address alias exposed by metaso-p2p homes/profile:
   `1GrqX7K9jdnUor8hAoAfDx99uFH2tT75Za`
-- Buyer historical address alias observed in meta-socket history:
+- Buyer historical address alias observed in metaso-p2p history:
   `12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ`
 - Target latest message pin:
   `f96a3e0b725a95d52bd25e9eff26dd382d76ce71603afe69e72725fc1989f44ci0`
 
 ## Reproduction
 
-Compare the same pair through meta-socket and IDChat:
+Compare the same pair through metaso-p2p and IDChat:
 
 ```bash
 A='idq1zfazvxaq69uw6txe3ewce30ewyhy9a7mzykgv0'
@@ -115,9 +115,9 @@ IDChat with `startIndex=100`:
 }
 ```
 
-IDChat's continuous index for this conversation reaches `150`; meta-socket only
+IDChat's continuous index for this conversation reaches `150`; metaso-p2p only
 has five indexed rows for the same pair. A caller using index-based incremental
-sync will miss most of the conversation through meta-socket.
+sync will miss most of the conversation through metaso-p2p.
 
 ### 3. Homes exposes address aliases, not the IDChat conversation peer
 
@@ -141,9 +141,9 @@ There is no homes row keyed by
 `idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz`, even though IDChat treats that
 globalMetaId as the AI_Sunny private-chat peer.
 
-### 4. One meta-socket history page contains both address directions
+### 4. One metaso-p2p history page contains both address directions
 
-The latest meta-socket page for `A` and `B` contains two dominant directions:
+The latest metaso-p2p page for `A` and `B` contains two dominant directions:
 
 ```json
 [
@@ -159,7 +159,7 @@ know that these 40 rows belong to the same `idq1zfaz <-> idq14hmv` conversation.
 
 ## Expected contract
 
-For the same private-chat pair, meta-socket should either:
+For the same private-chat pair, metaso-p2p should either:
 
 1. Return the same `fromGlobalMetaId`, `toGlobalMetaId`, `index`, and `txId`
    semantics as IDChat; or
@@ -187,7 +187,7 @@ rows are less likely to split the Delivery UI. That is a workaround, not a
 complete fix:
 
 - every caller must now resolve profiles for both participants before grouping;
-- index-based sync remains unsafe through meta-socket;
+- index-based sync remains unsafe through metaso-p2p;
 - homes still points callers at address aliases instead of the IDChat peer;
 - websocket payloads may have the same alias-routing risk.
 

@@ -22,7 +22,7 @@ real orderable service.
 
 ## Business Requirement From Bothub
 
-Bothub is a pure frontend buyer app. It depends on meta-socket for:
+Bothub is a pure frontend buyer app. It depends on metaso-p2p for:
 
 - service discovery: `GET /api/bot-hub/skill-service/list`
 - service detail/orderability: `GET /api/bot-hub/skill-service/detail/:serviceId`
@@ -30,9 +30,9 @@ Bothub is a pure frontend buyer app. It depends on meta-socket for:
 
 For release acceptance, Bothub needs one of these to be true:
 
-1. The local acceptance meta-socket at `127.0.0.1:18091` indexes and returns at
+1. The local acceptance metaso-p2p at `127.0.0.1:18091` indexes and returns at
    least one real skill-service item plus a detail payload.
-2. A public/staging meta-socket base URL is documented and returns the native
+2. A public/staging metaso-p2p base URL is documented and returns the native
    BotHub `/api/bot-hub/*` routes.
 3. If `https://api.idchat.io/chat-api/` is intended to be the public base for
    Bothub too, it must expose/alias the BotHub aggregator routes, not only
@@ -42,8 +42,8 @@ For release acceptance, Bothub needs one of these to be true:
 
 - Date checked: 2026-06-01 10:19 CST / 2026-06-01 02:19 UTC
 - Bothub revision checked: `50de390`
-- meta-socket checkout revision: `31db7ea`
-- meta-socket branch: `main`
+- metaso-p2p checkout revision: `31db7ea`
+- metaso-p2p branch: `main`
 - Local expected base URL: `http://127.0.0.1:18091`
 - Public idchat chat API checked: `https://api.idchat.io/chat-api/`
 - Public native BotHub base checked: `https://api.idchat.io`
@@ -53,7 +53,7 @@ For release acceptance, Bothub needs one of these to be true:
 Listener scan:
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | rg '(18091|5176|5177|vite|meta-socket)' || true
+lsof -nP -iTCP -sTCP:LISTEN | rg '(18091|5176|5177|vite|metaso-p2p)' || true
 ```
 
 Result:
@@ -74,7 +74,7 @@ Result:
 ```text
 HTTP/1.1 200 OK
 
-{"code":0,"data":{"service":"meta-socket","status":"ok","version":"dev"},"message":"","processingTime":1780280385264}
+{"code":0,"data":{"service":"metaso-p2p","status":"ok","version":"dev"},"message":"","processingTime":1780280385264}
 ```
 
 Local BotHub service list:
@@ -91,16 +91,16 @@ HTTP/1.1 200 OK
 {"code":0,"data":{"list":[],"nextCursor":"","total":null,"aggregatedAt":1780280385332,"schemaVersion":"botHubSkillService.v1"},"message":"","processingTime":1780280385332}
 ```
 
-Bothub smoke against local meta-socket:
+Bothub smoke against local metaso-p2p:
 
 ```bash
-META_SOCKET_BASE_URL=http://127.0.0.1:18091 pnpm --dir /Users/tusm/.config/superpowers/worktrees/bothub/codex-delivery-workspace-release-hardening smoke:meta-socket
+METASO_P2P_BASE_URL=http://127.0.0.1:18091 pnpm --dir /Users/tusm/.config/superpowers/worktrees/bothub/codex-delivery-workspace-release-hardening smoke:metaso-p2p
 ```
 
 Result:
 
 ```text
-[smoke:meta-socket] smoke failed: skill-service list returned an empty list
+[smoke:metaso-p2p] smoke failed: skill-service list returned an empty list
 [ELIFECYCLE] Command failed with exit code 1.
 ```
 
@@ -161,13 +161,13 @@ HTTP/1.1 404 Not Found
 Bothub smoke with the idchat prefix:
 
 ```bash
-META_SOCKET_BASE_URL=https://api.idchat.io/chat-api pnpm --dir /Users/tusm/.config/superpowers/worktrees/bothub/codex-delivery-workspace-release-hardening smoke:meta-socket
+METASO_P2P_BASE_URL=https://api.idchat.io/chat-api pnpm --dir /Users/tusm/.config/superpowers/worktrees/bothub/codex-delivery-workspace-release-hardening smoke:metaso-p2p
 ```
 
 Result:
 
 ```text
-[smoke:meta-socket] smoke failed: healthz request failed (https://api.idchat.io/chat-api/healthz): healthz returned HTTP 404
+[smoke:metaso-p2p] smoke failed: healthz request failed (https://api.idchat.io/chat-api/healthz): healthz returned HTTP 404
 [ELIFECYCLE] Command failed with exit code 1.
 ```
 
@@ -207,10 +207,10 @@ Pointing Bothub at `https://api.idchat.io/chat-api` would build
 - A public/staging base URL for Bothub is documented. That base URL must serve
   native BotHub `/api/bot-hub/*` routes, or `/chat-api/` must explicitly alias
   those routes if it is the intended shared public prefix.
-- `META_SOCKET_BASE_URL=<documented-base> pnpm smoke:meta-socket` from the
+- `METASO_P2P_BASE_URL=<documented-base> pnpm smoke:metaso-p2p` from the
   Bothub repo passes the list/detail portions of the smoke script.
 - Bothub with `VITE_USE_AGGREGATOR_MOCK=false` can load at least one real
-  service card from meta-socket.
+  service card from metaso-p2p.
 
 ## Related Context
 

@@ -23,10 +23,10 @@ import (
 //                                                             → "" (index marker, descending by inverted ts)
 
 const (
-	keyService              = "service:"
-	keyPinToSource          = "pin_to_source:"
-	keyServiceByProvider    = "service_by_provider:"
-	keyServiceByUpdated     = "service_by_updated:"
+	keyService           = "service:"
+	keyPinToSource       = "pin_to_source:"
+	keyServiceByProvider = "service_by_provider:"
+	keyServiceByUpdated  = "service_by_updated:"
 )
 
 // serviceKey builds the primary Pebble key for a service record.

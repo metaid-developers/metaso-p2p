@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
 )
 
 // registerRoutes mounts all private-chat HTTP endpoints on the given router group.
@@ -26,7 +26,7 @@ func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 
 	pc := router.Group("/private-chat")
 
-	// Canonical private-chat namespace for native meta-socket clients. These
+	// Canonical private-chat namespace for native metaso-p2p clients. These
 	// routes intentionally share handlers with the historical group-chat paths
 	// so response envelopes and query semantics stay identical.
 	pc.GET("/messages", a.handlePrivateChatList)

@@ -13,9 +13,9 @@ receiver address to pay.
 ## Environment
 
 - Date checked: 2026-06-01 17:38 CST
-- meta-socket base URL: `http://127.0.0.1:18091`
+- metaso-p2p base URL: `http://127.0.0.1:18091`
 - Bothub dev URL: `http://127.0.0.1:5177/`
-- Bothub env: `VITE_META_SOCKET_BASE_URL=/meta-socket`,
+- Bothub env: `VITE_METASO_P2P_BASE_URL=/metaso-p2p`,
   `VITE_USE_AGGREGATOR_MOCK=false`, `VITE_USE_WS_MOCK=false`
 - Wallet used for UI acceptance: `SunnyFung` /
   `idq1zfazvxaq69uw6txe3ewce30ewyhy9a7mzykgv0`

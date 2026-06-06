@@ -9,23 +9,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/groupchat"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/privatechat"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/skillservice"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
-	"github.com/metaid-developers/meta-socket/internal/api"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	bitcoinchain "github.com/metaid-developers/meta-socket/internal/chain/bitcoin"
-	dogecoinchain "github.com/metaid-developers/meta-socket/internal/chain/dogecoin"
-	mvcchain "github.com/metaid-developers/meta-socket/internal/chain/mvc"
-	opcatchain "github.com/metaid-developers/meta-socket/internal/chain/opcat"
-	"github.com/metaid-developers/meta-socket/internal/config"
-	"github.com/metaid-developers/meta-socket/internal/federation"
-	"github.com/metaid-developers/meta-socket/internal/indexer"
-	"github.com/metaid-developers/meta-socket/internal/socket"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	bitcoinchain "github.com/metaid-developers/metaso-p2p/internal/chain/bitcoin"
+	dogecoinchain "github.com/metaid-developers/metaso-p2p/internal/chain/dogecoin"
+	mvcchain "github.com/metaid-developers/metaso-p2p/internal/chain/mvc"
+	opcatchain "github.com/metaid-developers/metaso-p2p/internal/chain/opcat"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/federation"
+	"github.com/metaid-developers/metaso-p2p/internal/indexer"
+	"github.com/metaid-developers/metaso-p2p/internal/socket"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 var version = "dev"
@@ -83,7 +83,7 @@ func main() {
 		privatechatAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userinfoAgg))
 		// Asset base URL turns chain-declared pin ids / metafile URIs
 		// into HTTP URLs the Bot Hub frontend can load directly. The
-		// value comes from META_SOCKET_ASSET_BASE_URL (default in
+		// value comes from METASO_P2P_ASSET_BASE_URL (default in
 		// config.Default mirrors the documented recommendation).
 		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
@@ -194,7 +194,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("meta-socket started: %s", cfg.Summary())
+		log.Printf("metaso-p2p started: %s", cfg.Summary())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -229,7 +229,7 @@ func main() {
 	if store != nil {
 		store.Close()
 	}
-	log.Printf("meta-socket stopped")
+	log.Printf("metaso-p2p stopped")
 }
 
 func enabledBlockIndexChainNames(cfg config.BlockIndexConfig) []string {

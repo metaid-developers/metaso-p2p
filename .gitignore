@@ -1,5 +1,5 @@
 # Binaries
-meta-socket
+metaso-p2p
 *.exe
 *.test
 *.out

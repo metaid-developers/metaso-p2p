@@ -194,7 +194,7 @@ func TestNotifyEventTargetIdsFallbackWithoutTargetIds(t *testing.T) {
 }
 ```
 
-Ensure `internal/socket/server_test.go` imports `reflect` and `github.com/metaid-developers/meta-socket/internal/aggregator`.
+Ensure `internal/socket/server_test.go` imports `reflect` and `github.com/metaid-developers/metaso-p2p/internal/aggregator`.
 
 - [ ] **Step 6: Run socket target tests and verify RED**
 
@@ -434,7 +434,7 @@ Expected: tests pass and commit includes only payload/documentation changes.
 Run:
 
 ```bash
-CGO_ENABLED=0 go test ./internal/aggregator/privatechat ./internal/socket ./internal/indexer ./cmd/meta-socket -count=1
+CGO_ENABLED=0 go test ./internal/aggregator/privatechat ./internal/socket ./internal/indexer ./cmd/metaso-p2p -count=1
 ```
 
 Expected: PASS for all listed packages.
@@ -477,14 +477,14 @@ For every implementation commit created in this plan, create a request file like
 
 ```json
 {
-  "content": "meta-socket development journal: <commit hash> <commit subject>. Summary: <what changed>. Verification: <commands and pass results>. Impact: BotHub Delivery private-chat websocket pushes now route across known recipient aliases and carry a canonical payload shape."
+  "content": "metaso-p2p development journal: <commit hash> <commit subject>. Summary: <what changed>. Verification: <commands and pass results>. Impact: BotHub Delivery private-chat websocket pushes now route across known recipient aliases and carry a canonical payload shape."
 }
 ```
 
 Run:
 
 ```bash
-$HOME/.metabot/bin/metabot buzz post --request-file /tmp/meta-socket-buzz-<commit>.json
+$HOME/.metabot/bin/metabot buzz post --request-file /tmp/metaso-p2p-buzz-<commit>.json
 ```
 
 Expected: command returns a successful JSON envelope. If it includes `localUiUrl`, report that link.

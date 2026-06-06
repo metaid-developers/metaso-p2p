@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metaid-developers/meta-socket/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 // SnapshotBuilder creates local presence snapshots.

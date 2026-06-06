@@ -10,7 +10,7 @@
 // - Checksum: 6-character BCH-based checksum
 //
 // This package ports the essential encoding logic from show-now-tmp/idaddress/,
-// adapted for the meta-socket Go 1.26 project architecture.
+// adapted for the metaso-p2p Go 1.26 project architecture.
 package idaddress
 
 import (
@@ -287,7 +287,7 @@ func convertBits(data interface{}, fromBits, toBits int, pad bool) ([]int, error
 		if bits > 0 {
 			ret = append(ret, (acc<<(toBits-bits))&maxv)
 		}
-	} else if bits >= fromBits || ((acc << (toBits - bits)) & maxv) != 0 {
+	} else if bits >= fromBits || ((acc<<(toBits-bits))&maxv) != 0 {
 		return nil, errors.New("invalid padding")
 	}
 

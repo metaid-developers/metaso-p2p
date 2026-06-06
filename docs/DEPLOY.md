@@ -1,19 +1,19 @@
-# meta-socket Deployment Guide
+# metaso-p2p Deployment Guide
 
 ## Prerequisites
 
 - **Go 1.26+** (for source builds) or **Docker** (for containerized deployment)
-- **No external database** — meta-socket uses PebbleDB (embedded), no MongoDB/MySQL/Redis needed
-- Port **8080** available (configurable via `META_SOCKET_HTTP_ADDR`)
+- **No external database** — metaso-p2p uses PebbleDB (embedded), no MongoDB/MySQL/Redis needed
+- Port **8080** available (configurable via `METASO_P2P_HTTP_ADDR`)
 
 ## Quick Start (Source)
 
 ```bash
 # Build the binary
-go build -o meta-socket ./cmd/meta-socket/
+go build -o metaso-p2p ./cmd/metaso-p2p/
 
 # Run with defaults (PebbleDB in ./data/pebble, HTTP on :8080)
-./meta-socket
+./metaso-p2p
 ```
 
 The server starts with sensible defaults:
@@ -28,7 +28,7 @@ The server starts with sensible defaults:
 ### Build
 
 ```bash
-docker build -t meta-socket .
+docker build -t metaso-p2p .
 ```
 
 The Dockerfile uses a multi-stage build:
@@ -40,23 +40,23 @@ The Dockerfile uses a multi-stage build:
 ```bash
 # Basic run with default data directory
 docker run -d \
-  --name meta-socket \
+  --name metaso-p2p \
   -p 8080:8080 \
   -v ./data:/data \
-  meta-socket
+  metaso-p2p
 ```
 
 ### Run with custom configuration
 
 ```bash
 docker run -d \
-  --name meta-socket \
+  --name metaso-p2p \
   -p 8080:8080 \
   -v ./data:/data \
-  -e META_SOCKET_CACHE_MAX_ENTRIES=20000 \
-  -e META_SOCKET_CACHE_DEFAULT_TTL_SECONDS=600 \
-  -e META_SOCKET_SOCKET_MAX_CONNECTIONS=20000 \
-  meta-socket
+  -e METASO_P2P_CACHE_MAX_ENTRIES=20000 \
+  -e METASO_P2P_CACHE_DEFAULT_TTL_SECONDS=600 \
+  -e METASO_P2P_SOCKET_MAX_CONNECTIONS=20000 \
+  metaso-p2p
 ```
 
 ### Docker Compose (example)
@@ -64,19 +64,19 @@ docker run -d \
 ```yaml
 version: "3.8"
 services:
-  meta-socket:
+  metaso-p2p:
     build: .
     ports:
       - "8080:8080"
     volumes:
-      - meta-socket-data:/data
+      - metaso-p2p-data:/data
     environment:
-      META_SOCKET_PEBBLE_DATA_DIR: /data/pebble
-      META_SOCKET_CACHE_MAX_ENTRIES: 20000
+      METASO_P2P_PEBBLE_DATA_DIR: /data/pebble
+      METASO_P2P_CACHE_MAX_ENTRIES: 20000
     restart: unless-stopped
 
 volumes:
-  meta-socket-data:
+  metaso-p2p-data:
 ```
 
 ## Health Check
@@ -88,40 +88,40 @@ curl http://localhost:8080/healthz
 
 Expected response:
 ```json
-{"code": 0, "data": {"status": "ok", "service": "meta-socket", "version": "dev"}, "message": "", "processingTime": <ms>}
+{"code": 0, "data": {"status": "ok", "service": "metaso-p2p", "version": "dev"}, "message": "", "processingTime": <ms>}
 ```
 
 ## Key Environment Variables
 
-All configuration is via environment variables with the `META_SOCKET_` prefix.
+All configuration is via environment variables with the `METASO_P2P_` prefix.
 See `config.example.toml` for the complete reference. The most important ones:
 
 | Variable | Default | Description |
 |---|---|---|
-| `META_SOCKET_HTTP_ADDR` | `:8080` | Listen address |
-| `META_SOCKET_HEALTH_PATH` | `/healthz` | Health check path |
-| `META_SOCKET_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
-| `META_SOCKET_PEBBLE_ENABLED` | `true` | Enable persistent storage |
-| `META_SOCKET_PEBBLE_DATA_DIR` | `./data/pebble` | PebbleDB data directory |
-| `META_SOCKET_SOCKET_ENABLED` | `true` | Enable Socket.IO server |
-| `META_SOCKET_SOCKET_PATH` | `/socket/socket.io` | Primary Socket.IO path |
-| `META_SOCKET_SOCKET_LEGACY_PATH` | `/socket.io` | Legacy Socket.IO path |
-| `META_SOCKET_SOCKET_MAX_CONNECTIONS` | `10000` | Max concurrent connections |
-| `META_SOCKET_SOCKET_ALLOW_EIO3` | `true` | Allow EIO v3 clients (required for idchat) |
-| `META_SOCKET_PROFILE_ENABLED` | `true` | Enable user profile resolution |
-| `META_SOCKET_PROFILE_MODE` | `local-first` | Profile resolution mode |
-| `META_SOCKET_PROFILE_REMOTE_BASE_URL` | `` | Remote profile service URL |
-| `META_SOCKET_CACHE_MAX_ENTRIES` | `10000` | L1 LRU cache size |
-| `META_SOCKET_CACHE_DEFAULT_TTL_SECONDS` | `300` | Cache TTL in seconds |
-| `META_SOCKET_GROUPCHAT_MIGRATION_ENABLED` | `true` | Enable migration endpoints |
-| `META_SOCKET_SOCKET_EXTRA_PUSH_AUTH_KEY` | `` | Push auth key (leave empty for dev) |
+| `METASO_P2P_HTTP_ADDR` | `:8080` | Listen address |
+| `METASO_P2P_HEALTH_PATH` | `/healthz` | Health check path |
+| `METASO_P2P_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
+| `METASO_P2P_PEBBLE_ENABLED` | `true` | Enable persistent storage |
+| `METASO_P2P_PEBBLE_DATA_DIR` | `./data/pebble` | PebbleDB data directory |
+| `METASO_P2P_SOCKET_ENABLED` | `true` | Enable Socket.IO server |
+| `METASO_P2P_SOCKET_PATH` | `/socket/socket.io` | Primary Socket.IO path |
+| `METASO_P2P_SOCKET_LEGACY_PATH` | `/socket.io` | Legacy Socket.IO path |
+| `METASO_P2P_SOCKET_MAX_CONNECTIONS` | `10000` | Max concurrent connections |
+| `METASO_P2P_SOCKET_ALLOW_EIO3` | `true` | Allow EIO v3 clients (required for idchat) |
+| `METASO_P2P_PROFILE_ENABLED` | `true` | Enable user profile resolution |
+| `METASO_P2P_PROFILE_MODE` | `local-first` | Profile resolution mode |
+| `METASO_P2P_PROFILE_REMOTE_BASE_URL` | `` | Remote profile service URL |
+| `METASO_P2P_CACHE_MAX_ENTRIES` | `10000` | L1 LRU cache size |
+| `METASO_P2P_CACHE_DEFAULT_TTL_SECONDS` | `300` | Cache TTL in seconds |
+| `METASO_P2P_GROUPCHAT_MIGRATION_ENABLED` | `true` | Enable migration endpoints |
+| `METASO_P2P_SOCKET_EXTRA_PUSH_AUTH_KEY` | `` | Push auth key (leave empty for dev) |
 
 ## Data Persistence
 
-meta-socket stores all data in **PebbleDB**, an embedded key-value store (no external database server).
+metaso-p2p stores all data in **PebbleDB**, an embedded key-value store (no external database server).
 
 - **Default location**: `./data/pebble` (relative to working directory)
-- **Docker**: bind-mount a host directory to `/data` and set `META_SOCKET_PEBBLE_DATA_DIR=/data/pebble`
+- **Docker**: bind-mount a host directory to `/data` and set `METASO_P2P_PEBBLE_DATA_DIR=/data/pebble`
 - All indexed messages, user info, blocked-chat lists, and cursor state are persisted here
 - To reset: stop the server, delete the data directory, restart
 
@@ -139,16 +139,16 @@ To restore: stop the server, replace the data directory with the backup, restart
 
 See [`docs/IDCHAT_CONFIG_CHANGE.md`](./IDCHAT_CONFIG_CHANGE.md) for the exact config changes needed in idchat.
 
-In short: change the idchat `config.json` to point the Socket.IO URL and API base URL at your meta-socket host.
+In short: change the idchat `config.json` to point the Socket.IO URL and API base URL at your metaso-p2p host.
 
 ## Connecting Bothub
 
-Bothub should use the root meta-socket origin as its base URL. Do not include
-the historical `/chat-api` prefix in `VITE_META_SOCKET_BASE_URL`; Bothub builds
+Bothub should use the root metaso-p2p origin as its base URL. Do not include
+the historical `/chat-api` prefix in `VITE_METASO_P2P_BASE_URL`; Bothub builds
 native `/api/...` paths itself.
 
 ```dotenv
-VITE_META_SOCKET_BASE_URL=https://<meta-socket-host>
+VITE_METASO_P2P_BASE_URL=https://<metaso-p2p-host>
 VITE_USE_AGGREGATOR_MOCK=false
 VITE_USE_WS_MOCK=false
 ```
@@ -165,7 +165,7 @@ The host assigned to Bothub must expose these routes on the same origin:
 - Socket.IO at `/socket/socket.io`
 
 If TLS or a public hostname is provided by nginx/Caddy/another reverse proxy,
-proxy the whole root path to meta-socket; do not mount meta-socket under
+proxy the whole root path to metaso-p2p; do not mount metaso-p2p under
 `/chat-api`.
 
 ```nginx
@@ -189,7 +189,7 @@ location /socket/socket.io/ {
 Release smoke from the Bothub repo:
 
 ```bash
-META_SOCKET_BASE_URL=https://<meta-socket-host> pnpm smoke:meta-socket
+METASO_P2P_BASE_URL=https://<metaso-p2p-host> pnpm smoke:metaso-p2p
 ```
 
 ## Verifying the Deployment
@@ -221,8 +221,8 @@ curl "http://localhost:8080/socket/socket.io/?EIO=4&transport=polling"
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| `bind: address already in use` | Port 8080 is taken | Set `META_SOCKET_HTTP_ADDR=:8081` |
-| `pebble: directory does not exist` | Data dir parent missing | Create the parent directory or set `META_SOCKET_PEBBLE_DATA_DIR` |
-| idchat can't connect Socket.IO | Wrong URL or port | Verify `META_SOCKET_SOCKET_PATH` and `META_SOCKET_SOCKET_ALLOW_EIO3=true` |
-| No push notifications | Socket.IO disabled | Set `META_SOCKET_SOCKET_ENABLED=true` |
-| Profile resolution failing | Remote URL not set | Set `META_SOCKET_PROFILE_REMOTE_BASE_URL` or use `local-only` mode |
+| `bind: address already in use` | Port 8080 is taken | Set `METASO_P2P_HTTP_ADDR=:8081` |
+| `pebble: directory does not exist` | Data dir parent missing | Create the parent directory or set `METASO_P2P_PEBBLE_DATA_DIR` |
+| idchat can't connect Socket.IO | Wrong URL or port | Verify `METASO_P2P_SOCKET_PATH` and `METASO_P2P_SOCKET_ALLOW_EIO3=true` |
+| No push notifications | Socket.IO disabled | Set `METASO_P2P_SOCKET_ENABLED=true` |
+| Profile resolution failing | Remote URL not set | Set `METASO_P2P_PROFILE_REMOTE_BASE_URL` or use `local-only` mode |

@@ -72,7 +72,7 @@ func convertBits8to5(data []byte, fromBits, toBits uint, pad bool) ([]byte, erro
 		if bits > 0 {
 			ret = append(ret, byte((acc<<(toBits-bits))&maxv))
 		}
-	} else if bits >= fromBits || ((acc << (toBits - bits)) & maxv) != 0 {
+	} else if bits >= fromBits || ((acc<<(toBits-bits))&maxv) != 0 {
 		return nil, errors.New("invalid padding")
 	}
 

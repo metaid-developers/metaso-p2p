@@ -1,10 +1,10 @@
 package federation
 
 const (
-	ProtocolNode     = "metasocket-node"
-	ProtocolPresence = "metasocket-presence"
-	RegistryPath     = "/protocols/metasocket-node"
-	PresencePath     = "/.well-known/metasocket/presence"
+	ProtocolNode     = "metaso-p2p-node"
+	ProtocolPresence = "metaso-p2p-presence"
+	RegistryPath     = "/protocols/metaso-p2p-node"
+	PresencePath     = "/.well-known/metaso-p2p/presence"
 	Version          = "1.0.0"
 )
 

@@ -16,25 +16,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/chain"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/chain"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // Engine is the top-level indexing engine.
 type Engine struct {
-	mu          sync.RWMutex
-	chains      map[string]*chainEntry
-	registry    *aggregator.Registry
-	store       *storage.PebbleStore
+	mu           sync.RWMutex
+	chains       map[string]*chainEntry
+	registry     *aggregator.Registry
+	store        *storage.PebbleStore
 	scanInterval time.Duration
-	running     bool
-	cancel      context.CancelFunc
+	running      bool
+	cancel       context.CancelFunc
 }
 
 type chainEntry struct {
-	chain   chain.Chain
-	indexer chain.Indexer
+	chain      chain.Chain
+	indexer    chain.Indexer
 	lastHeight int64
 }
 
@@ -251,5 +251,3 @@ func (e *Engine) zmqLoop(ctx context.Context) {
 	log.Printf("[indexer] ZMQ loop started (placeholder)")
 	<-ctx.Done()
 }
-
-

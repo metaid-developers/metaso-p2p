@@ -1,4 +1,4 @@
-# meta-socket
+# metaso-p2p
 
 A modular, high-performance middleware for the MetaID protocol. Provides real-time Socket.IO push, group chat / private chat aggregation, user identity indexing, chat management, and Bot Hub skill-service aggregation — all backed by a pure PebbleDB storage layer with zero external database dependencies.
 
@@ -29,31 +29,31 @@ Chain RPC + ZMQ  →  Indexer Engine  →  Aggregator Registry
 go mod tidy
 
 # Build
-go build ./cmd/meta-socket/
+go build ./cmd/metaso-p2p/
 
 # Run (all config via environment variables)
-export META_SOCKET_HTTP_ADDR=":8080"
-export META_SOCKET_SOCKET_ENABLED="true"
-export META_SOCKET_PEBBLE_ENABLED="true"
-export META_SOCKET_PEBBLE_DATA_DIR="./data/pebble"
-export META_SOCKET_ZMQ_ENABLED="true"
-export META_SOCKET_ZMQ_BTC_ENABLED="true"
-export META_SOCKET_ZMQ_BTC_ENDPOINT="tcp://127.0.0.1:28336"
-export META_SOCKET_ZMQ_BTC_RPC_HOST="127.0.0.1:8332"
-export META_SOCKET_ZMQ_BTC_RPC_USER="user"
-export META_SOCKET_ZMQ_BTC_RPC_PASS="pass"
-./meta-socket
+export METASO_P2P_HTTP_ADDR=":8080"
+export METASO_P2P_SOCKET_ENABLED="true"
+export METASO_P2P_PEBBLE_ENABLED="true"
+export METASO_P2P_PEBBLE_DATA_DIR="./data/pebble"
+export METASO_P2P_ZMQ_ENABLED="true"
+export METASO_P2P_ZMQ_BTC_ENABLED="true"
+export METASO_P2P_ZMQ_BTC_ENDPOINT="tcp://127.0.0.1:28336"
+export METASO_P2P_ZMQ_BTC_RPC_HOST="127.0.0.1:8332"
+export METASO_P2P_ZMQ_BTC_RPC_USER="user"
+export METASO_P2P_ZMQ_BTC_RPC_PASS="pass"
+./metaso-p2p
 ```
 
 ## Configuration
 
-All settings are loaded from environment variables (prefix `META_SOCKET_`). See `internal/config/config.go` for the full list.
+All settings are loaded from environment variables (prefix `METASO_P2P_`). See `internal/config/config.go` for the full list.
 
 Key sections:
-- `META_SOCKET_SOCKET_*` — Socket.IO server settings
-- `META_SOCKET_ZMQ_*` — ZMQ mempool listeners per chain
-- `META_SOCKET_PEBBLE_*` — PebbleDB storage path
-- `META_SOCKET_CACHE_*` — Cache size and TTL
+- `METASO_P2P_SOCKET_*` — Socket.IO server settings
+- `METASO_P2P_ZMQ_*` — ZMQ mempool listeners per chain
+- `METASO_P2P_PEBBLE_*` — PebbleDB storage path
+- `METASO_P2P_CACHE_*` — Cache size and TTL
 
 ## API Endpoints
 

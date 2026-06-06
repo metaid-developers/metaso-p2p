@@ -57,7 +57,7 @@ Out of scope for this hardening round:
   - `/Users/tusm/Documents/MetaID_Projects/show-now-tmp/basicprotocols/group_chat/api/respond/group_response.go`
   - `/Users/tusm/Documents/MetaID_Projects/show-now-tmp/basicprotocols/group_chat/api/respond/socket_response.go`
   - `/Users/tusm/Documents/MetaID_Projects/show-now-tmp/basicprotocols/group_chat/service/group_service.go`
-- Current meta-socket source:
+- Current metaso-p2p source:
   - `internal/api/router.go`
   - `internal/aggregator/groupchat/api.go`
   - `internal/aggregator/groupchat/db_chat.go`
@@ -80,7 +80,7 @@ message live-delivery semantics.
 
 ## Endpoint Gap Matrix
 
-| Endpoint | idchat usage | Old backend contract | Current meta-socket state | Required action |
+| Endpoint | idchat usage | Old backend contract | Current metaso-p2p state | Required action |
 | --- | --- | --- | --- | --- |
 | `/chat-api/group-chat/user/latest-chat-info-list` | Main session list. idchat hides private sessions without `userInfo.chatPublicKey`. | `data.total`, `data.list`; unified group and private sessions; private items include peer `userInfo`. | Implemented only from group membership, returns `data.list` only, live probe returned empty for a user with old sessions. | P0. Rebuild as unified group plus private session list with old item shape and `total`. |
 | `/chat-api/group-chat/group-list` | Legacy channel list and fallback data. | `data.total`, `data.list`. | Route exists, but live probe returned empty where old backend returned groups. | P0. Fix group membership/index coverage and add old response fields. |
@@ -182,7 +182,7 @@ Required behavior:
 - `group-info`, `group-list`, `group-member-list`, `group-chat-list-v2`, and
   `group-chat-list-by-index` can serve groups that idchat users already have in
   their old session lists.
-- Old response fields are preserved even if meta-socket internally stores a
+- Old response fields are preserved even if metaso-p2p internally stores a
   narrower model.
 
 Acceptance:
@@ -315,7 +315,7 @@ Local verification before merging hardening work:
 CGO_ENABLED=0 go test ./...
 ```
 
-Contract smoke against local or staging meta-socket:
+Contract smoke against local or staging metaso-p2p:
 
 ```bash
 curl -sS "$BASE/chat-api/group-chat/user/latest-chat-info-list?metaId=$META_ID"
@@ -334,7 +334,7 @@ curl -sS "$BASE/push-base/v1/push/get_user_blocked_chats?metaId=$META_ID"
 curl -sS "$BASE/socket/socket.io/?EIO=4&transport=polling&metaid=$META_ID&type=pc"
 ```
 
-Frontend acceptance with idchat config pointed at meta-socket:
+Frontend acceptance with idchat config pointed at metaso-p2p:
 
 - Session list loads with existing group and private conversations.
 - Private sessions remain visible because peer `chatPublicKey` is present.

@@ -12,20 +12,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/metaid-developers/meta-socket/internal/aggregator"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/groupchat"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/notify"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/privatechat"
-	"github.com/metaid-developers/meta-socket/internal/aggregator/userinfo"
-	"github.com/metaid-developers/meta-socket/internal/api"
-	"github.com/metaid-developers/meta-socket/internal/cache"
-	"github.com/metaid-developers/meta-socket/internal/config"
-	"github.com/metaid-developers/meta-socket/internal/presence"
-	"github.com/metaid-developers/meta-socket/internal/socket"
-	"github.com/metaid-developers/meta-socket/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
+	"github.com/metaid-developers/metaso-p2p/internal/socket"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
-// setupFullRouter mirrors cmd/meta-socket/main.go's aggregator wiring so the
+// setupFullRouter mirrors cmd/metaso-p2p/main.go's aggregator wiring so the
 // tests below catch real-world routing regressions (e.g. forgetting to register
 // privatechat, which causes its routes to fall back to groupchat stubs).
 func setupFullRouter(t *testing.T) *gin.Engine {
@@ -157,7 +157,7 @@ func setupPresenceRouterWithConfig(t *testing.T, cfg config.Config, provider pre
 
 func fakePresenceSnapshot() *presence.Snapshot {
 	return &presence.Snapshot{
-		Protocol:    "metasocket-presence",
+		Protocol:    "metaso-p2p-presence",
 		Version:     "1.0.0",
 		NodeID:      "node-a",
 		GeneratedAt: 1710000001000,
@@ -173,7 +173,7 @@ func fakePresenceSnapshot() *presence.Snapshot {
 func TestRouter_WellKnownPresenceEndpointDisabledWithoutProvider(t *testing.T) {
 	router := setupPresenceRouter(t, nil)
 
-	w, _ := get(t, router, "/.well-known/metasocket/presence")
+	w, _ := get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("presence endpoint without provider: want 404 got %d body=%s", w.Code, w.Body.String())
 	}
@@ -182,12 +182,12 @@ func TestRouter_WellKnownPresenceEndpointDisabledWithoutProvider(t *testing.T) {
 func TestRouter_WellKnownPresenceEndpointReturnsSnapshotFromProvider(t *testing.T) {
 	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
 
-	w, body := get(t, router, "/.well-known/metasocket/presence")
+	w, body := get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusOK {
 		t.Fatalf("presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
 	}
-	if body["protocol"] != "metasocket-presence" {
-		t.Fatalf("presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	if body["protocol"] != "metaso-p2p-presence" {
+		t.Fatalf("presence endpoint protocol: want metaso-p2p-presence got %v body=%s", body["protocol"], w.Body.String())
 	}
 	if _, ok := body["code"]; ok {
 		t.Fatalf("presence endpoint should return the snapshot directly, got enveloped body=%s", w.Body.String())
@@ -203,11 +203,11 @@ func TestRouter_WellKnownPresenceEndpointUsesConfiguredPath(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("configured presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
 	}
-	if body["protocol"] != "metasocket-presence" {
-		t.Fatalf("configured presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	if body["protocol"] != "metaso-p2p-presence" {
+		t.Fatalf("configured presence endpoint protocol: want metaso-p2p-presence got %v body=%s", body["protocol"], w.Body.String())
 	}
 
-	w, _ = get(t, router, "/.well-known/metasocket/presence")
+	w, _ = get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("default presence endpoint should not be mounted when custom path is configured: got %d body=%s", w.Code, w.Body.String())
 	}
@@ -218,19 +218,19 @@ func TestRouter_WellKnownPresenceEndpointEmptyConfiguredPathFallsBackToDefault(t
 	cfg.Federation.PresencePath = ""
 	router, _ := setupPresenceRouterWithConfig(t, cfg, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
 
-	w, body := get(t, router, "/.well-known/metasocket/presence")
+	w, body := get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusOK {
 		t.Fatalf("fallback presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
 	}
-	if body["protocol"] != "metasocket-presence" {
-		t.Fatalf("fallback presence endpoint protocol: want metasocket-presence got %v body=%s", body["protocol"], w.Body.String())
+	if body["protocol"] != "metaso-p2p-presence" {
+		t.Fatalf("fallback presence endpoint protocol: want metaso-p2p-presence got %v body=%s", body["protocol"], w.Body.String())
 	}
 }
 
 func TestRouter_WellKnownPresenceEndpointProviderErrorReturns503(t *testing.T) {
 	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{err: errors.New("signing failed")})
 
-	w, _ := get(t, router, "/.well-known/metasocket/presence")
+	w, _ := get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("presence endpoint provider error: want 503 got %d body=%s", w.Code, w.Body.String())
 	}
@@ -239,7 +239,7 @@ func TestRouter_WellKnownPresenceEndpointProviderErrorReturns503(t *testing.T) {
 func TestRouter_WellKnownPresenceEndpointDoesNotExposeSocketIDs(t *testing.T) {
 	router := setupPresenceRouter(t, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
 
-	w, body := get(t, router, "/.well-known/metasocket/presence")
+	w, body := get(t, router, "/.well-known/metaso-p2p/presence")
 	if w.Code != http.StatusOK {
 		t.Fatalf("presence endpoint: want 200 got %d body=%s", w.Code, w.Body.String())
 	}
@@ -279,7 +279,7 @@ func TestRouter_WellKnownPresenceEndpointProviderAccessIsRaceFree(t *testing.T) 
 			defer wg.Done()
 			<-start
 			for j := 0; j < 1000; j++ {
-				w, _ := get(t, router, "/.well-known/metasocket/presence")
+				w, _ := get(t, router, "/.well-known/metaso-p2p/presence")
 				if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 					t.Errorf("presence endpoint during provider update: got %d body=%s", w.Code, w.Body.String())
 				}
