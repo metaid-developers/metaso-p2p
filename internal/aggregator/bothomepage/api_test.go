@@ -2,6 +2,7 @@ package bothomepage
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -120,5 +121,22 @@ func TestHandleGlobalMetaIDInvalidQuery(t *testing.T) {
 	}
 	if body["message"] != "invalid parameter" {
 		t.Fatalf("message = %v, want invalid parameter; body=%v", body["message"], body)
+	}
+}
+
+func TestHandleGlobalMetaIDAggregationUnavailable(t *testing.T) {
+	router, _, lookup := newHandlerFixture(t)
+	lookup.err = errors.New("lookup failed")
+
+	status, body := callHomepage(t, router, "/api/bot-homepage/globalmetaid/idqBot")
+
+	if status != http.StatusOK {
+		t.Fatalf("HTTP status = %d, want 200; body=%v", status, body)
+	}
+	if body["code"] != float64(50000) {
+		t.Fatalf("code = %v, want 50000; body=%v", body["code"], body)
+	}
+	if body["message"] != "aggregation unavailable" {
+		t.Fatalf("message = %v, want aggregation unavailable; body=%v", body["message"], body)
 	}
 }
