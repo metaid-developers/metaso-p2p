@@ -356,11 +356,12 @@ func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
 }
 
 func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {
+	address = strings.TrimSpace(address)
 	if raw, err := a.store.Get(namespace, addressKey(address)); err == nil && len(raw) > 0 {
 		indexedMetaID := string(raw)
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale address index %q -> %q: %v", address, indexedMetaID, err)
-		} else if profile != nil && strings.EqualFold(profile.Address, address) {
+		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.Address), address) {
 			return profile, nil
 		} else if profile != nil {
 			log.Printf("[userinfo] stale address index %q -> %q: profile address %q", address, indexedMetaID, profile.Address)
@@ -373,7 +374,7 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 		if err := json.Unmarshal(value, &p); err != nil {
 			return nil // skip corrupt entries
 		}
-		if strings.EqualFold(p.Address, address) {
+		if strings.EqualFold(strings.TrimSpace(p.Address), address) {
 			found = &p
 			return nil
 		}
@@ -383,11 +384,12 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 }
 
 func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
+	globalMetaId = strings.TrimSpace(globalMetaId)
 	if raw, err := a.store.Get(namespace, globalMetaIdKey(globalMetaId)); err == nil && len(raw) > 0 {
 		indexedMetaID := string(raw)
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale globalMetaId index %q -> %q: %v", globalMetaId, indexedMetaID, err)
-		} else if profile != nil && strings.EqualFold(profile.GlobalMetaID, globalMetaId) {
+		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.GlobalMetaID), globalMetaId) {
 			return profile, nil
 		} else if profile != nil {
 			log.Printf("[userinfo] stale globalMetaId index %q -> %q: profile globalMetaId %q", globalMetaId, indexedMetaID, profile.GlobalMetaID)
@@ -400,7 +402,7 @@ func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfil
 		if err := json.Unmarshal(value, &p); err != nil {
 			return nil
 		}
-		if strings.EqualFold(p.GlobalMetaID, globalMetaId) {
+		if strings.EqualFold(strings.TrimSpace(p.GlobalMetaID), globalMetaId) {
 			found = &p
 			return nil
 		}

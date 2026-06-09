@@ -299,7 +299,7 @@ func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 		t.Fatalf("seed globalMetaId index: %v", err)
 	}
 
-	profile, err := agg.LookupByGlobalMetaId(indexedGlobal)
+	profile, err := agg.LookupByGlobalMetaId("  " + indexedGlobal + "  ")
 	if err != nil {
 		t.Fatalf("LookupByGlobalMetaId: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 		t.Fatalf("seed address index: %v", err)
 	}
 
-	profile, err := agg.LookupByAddress(indexedAddress)
+	profile, err := agg.LookupByAddress("  " + indexedAddress + "  ")
 	if err != nil {
 		t.Fatalf("LookupByAddress: %v", err)
 	}
