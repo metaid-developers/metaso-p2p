@@ -223,23 +223,18 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 		return &HomepageListResult{List: []ServiceListItem{}}, nil
 	}
 
-	candidates, err := a.scanHomepageProviderCandidates(p)
-	if err != nil {
-		return nil, err
-	}
-
-	hasMore := len(candidates) > p.Size
 	items := make([]ServiceListItem, 0, p.Size)
-	for _, candidate := range candidates {
+	hasMore := false
+	err := a.scanHomepageProviderCandidates(p, func(candidate homepageProviderCandidate) (bool, error) {
 		rec, err := a.loadService(candidate.chainName, candidate.sourcePinId)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if rec == nil {
-			continue
+			return true, nil
 		}
 		if !p.IncludeInactive && !rec.IsVisibleDefault() {
-			continue
+			return true, nil
 		}
 
 		profile := a.ResolveProvider(rec)
@@ -247,8 +242,12 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 		items = append(items, a.toListItem(expandedRecord{rec: rec, profile: profile, rating: rating}))
 		if len(items) > p.Size {
 			hasMore = true
-			break
+			return false, nil
 		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if len(items) > p.Size {
 		items = items[:p.Size]
@@ -304,10 +303,7 @@ func clampSize(size int) int {
 	return size
 }
 
-func (a *Aggregator) scanHomepageProviderCandidates(p HomepageListParams) ([]homepageProviderCandidate, error) {
-	limit := p.Size + 1
-	candidates := make([]homepageProviderCandidate, 0, limit)
-
+func (a *Aggregator) scanHomepageProviderCandidates(p HomepageListParams, visit func(homepageProviderCandidate) (bool, error)) error {
 	var prefix []byte
 	var parse func(string) (homepageProviderCandidate, bool)
 	if p.ChainName != "" {
@@ -325,17 +321,20 @@ func (a *Aggregator) scanHomepageProviderCandidates(p HomepageListParams) ([]hom
 	err := a.store.ScanPrefix(NamespaceService, prefix, func(key, _ []byte) error {
 		candidate, ok := parse(string(key))
 		if ok {
-			candidates = append(candidates, candidate)
-		}
-		if len(candidates) >= limit {
-			return errStopHomepageScan
+			keepGoing, err := visit(candidate)
+			if err != nil {
+				return err
+			}
+			if !keepGoing {
+				return errStopHomepageScan
+			}
 		}
 		return nil
 	})
 	if errors.Is(err, errStopHomepageScan) {
 		err = nil
 	}
-	return candidates, err
+	return err
 }
 
 func parseProviderGlobalIndexKey(key, prefix string) (homepageProviderCandidate, bool) {

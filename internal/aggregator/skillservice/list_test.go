@@ -608,6 +608,54 @@ func TestListHomepageByProviderGlobalMetaIdReadsNewestSix(t *testing.T) {
 	}
 }
 
+func TestListHomepageByProviderSkipsInactiveBeforeHasMoreLimit(t *testing.T) {
+	f := newListFixture(t)
+	for i := 1; i <= 6; i++ {
+		f.seed(t, servicePinOpts{
+			PinId: pinIdFor(i), Operation: OperationCreate, ChainName: "mvc",
+			ProviderMetaId: "provA", Timestamp: int64(i * 100),
+			ServiceName: "visible" + intToStr(i), DisplayName: "Visible " + intToStr(i),
+		})
+	}
+	f.seed(t, servicePinOpts{
+		PinId: "revoked-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 700,
+		ServiceName: "revoked-home", DisplayName: "Revoked Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "revoked-home-op:i0", Operation: OperationRevoke, ChainName: "mvc",
+		ProviderMetaId: "provA", OriginalId: "revoked-home:i0", Timestamp: 800,
+		ServiceName: "revoked-home", DisplayName: "Revoked Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "disabled-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 900, Disabled: true,
+		ServiceName: "disabled-home", DisplayName: "Disabled Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 5 {
+		t.Fatalf("expected 5 visible homepage items, got %d: %+v", len(res.List), res.List)
+	}
+	if !res.HasMore {
+		t.Fatal("expected HasMore=true with a sixth visible service")
+	}
+	for _, item := range res.List {
+		if item.Disabled || item.Operation == OperationRevoke {
+			t.Fatalf("homepage returned inactive item: %+v", item)
+		}
+	}
+	if res.List[0].ServiceName != "visible6" || res.List[4].ServiceName != "visible2" {
+		t.Fatalf("homepage order wrong after inactive filter: got first=%s fifth=%s", res.List[0].ServiceName, res.List[4].ServiceName)
+	}
+}
+
 func TestListHomepageByProviderCrossChain(t *testing.T) {
 	f := newListFixture(t)
 	f.seed(t, servicePinOpts{
