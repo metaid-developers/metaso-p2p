@@ -37,20 +37,7 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath 
 	rec := newRecordFromPin(pin, protocolPath, pin.Id, isMempool)
 	if existing != nil {
 		if !isMempool && existing.IsMempool {
-			if existing.CurrentPinId != existing.SourcePinId && existing.CurrentPinId != pin.Id {
-				rec.CurrentPinId = existing.CurrentPinId
-				rec.CurrentNumber = existing.CurrentNumber
-				rec.CurrentPath = existing.CurrentPath
-				rec.CurrentHost = existing.CurrentHost
-				rec.Operation = existing.Operation
-				rec.Hidden = existing.Hidden
-				rec.IsMempool = true
-				rec.ContentType = existing.ContentType
-				rec.PayloadText = existing.PayloadText
-				rec.PayloadJSON = existing.PayloadJSON
-				rec.PayloadExposed = existing.PayloadExposed
-				rec.UpdatedAt = existing.UpdatedAt
-			}
+			mergeConfirmedReplayWithPendingCurrent(existing, rec, pin.Id)
 			return a.saveRecord(rec, existing)
 		}
 		return nil
@@ -91,6 +78,7 @@ func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath 
 		updated.Operation = OperationRevoke
 		updated.Hidden = true
 	}
+	mergeConfirmedReplayWithPendingCurrent(previous, updated, pin.Id)
 
 	if err := a.saveRecord(updated, previous); err != nil {
 		return err
@@ -122,10 +110,32 @@ func (a *Aggregator) processRevoke(pin *aggregator.PinInscription, protocolPath 
 	if pin.Timestamp > 0 {
 		updated.UpdatedAt = pin.Timestamp
 	}
+	mergeConfirmedReplayWithPendingCurrent(previous, &updated, pin.Id)
 	if err := a.saveRecord(&updated, previous); err != nil {
 		return err
 	}
 	return a.mapPinToSource(pin.ChainName, pin.Id, previous.SourcePinId)
+}
+
+func mergeConfirmedReplayWithPendingCurrent(previous, candidate *Record, confirmedPinID string) {
+	if previous == nil || candidate == nil || candidate.IsMempool || !previous.IsMempool {
+		return
+	}
+	if previous.CurrentPinId == "" || previous.CurrentPinId == previous.SourcePinId || previous.CurrentPinId == confirmedPinID {
+		return
+	}
+	candidate.CurrentPinId = previous.CurrentPinId
+	candidate.CurrentNumber = previous.CurrentNumber
+	candidate.CurrentPath = previous.CurrentPath
+	candidate.CurrentHost = previous.CurrentHost
+	candidate.Operation = previous.Operation
+	candidate.Hidden = previous.Hidden
+	candidate.IsMempool = true
+	candidate.ContentType = previous.ContentType
+	candidate.PayloadText = previous.PayloadText
+	candidate.PayloadJSON = previous.PayloadJSON
+	candidate.PayloadExposed = previous.PayloadExposed
+	candidate.UpdatedAt = previous.UpdatedAt
 }
 
 func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId string, isMempool bool) *Record {

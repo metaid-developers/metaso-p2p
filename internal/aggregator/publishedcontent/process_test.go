@@ -332,6 +332,209 @@ func TestConfirmedCreatePreservesPendingMempoolModify(t *testing.T) {
 	}
 }
 
+func TestConfirmedModifyPreservesNewerPendingMempoolModify(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "source:i0",
+		Operation:    OperationCreate,
+		Timestamp:    100,
+		Number:       11,
+		ContentBody:  []byte("source confirmed"),
+		GlobalMetaId: "gid-source",
+		MetaId:       "meta-source",
+		Address:      "addr-source",
+		Host:         "source-host",
+	}))
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "modify-pending:i0",
+		Path:         PathSimpleBuzz + "@source:i0",
+		Operation:    OperationModify,
+		Timestamp:    300,
+		Number:       33,
+		ContentBody:  []byte("pending modify"),
+		GlobalMetaId: "gid-pending",
+		MetaId:       "meta-pending",
+		Address:      "addr-pending",
+		Host:         "pending-host",
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "modify-confirmed:i0",
+		Path:         PathSimpleBuzz + "@source:i0",
+		Operation:    OperationModify,
+		Timestamp:    200,
+		Number:       22,
+		ContentBody:  []byte("older confirmed modify"),
+		GlobalMetaId: "gid-confirmed",
+		MetaId:       "meta-confirmed",
+		Address:      "addr-confirmed",
+		Host:         "confirmed-host",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "source:i0")
+	if rec.CurrentPinId != "modify-pending:i0" {
+		t.Fatalf("confirmed modify replay should preserve pending current pin, got %q", rec.CurrentPinId)
+	}
+	if !rec.IsMempool {
+		t.Fatal("pending modify should keep record in mempool state")
+	}
+	if rec.Operation != OperationModify || rec.Hidden {
+		t.Fatalf("pending modify state not preserved: operation=%q hidden=%v", rec.Operation, rec.Hidden)
+	}
+	if rec.PayloadText != "pending modify" || !rec.PayloadExposed {
+		t.Fatalf("pending modify payload not preserved: text=%q exposed=%v", rec.PayloadText, rec.PayloadExposed)
+	}
+	if rec.CreatedAt != 100 || rec.UpdatedAt != 300 {
+		t.Fatalf("timestamps: createdAt=%d updatedAt=%d", rec.CreatedAt, rec.UpdatedAt)
+	}
+	if rec.SourceNumber != 11 || rec.SourceHost != "source-host" {
+		t.Fatalf("source metadata changed: number=%d host=%q", rec.SourceNumber, rec.SourceHost)
+	}
+	if rec.CurrentNumber != 33 || rec.CurrentPath != PathSimpleBuzz+"@source:i0" || rec.CurrentHost != "pending-host" {
+		t.Fatalf("current metadata not preserved: number=%d path=%q host=%q", rec.CurrentNumber, rec.CurrentPath, rec.CurrentHost)
+	}
+	if rec.PublisherGlobalMetaId != "gid-confirmed" || rec.PublisherMetaId != "meta-confirmed" || rec.PublisherAddress != "addr-confirmed" {
+		t.Fatalf("confirmed modify identity not applied: global=%q meta=%q address=%q", rec.PublisherGlobalMetaId, rec.PublisherMetaId, rec.PublisherAddress)
+	}
+
+	pendingIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-pending",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List pending identity: %v", err)
+	}
+	if len(pendingIdentity.Items) != 0 {
+		t.Fatalf("pending modify identity index should not list confirmed modify record, got %d item(s)", len(pendingIdentity.Items))
+	}
+
+	confirmedIdentity, err := agg.List(ListParams{
+		ProtocolPath:          PathSimpleBuzz,
+		PublisherGlobalMetaId: "gid-confirmed",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List confirmed identity: %v", err)
+	}
+	if len(confirmedIdentity.Items) != 1 {
+		t.Fatalf("confirmed modify identity index should list preserved pending record, got %d item(s)", len(confirmedIdentity.Items))
+	}
+	if confirmedIdentity.Items[0].SourcePinId != "source:i0" || confirmedIdentity.Items[0].CurrentPinId != "modify-pending:i0" {
+		t.Fatalf("confirmed modify identity item mismatch: %+v", confirmedIdentity.Items[0])
+	}
+	if confirmedIdentity.Items[0].PayloadText != "pending modify" || !confirmedIdentity.Items[0].IsMempool {
+		t.Fatalf("confirmed modify identity item should expose pending modify state: %+v", confirmedIdentity.Items[0])
+	}
+}
+
+func TestConfirmedRevokePreservesNewerPendingMempoolModify(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "source:i0",
+		Operation:    OperationCreate,
+		Timestamp:    100,
+		Number:       11,
+		ContentBody:  []byte("source confirmed"),
+		GlobalMetaId: "gid-source",
+		MetaId:       "meta-source",
+		Address:      "addr-source",
+		Host:         "source-host",
+	}))
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "modify-pending:i0",
+		Path:         PathSimpleBuzz + "@source:i0",
+		Operation:    OperationModify,
+		Timestamp:    300,
+		Number:       33,
+		ContentBody:  []byte("pending modify"),
+		GlobalMetaId: "gid-pending",
+		MetaId:       "meta-pending",
+		Address:      "addr-pending",
+		Host:         "pending-host",
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:        "revoke-confirmed:i0",
+		Path:         PathSimpleBuzz + "@source:i0",
+		Operation:    OperationRevoke,
+		Timestamp:    200,
+		Number:       22,
+		ContentType:  "application/json",
+		GlobalMetaId: "gid-source",
+		MetaId:       "meta-source",
+		Address:      "addr-source",
+		Host:         "confirmed-host",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "source:i0")
+	if rec.CurrentPinId != "modify-pending:i0" {
+		t.Fatalf("confirmed revoke replay should preserve pending current pin, got %q", rec.CurrentPinId)
+	}
+	if !rec.IsMempool {
+		t.Fatal("pending modify should keep record in mempool state")
+	}
+	if rec.Operation != OperationModify || rec.Hidden {
+		t.Fatalf("pending modify state not preserved: operation=%q hidden=%v", rec.Operation, rec.Hidden)
+	}
+	if rec.PayloadText != "pending modify" || !rec.PayloadExposed {
+		t.Fatalf("pending modify payload not preserved: text=%q exposed=%v", rec.PayloadText, rec.PayloadExposed)
+	}
+	if rec.UpdatedAt != 300 || rec.CurrentNumber != 33 || rec.CurrentHost != "pending-host" {
+		t.Fatalf("pending current metadata not preserved: updatedAt=%d currentNumber=%d host=%q", rec.UpdatedAt, rec.CurrentNumber, rec.CurrentHost)
+	}
+	if rec.ContentType != "text/plain" {
+		t.Fatalf("pending content type should be preserved, got %q", rec.ContentType)
+	}
+}
+
+func TestConfirmedModifySamePendingPinClearsMempoolState(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "source:i0",
+		Operation:   OperationCreate,
+		Timestamp:   100,
+		Number:      11,
+		ContentBody: []byte("source confirmed"),
+	}))
+	mustProcessMempool(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "modify-same:i0",
+		Path:        PathSimpleBuzz + "@source:i0",
+		Operation:   OperationModify,
+		Timestamp:   200,
+		Number:      22,
+		ContentBody: []byte("pending modify"),
+		Host:        "pending-host",
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "modify-same:i0",
+		Path:        PathSimpleBuzz + "@source:i0",
+		Operation:   OperationModify,
+		Timestamp:   300,
+		Number:      33,
+		ContentBody: []byte("confirmed modify"),
+		Host:        "confirmed-host",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "source:i0")
+	if rec.CurrentPinId != "modify-same:i0" {
+		t.Fatalf("same-pin confirmation should keep current pin, got %q", rec.CurrentPinId)
+	}
+	if rec.IsMempool {
+		t.Fatal("same-pin confirmation should clear mempool state")
+	}
+	if rec.PayloadText != "confirmed modify" || rec.UpdatedAt != 300 {
+		t.Fatalf("same-pin confirmation should apply confirmed current payload: text=%q updatedAt=%d", rec.PayloadText, rec.UpdatedAt)
+	}
+	if rec.CurrentNumber != 33 || rec.CurrentHost != "confirmed-host" {
+		t.Fatalf("same-pin confirmation should apply confirmed metadata: number=%d host=%q", rec.CurrentNumber, rec.CurrentHost)
+	}
+}
+
 func TestPayloadFallsBackToContentSummary(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
