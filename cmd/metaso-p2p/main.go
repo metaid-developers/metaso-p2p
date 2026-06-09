@@ -14,6 +14,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
@@ -79,6 +80,13 @@ func main() {
 		if err := aggRegistry.Register(skillserviceAgg); err != nil {
 			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
+		var publishedAgg *publishedcontent.Aggregator
+		publishedCandidate := &publishedcontent.Aggregator{}
+		if err := aggRegistry.Register(publishedCandidate); err != nil {
+			log.Printf("WARNING: publishedcontent aggregator init failed: %v", err)
+		} else {
+			publishedAgg = publishedCandidate
+		}
 		botHomepageAgg = &bothomepage.Aggregator{}
 		if err := aggRegistry.Register(botHomepageAgg); err != nil {
 			log.Printf("WARNING: bothomepage aggregator init failed: %v", err)
@@ -95,7 +103,26 @@ func main() {
 		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userinfoAgg))
 		botHomepageAgg.SetServiceLister(skillserviceAgg)
+		botHomepageAgg.SetHomepageServiceLister(skillserviceAgg)
+		if publishedAgg != nil {
+			botHomepageAgg.SetPublishedContentLister(publishedAgg)
+		}
 		botHomepageAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
+		if cfg.BotHomepageV2Backfill.Enabled && publishedAgg != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
+				defer cancel()
+				err := publishedAgg.Backfill(publishedcontent.BackfillOptions{
+					Context:  ctx,
+					Client:   publishedcontent.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
+					Since:    time.Now().Add(-cfg.BotHomepageV2Backfill.Lookback),
+					PageSize: cfg.BotHomepageV2Backfill.PageSize,
+				})
+				if err != nil {
+					log.Printf("WARNING: bot homepage v2 backfill failed: %v", err)
+				}
+			}()
+		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
