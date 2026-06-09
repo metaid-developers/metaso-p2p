@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 )
 
@@ -39,6 +40,28 @@ type recordingServiceLister struct {
 
 func (r *recordingServiceLister) List(params skillservice.ListParams) (*skillservice.ListResult, error) {
 	r.gotParams = params
+	return r.result, r.err
+}
+
+type recordingHomepageServiceLister struct {
+	gotParams skillservice.HomepageListParams
+	result    *skillservice.HomepageListResult
+	err       error
+}
+
+func (r *recordingHomepageServiceLister) ListHomepageByProvider(params skillservice.HomepageListParams) (*skillservice.HomepageListResult, error) {
+	r.gotParams = params
+	return r.result, r.err
+}
+
+type recordingPublishedContentLister struct {
+	gotParams []publishedcontent.ListParams
+	result    *publishedcontent.ListResult
+	err       error
+}
+
+func (r *recordingPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
+	r.gotParams = append(r.gotParams, params)
 	return r.result, r.err
 }
 
@@ -218,6 +241,98 @@ func TestBuildHomepageProfileDefaultModeAndPartialProofs(t *testing.T) {
 	}
 	if got.Source.Stale {
 		t.Fatal("Source.Stale = true, want false")
+	}
+}
+
+func TestBuildV2ParsesLegacyBioIntoPersona(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Persona Bot",
+		Bio:          `{"role":"Agent role","soul":"Warm","goal":"Help","llm":"deepseek","allowChatSkills":["metabot-post-buzz"]}`,
+		BioId:        "bio:i0",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+	opts.IncludeProofs = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.SchemaVersion != "botHomepage.v2" {
+		t.Fatalf("SchemaVersion = %q, want botHomepage.v2", got.SchemaVersion)
+	}
+	if got.Profile.Bio != "" {
+		t.Fatalf("Profile.Bio = %q, want empty for legacy persona JSON", got.Profile.Bio)
+	}
+	if got.Persona == nil {
+		t.Fatal("Persona = nil, want parsed persona")
+	}
+	if got.Persona.Role != "Agent role" {
+		t.Fatalf("Persona.Role = %q, want Agent role", got.Persona.Role)
+	}
+	if got.Persona.Soul != "Warm" {
+		t.Fatalf("Persona.Soul = %q, want Warm", got.Persona.Soul)
+	}
+	if got.Persona.Goal != "Help" {
+		t.Fatalf("Persona.Goal = %q, want Help", got.Persona.Goal)
+	}
+	if got.Persona.LLM.Provider != "deepseek" {
+		t.Fatalf("Persona.LLM.Provider = %q, want deepseek", got.Persona.LLM.Provider)
+	}
+	if len(got.Persona.ChatSkills.Allow) != 1 || got.Persona.ChatSkills.Allow[0] != "metabot-post-buzz" {
+		t.Fatalf("Persona.ChatSkills.Allow = %#v, want metabot-post-buzz", got.Persona.ChatSkills.Allow)
+	}
+	if got.Homepage.Summary != "Agent role" {
+		t.Fatalf("Homepage.Summary = %q, want Agent role", got.Homepage.Summary)
+	}
+}
+
+func TestBuildV2SectionsAreOptional(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Section Bot",
+	}})
+	agg.SetPublishedContentLister(&recordingPublishedContentLister{err: errors.New("publishedcontent unavailable")})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.SchemaVersion != "botHomepage.v2" {
+		t.Fatalf("SchemaVersion = %q, want botHomepage.v2", got.SchemaVersion)
+	}
+	if len(got.Sections) != 4 {
+		t.Fatalf("Sections length = %d, want 4; sections=%#v", len(got.Sections), got.Sections)
+	}
+	metaapps := got.Sections[1]
+	if metaapps.Id != "metaapps" || metaapps.Title != "MetaAPPs" || metaapps.Kind != "metaapps" {
+		t.Fatalf("metaapps section identity = %+v", metaapps)
+	}
+	if len(metaapps.Items) != 0 || metaapps.Limit != 5 || metaapps.Returned != 0 || metaapps.HasMore {
+		t.Fatalf("metaapps section paging = %+v", metaapps)
+	}
+	if metaapps.More.Label != "More" || metaapps.More.Enabled {
+		t.Fatalf("metaapps more = %+v, want disabled More", metaapps.More)
+	}
+	if !containsExactWarning(got.Warnings, "metaapps section unavailable") {
+		t.Fatalf("Warnings = %#v, want exact metaapps section unavailable", got.Warnings)
 	}
 }
 
@@ -500,6 +615,15 @@ func assertProfileProof(t *testing.T, proofs []ProfileProof, field, path, pinID,
 func containsWarning(warnings []string, needle string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExactWarning(warnings []string, want string) bool {
+	for _, warning := range warnings {
+		if warning == want {
 			return true
 		}
 	}

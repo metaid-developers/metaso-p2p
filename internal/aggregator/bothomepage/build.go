@@ -1,11 +1,20 @@
 package bothomepage
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+)
+
+const (
+	schemaVersionV1         = "botHomepage.v1"
+	schemaVersionV2         = "botHomepage.v2"
+	homepageSectionLimit    = 5
+	homepageSectionReadSize = homepageSectionLimit + 1
 )
 
 var (
@@ -16,6 +25,14 @@ var (
 
 type ServiceLister interface {
 	List(skillservice.ListParams) (*skillservice.ListResult, error)
+}
+
+type HomepageServiceLister interface {
+	ListHomepageByProvider(skillservice.HomepageListParams) (*skillservice.HomepageListResult, error)
+}
+
+type PublishedContentLister interface {
+	List(publishedcontent.ListParams) (*publishedcontent.ListResult, error)
 }
 
 func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, error) {
@@ -43,6 +60,11 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		ChainName:    strings.TrimSpace(profile.ChainName),
 	}
 	outProfile := a.toProfile(profile, canonical.GlobalMetaId)
+	var persona *Persona
+	if opts.Version == "v2" {
+		persona = buildPersona(profile)
+		outProfile.Bio = profileBioForVersion(profile, outProfile.Bio, opts.Version)
+	}
 	resolvedPresence := a.resolvePresence(*profile, opts.IncludePresence)
 	services := make([]Service, 0)
 	proofs := Proofs{
@@ -58,12 +80,13 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 	}
 
 	out := &Data{
-		SchemaVersion: "botHomepage.v1",
+		SchemaVersion: schemaVersion(opts),
 		ResolvedAt:    resolvedAt,
 		GlobalMetaId:  requestGlobalMetaId,
 		Canonical:     canonical,
 		Profile:       outProfile,
-		Homepage:      toDefaultHomepage(outProfile),
+		Persona:       persona,
+		Homepage:      toDefaultHomepage(outProfile, persona),
 		Presence:      resolvedPresence,
 		Services:      services,
 		Proofs:        proofs,
@@ -82,9 +105,19 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		}
 		out.Warnings = warnings
 	}
+	if opts.Version == "v2" && opts.IncludeSections {
+		out.Sections, out.Warnings = a.loadSections(canonical.GlobalMetaId, opts, out.Warnings)
+	}
 	out.Actions = buildActions(out.Profile.ChatPubkey, len(out.Services), canonical.GlobalMetaId)
 
 	return out, nil
+}
+
+func schemaVersion(opts Options) string {
+	if opts.Version == "v2" {
+		return schemaVersionV2
+	}
+	return schemaVersionV1
 }
 
 func (a *Aggregator) currentTime() int64 {
@@ -113,13 +146,26 @@ func (a *Aggregator) toProfile(p *ProfileSnapshot, canonicalGlobalMetaId string)
 	}
 }
 
-func toDefaultHomepage(profile Profile) Homepage {
+func toDefaultHomepage(profile Profile, persona *Persona) Homepage {
 	return Homepage{
 		Mode:    "default",
 		Title:   profile.Name,
-		Summary: profile.Bio,
+		Summary: homepageSummary(profile, persona),
 		Custom:  nil,
 	}
+}
+
+func homepageSummary(profile Profile, persona *Persona) string {
+	if strings.TrimSpace(profile.Bio) != "" {
+		return strings.TrimSpace(profile.Bio)
+	}
+	if persona != nil && strings.TrimSpace(persona.Role) != "" {
+		return strings.TrimSpace(persona.Role)
+	}
+	if persona != nil && strings.TrimSpace(persona.Goal) != "" {
+		return strings.TrimSpace(persona.Goal)
+	}
+	return ""
 }
 
 func (a *Aggregator) source(fetchedAt int64) Source {
@@ -204,6 +250,11 @@ func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proof
 	add("avatar", "/info/avatar", p.AvatarId)
 	add("background", "/info/background", p.BackgroundId)
 	add("bio", "/info/bio", p.BioId)
+	add("role", "/info/role", p.RoleId)
+	add("soul", "/info/soul", p.SoulId)
+	add("goal", "/info/goal", p.GoalId)
+	add("chatSkills", "/info/chatSkills", p.ChatSkillsId)
+	add("llm", "/info/LLM", p.LLMId)
 	add("chatPubkey", "/info/chatpubkey", p.ChatPublicKeyId)
 
 	if len(proofs.Profile) > 0 {
@@ -212,6 +263,293 @@ func buildProfileProofs(p *ProfileSnapshot, canonicalGlobalMetaId string) (Proof
 	}
 	warnings = append(warnings, "profile proof metadata is unavailable")
 	return proofs, warnings
+}
+
+func buildPersona(p *ProfileSnapshot) *Persona {
+	persona := &Persona{}
+	if p == nil {
+		return persona
+	}
+
+	if bioPersona, ok := personaFromLegacyBio(p.Bio); ok {
+		*persona = bioPersona
+	}
+	if role := strings.TrimSpace(p.Role); role != "" {
+		persona.Role = role
+		persona.RolePinId = strings.TrimSpace(p.RoleId)
+	}
+	if soul := strings.TrimSpace(p.Soul); soul != "" {
+		persona.Soul = soul
+		persona.SoulPinId = strings.TrimSpace(p.SoulId)
+	}
+	if goal := strings.TrimSpace(p.Goal); goal != "" {
+		persona.Goal = goal
+		persona.GoalPinId = strings.TrimSpace(p.GoalId)
+	}
+	if chatSkills, ok := parseChatSkills(p.ChatSkills); ok {
+		persona.ChatSkills = chatSkills
+		persona.ChatSkills.PinId = strings.TrimSpace(p.ChatSkillsId)
+	}
+	if llm, ok := parseLLM(p.LLM); ok {
+		persona.LLM = llm
+		persona.LLM.PinId = strings.TrimSpace(p.LLMId)
+	}
+	return persona
+}
+
+func profileBioForVersion(p *ProfileSnapshot, bio, version string) string {
+	if version != "v2" || p == nil {
+		return bio
+	}
+	if _, ok := personaFromLegacyBio(p.Bio); ok {
+		return ""
+	}
+	return bio
+}
+
+type legacyPersonaBio struct {
+	Role            string   `json:"role"`
+	Soul            string   `json:"soul"`
+	Goal            string   `json:"goal"`
+	LLM             string   `json:"llm"`
+	AllowChatSkills []string `json:"allowChatSkills"`
+}
+
+func personaFromLegacyBio(raw string) (Persona, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return Persona{}, false
+	}
+	var legacy legacyPersonaBio
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return Persona{}, false
+	}
+	if strings.TrimSpace(legacy.Role) == "" &&
+		strings.TrimSpace(legacy.Soul) == "" &&
+		strings.TrimSpace(legacy.Goal) == "" &&
+		strings.TrimSpace(legacy.LLM) == "" &&
+		len(legacy.AllowChatSkills) == 0 {
+		return Persona{}, false
+	}
+	return Persona{
+		Role: strings.TrimSpace(legacy.Role),
+		Soul: strings.TrimSpace(legacy.Soul),
+		Goal: strings.TrimSpace(legacy.Goal),
+		ChatSkills: ChatSkills{
+			Allow: trimStringSlice(legacy.AllowChatSkills),
+		},
+		LLM: LLM{Provider: strings.TrimSpace(legacy.LLM)},
+	}, true
+}
+
+func parseChatSkills(raw string) (ChatSkills, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ChatSkills{}, false
+	}
+	var decoded struct {
+		Allow []string `json:"allowChatSkills"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		return ChatSkills{Allow: trimStringSlice(decoded.Allow)}, true
+	}
+	return ChatSkills{Allow: []string{raw}}, true
+}
+
+func parseLLM(raw string) (LLM, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return LLM{}, false
+	}
+	var decoded struct {
+		Provider        string `json:"provider"`
+		PrimaryProvider string `json:"primaryProvider"`
+		Model           string `json:"model"`
+		Name            string `json:"name"`
+		DisplayName     string `json:"displayName"`
+	}
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		return LLM{
+			Provider: firstNonEmpty(decoded.Provider, decoded.PrimaryProvider),
+			Model:    strings.TrimSpace(decoded.Model),
+			Name:     firstNonEmpty(decoded.Name, decoded.DisplayName),
+		}, true
+	}
+	return LLM{Provider: raw}, true
+}
+
+func trimStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, []string) {
+	sections := []Section{
+		emptySection("services", "Services", "services"),
+		emptySection("metaapps", "MetaAPPs", "metaapps"),
+		emptySection("skills", "Skills", "skills"),
+		emptySection("buzzes", "Buzzes", "buzzes"),
+	}
+
+	section, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
+	sections[0] = section
+	if warning != "" {
+		warnings = append(warnings, warning)
+	}
+
+	publishedSpecs := []struct {
+		index        int
+		id           string
+		title        string
+		kind         string
+		protocolPath string
+		warning      string
+	}{
+		{index: 1, id: "metaapps", title: "MetaAPPs", kind: "metaapps", protocolPath: publishedcontent.PathMetaApp, warning: "metaapps section unavailable"},
+		{index: 2, id: "skills", title: "Skills", kind: "skills", protocolPath: publishedcontent.PathMetaBotSkill, warning: "skills section unavailable"},
+		{index: 3, id: "buzzes", title: "Buzzes", kind: "buzzes", protocolPath: publishedcontent.PathSimpleBuzz, warning: "buzzes section unavailable"},
+	}
+	for _, spec := range publishedSpecs {
+		section, warning := a.loadPublishedContentSection(canonicalGlobalMetaId, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
+		sections[spec.index] = section
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	return sections, warnings
+}
+
+func emptySection(id, title, kind string) Section {
+	return Section{
+		Id:       id,
+		Title:    title,
+		Kind:     kind,
+		Items:    []SectionItem{},
+		Limit:    homepageSectionLimit,
+		Returned: 0,
+		HasMore:  false,
+		More:     MoreLink{Label: "More", Enabled: false},
+	}
+}
+
+func sectionWithItems(id, title, kind string, items []SectionItem, hasMore bool) Section {
+	if len(items) > homepageSectionLimit {
+		hasMore = true
+		items = items[:homepageSectionLimit]
+	}
+	return Section{
+		Id:       id,
+		Title:    title,
+		Kind:     kind,
+		Items:    items,
+		Limit:    homepageSectionLimit,
+		Returned: len(items),
+		HasMore:  hasMore,
+		More:     MoreLink{Label: "More", Enabled: hasMore},
+	}
+}
+
+func (a *Aggregator) loadServicesSection(canonicalGlobalMetaId string, opts Options) (Section, string) {
+	if a == nil || a.homepageServiceLister == nil {
+		return emptySection("services", "Services", "services"), ""
+	}
+	result, err := a.homepageServiceLister.ListHomepageByProvider(skillservice.HomepageListParams{
+		ProviderGlobalMetaId: canonicalGlobalMetaId,
+		ChainName:            opts.ChainName,
+		Size:                 homepageSectionReadSize,
+		IncludeInactive:      opts.IncludeInactiveServices,
+	})
+	if err != nil {
+		return emptySection("services", "Services", "services"), "services section unavailable"
+	}
+	if result == nil || len(result.List) == 0 {
+		return emptySection("services", "Services", "services"), ""
+	}
+	items := make([]SectionItem, 0, len(result.List))
+	for _, item := range result.List {
+		service := serviceFromListItem(item, nil)
+		items = append(items, sectionItemFromService(service))
+	}
+	return sectionWithItems("services", "Services", "services", items, result.HasMore), ""
+}
+
+func (a *Aggregator) loadPublishedContentSection(canonicalGlobalMetaId string, opts Options, id, title, kind, protocolPath, warningText string) (Section, string) {
+	if a == nil || a.publishedContentLister == nil {
+		return emptySection(id, title, kind), ""
+	}
+	result, err := a.publishedContentLister.List(publishedcontent.ListParams{
+		ProtocolPath:          protocolPath,
+		PublisherGlobalMetaId: canonicalGlobalMetaId,
+		ChainName:             opts.ChainName,
+		Size:                  homepageSectionReadSize,
+	})
+	if err != nil {
+		return emptySection(id, title, kind), warningText
+	}
+	if result == nil || len(result.Items) == 0 {
+		return emptySection(id, title, kind), ""
+	}
+	items := make([]SectionItem, 0, len(result.Items))
+	for _, item := range result.Items {
+		items = append(items, sectionItemFromPublishedContent(item))
+	}
+	return sectionWithItems(id, title, kind, items, result.HasMore), ""
+}
+
+func sectionItemFromService(service Service) SectionItem {
+	return SectionItem{
+		Id:           service.Id,
+		SourcePinId:  service.SourceServicePinId,
+		CurrentPinId: service.CurrentPinId,
+		ChainName:    service.ChainName,
+		ProtocolPath: skillservice.PathSkillService,
+		Title:        firstNonEmpty(service.DisplayName, service.ServiceName),
+		Description:  service.Description,
+		CreatedAt:    service.CreatedAt,
+		UpdatedAt:    service.UpdatedAt,
+		Service:      &service,
+	}
+}
+
+func sectionItemFromPublishedContent(item publishedcontent.SectionItem) SectionItem {
+	return SectionItem{
+		Id:             firstNonEmpty(item.CurrentPinId, item.SourcePinId),
+		SourcePinId:    item.SourcePinId,
+		CurrentPinId:   item.CurrentPinId,
+		ChainName:      item.ChainName,
+		ProtocolPath:   item.ProtocolPath,
+		Title:          sectionItemTitle(item),
+		Description:    sectionItemDescription(item),
+		ContentType:    item.ContentType,
+		PayloadText:    item.PayloadText,
+		PayloadJSON:    item.PayloadJSON,
+		PayloadExposed: item.PayloadExposed,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
+	}
+}
+
+func sectionItemTitle(item publishedcontent.SectionItem) string {
+	for _, key := range []string{"title", "name", "displayName"} {
+		if value, ok := item.PayloadJSON[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return strings.TrimSpace(item.PayloadText)
+}
+
+func sectionItemDescription(item publishedcontent.SectionItem) string {
+	for _, key := range []string{"description", "summary"} {
+		if value, ok := item.PayloadJSON[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (a *Aggregator) loadServices(canonicalGlobalMetaId string, opts Options, includeProofs bool, warnings []string) ([]Service, []ServiceProof, []string, error) {

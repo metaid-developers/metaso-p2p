@@ -8,6 +8,9 @@ import (
 
 func TestParseOptionsDefaults(t *testing.T) {
 	defaults := DefaultOptions()
+	if defaults.Version != "" {
+		t.Fatalf("DefaultOptions Version = %q, want empty", defaults.Version)
+	}
 	if !defaults.IncludeServices {
 		t.Fatal("DefaultOptions IncludeServices should be true")
 	}
@@ -45,6 +48,19 @@ func TestParseOptionsDefaults(t *testing.T) {
 	}
 	if !got.IncludePresence {
 		t.Fatal("IncludePresence default should be true")
+	}
+	if got.ChainName != "" {
+		t.Fatalf("ChainName = %q, want empty", got.ChainName)
+	}
+}
+
+func TestParseOptionsVersionV2(t *testing.T) {
+	got, err := ParseOptions(url.Values{"version": {"v2"}, "chainName": {""}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "v2" {
+		t.Fatalf("Version = %q, want v2", got.Version)
 	}
 	if got.ChainName != "" {
 		t.Fatalf("ChainName = %q, want empty", got.ChainName)

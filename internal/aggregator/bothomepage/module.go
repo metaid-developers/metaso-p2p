@@ -20,16 +20,18 @@ const (
 
 // Aggregator implements the read-only Bot homepage aggregation module.
 type Aggregator struct {
-	store          *storage.PebbleStore
-	cache          *cache.Cache[[]byte]
-	notifyCh       chan *aggregator.NotifyEvent
-	now            func() int64
-	profileLookup  ProfileLookup
-	serviceLister  ServiceLister
-	localPresence  presence.LocalReader
-	globalPresence presence.GlobalReader
-	assetResolver  *skillservice.AssetResolver
-	assetBaseURL   string
+	store                  *storage.PebbleStore
+	cache                  *cache.Cache[[]byte]
+	notifyCh               chan *aggregator.NotifyEvent
+	now                    func() int64
+	profileLookup          ProfileLookup
+	serviceLister          ServiceLister
+	homepageServiceLister  HomepageServiceLister
+	publishedContentLister PublishedContentLister
+	localPresence          presence.LocalReader
+	globalPresence         presence.GlobalReader
+	assetResolver          *skillservice.AssetResolver
+	assetBaseURL           string
 }
 
 func (a *Aggregator) Name() string { return namespace }
@@ -56,6 +58,14 @@ func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 
 func (a *Aggregator) SetServiceLister(lister ServiceLister) {
 	a.serviceLister = lister
+}
+
+func (a *Aggregator) SetHomepageServiceLister(lister HomepageServiceLister) {
+	a.homepageServiceLister = lister
+}
+
+func (a *Aggregator) SetPublishedContentLister(lister PublishedContentLister) {
+	a.publishedContentLister = lister
 }
 
 func (a *Aggregator) SetPresenceReaders(local presence.LocalReader, global presence.GlobalReader) {

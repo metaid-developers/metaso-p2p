@@ -7,9 +7,11 @@ type Data struct {
 	GlobalMetaId  string            `json:"globalMetaId"`
 	Canonical     CanonicalIdentity `json:"canonical"`
 	Profile       Profile           `json:"profile"`
+	Persona       *Persona          `json:"persona,omitempty"`
 	Homepage      Homepage          `json:"homepage"`
 	Presence      Presence          `json:"presence"`
 	Services      []Service         `json:"services"`
+	Sections      []Section         `json:"sections,omitempty"`
 	Actions       []Action          `json:"actions"`
 	Proofs        Proofs            `json:"proofs"`
 	Source        Source            `json:"source"`
@@ -42,6 +44,29 @@ type Homepage struct {
 	Title   string          `json:"title"`
 	Summary string          `json:"summary"`
 	Custom  *CustomHomepage `json:"custom"`
+}
+
+type Persona struct {
+	Role       string     `json:"role,omitempty"`
+	RolePinId  string     `json:"rolePinId,omitempty"`
+	Soul       string     `json:"soul,omitempty"`
+	SoulPinId  string     `json:"soulPinId,omitempty"`
+	Goal       string     `json:"goal,omitempty"`
+	GoalPinId  string     `json:"goalPinId,omitempty"`
+	ChatSkills ChatSkills `json:"chatSkills"`
+	LLM        LLM        `json:"llm"`
+}
+
+type ChatSkills struct {
+	Allow []string `json:"allowChatSkills"`
+	PinId string   `json:"pinId,omitempty"`
+}
+
+type LLM struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Name     string `json:"name,omitempty"`
+	PinId    string `json:"pinId,omitempty"`
 }
 
 type CustomHomepage struct {
@@ -85,6 +110,39 @@ type Service struct {
 	CreatedAt          int64         `json:"createdAt"`
 	UpdatedAt          int64         `json:"updatedAt"`
 	Proof              *ServiceProof `json:"proof,omitempty"`
+}
+
+type Section struct {
+	Id       string        `json:"id"`
+	Title    string        `json:"title"`
+	Kind     string        `json:"kind"`
+	Items    []SectionItem `json:"items"`
+	Limit    int           `json:"limit"`
+	Returned int           `json:"returned"`
+	HasMore  bool          `json:"hasMore"`
+	More     MoreLink      `json:"more"`
+}
+
+type SectionItem struct {
+	Id             string         `json:"id,omitempty"`
+	SourcePinId    string         `json:"sourcePinId,omitempty"`
+	CurrentPinId   string         `json:"currentPinId,omitempty"`
+	ChainName      string         `json:"chainName,omitempty"`
+	ProtocolPath   string         `json:"protocolPath,omitempty"`
+	Title          string         `json:"title,omitempty"`
+	Description    string         `json:"description,omitempty"`
+	ContentType    string         `json:"contentType,omitempty"`
+	PayloadText    string         `json:"payloadText,omitempty"`
+	PayloadJSON    map[string]any `json:"payloadJson,omitempty"`
+	PayloadExposed bool           `json:"payloadExposed,omitempty"`
+	CreatedAt      int64          `json:"createdAt,omitempty"`
+	UpdatedAt      int64          `json:"updatedAt,omitempty"`
+	Service        *Service       `json:"service,omitempty"`
+}
+
+type MoreLink struct {
+	Label   string `json:"label"`
+	Enabled bool   `json:"enabled"`
 }
 
 type Action struct {

@@ -15,7 +15,9 @@ const (
 // Options captures the read-model expansion knobs accepted by the bot
 // homepage endpoint.
 type Options struct {
+	Version                 string
 	IncludeServices         bool
+	IncludeSections         bool
 	ServiceSize             int
 	IncludeInactiveServices bool
 	IncludeProofs           bool
@@ -37,10 +39,14 @@ func DefaultOptions() Options {
 // ParseOptions normalizes and validates bot homepage query parameters.
 func ParseOptions(values url.Values) (Options, error) {
 	opts := DefaultOptions()
+	opts.Version = parseVersion(values)
 	opts.ChainName = strings.ToLower(strings.TrimSpace(values.Get("chainName")))
 
 	var err error
 	if opts.IncludeServices, err = parseBool(values, "includeServices", opts.IncludeServices); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeSections, err = parseBool(values, "includeSections", opts.IncludeSections); err != nil {
 		return Options{}, err
 	}
 	if opts.IncludeInactiveServices, err = parseBool(values, "includeInactiveServices", opts.IncludeInactiveServices); err != nil {
@@ -57,6 +63,15 @@ func ParseOptions(values url.Values) (Options, error) {
 	}
 
 	return opts, nil
+}
+
+func parseVersion(values url.Values) string {
+	version := strings.ToLower(strings.TrimSpace(values.Get("version")))
+	schemaVersion := strings.TrimSpace(values.Get("schemaVersion"))
+	if version == "v2" || schemaVersion == "botHomepage.v2" {
+		return "v2"
+	}
+	return ""
 }
 
 func parseBool(values url.Values, key string, fallback bool) (bool, error) {
