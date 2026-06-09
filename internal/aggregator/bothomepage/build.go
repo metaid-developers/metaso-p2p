@@ -545,7 +545,7 @@ func sectionWithItems(id, title, kind string, items []SectionItem, hasMore bool)
 		Limit:    homepageSectionLimit,
 		Returned: len(items),
 		HasMore:  hasMore,
-		More:     MoreLink{Label: "More", Enabled: hasMore},
+		More:     MoreLink{Label: "More", Enabled: false},
 	}
 }
 

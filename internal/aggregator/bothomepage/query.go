@@ -40,6 +40,7 @@ func DefaultOptions() Options {
 func ParseOptions(values url.Values) (Options, error) {
 	opts := DefaultOptions()
 	opts.Version = parseVersion(values)
+	opts.IncludeSections = opts.Version == "v2"
 	opts.ChainName = strings.ToLower(strings.TrimSpace(values.Get("chainName")))
 
 	var err error

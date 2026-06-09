@@ -438,6 +438,40 @@ func TestBuildV2SectionsServicesActionEnabledWhenServicesOnlyInSection(t *testin
 	}
 }
 
+func TestSectionWithItemsKeepsMoreDisabledWhenHasMore(t *testing.T) {
+	items := []SectionItem{
+		{Id: "item-1"},
+		{Id: "item-2"},
+		{Id: "item-3"},
+		{Id: "item-4"},
+		{Id: "item-5"},
+		{Id: "item-6"},
+	}
+
+	got := sectionWithItems("buzzes", "Buzzes", "buzzes", items, false)
+
+	if !got.HasMore {
+		t.Fatal("HasMore = false, want true when input exceeds section limit")
+	}
+	if got.Returned != homepageSectionLimit || len(got.Items) != homepageSectionLimit {
+		t.Fatalf("returned items = %d/%d, want section limit %d", got.Returned, len(got.Items), homepageSectionLimit)
+	}
+	if got.More.Label != "More" || got.More.Enabled {
+		t.Fatalf("More = %+v, want disabled More label", got.More)
+	}
+}
+
+func TestSectionWithItemsKeepsMoreDisabledForListerHasMore(t *testing.T) {
+	got := sectionWithItems("services", "Services", "services", []SectionItem{{Id: "svc-1"}}, true)
+
+	if !got.HasMore {
+		t.Fatal("HasMore = false, want true from lister result")
+	}
+	if got.More.Label != "More" || got.More.Enabled {
+		t.Fatalf("More = %+v, want disabled More label", got.More)
+	}
+}
+
 func TestBuildHomepageIncludesProviderServices(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {

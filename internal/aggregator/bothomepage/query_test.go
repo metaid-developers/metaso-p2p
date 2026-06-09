@@ -65,6 +65,31 @@ func TestParseOptionsVersionV2(t *testing.T) {
 	if got.ChainName != "" {
 		t.Fatalf("ChainName = %q, want empty", got.ChainName)
 	}
+	if !got.IncludeSections {
+		t.Fatal("IncludeSections = false, want true for version=v2")
+	}
+
+	got, err = ParseOptions(url.Values{})
+	if err != nil {
+		t.Fatalf("ParseOptions defaults returned error: %v", err)
+	}
+	if got.Version != "" {
+		t.Fatalf("default Version = %q, want empty", got.Version)
+	}
+	if got.IncludeSections {
+		t.Fatal("default IncludeSections = true, want false")
+	}
+
+	got, err = ParseOptions(url.Values{"version": {"v2"}, "includeSections": {"false"}})
+	if err != nil {
+		t.Fatalf("ParseOptions explicit includeSections=false returned error: %v", err)
+	}
+	if got.Version != "v2" {
+		t.Fatalf("explicit Version = %q, want v2", got.Version)
+	}
+	if got.IncludeSections {
+		t.Fatal("explicit IncludeSections = true, want false")
+	}
 }
 
 func TestParseOptionsClampsServiceSize(t *testing.T) {

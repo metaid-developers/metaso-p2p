@@ -97,6 +97,13 @@ func TestHandleGlobalMetaIDVersionV2Selection(t *testing.T) {
 		if data["schemaVersion"] != "botHomepage.v2" {
 			t.Fatalf("%s schemaVersion = %v, want botHomepage.v2; data=%v", path, data["schemaVersion"], data)
 		}
+		sections, ok := data["sections"].([]any)
+		if !ok {
+			t.Fatalf("%s sections = %T, want array; data=%v", path, data["sections"], data)
+		}
+		if len(sections) != 4 {
+			t.Fatalf("%s sections length = %d, want 4; sections=%v", path, len(sections), sections)
+		}
 	}
 
 	status, body := callHomepage(t, router, "/api/bot-homepage/globalmetaid/idqBot")
