@@ -60,6 +60,7 @@ type Aggregator struct {
 	remoteLookup        remoteProfileLookup
 	profileMode         string
 	allowRemoteFallback bool
+	scanProfiles        func(func(*UserProfile) bool) (*UserProfile, error)
 }
 
 const (
@@ -78,6 +79,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, defaultTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	a.scanProfiles = a.defaultScanProfiles
 	a.configureRemoteProfileLookupFromEnv()
 	return nil
 }
@@ -368,19 +370,9 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 		}
 	}
 
-	var found *UserProfile
-	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
-		var p UserProfile
-		if err := json.Unmarshal(value, &p); err != nil {
-			return nil // skip corrupt entries
-		}
-		if strings.EqualFold(strings.TrimSpace(p.Address), address) {
-			found = &p
-			return nil
-		}
-		return nil
+	return a.scanProfiles(func(p *UserProfile) bool {
+		return strings.EqualFold(strings.TrimSpace(p.Address), address)
 	})
-	return found, err
 }
 
 func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
@@ -396,13 +388,19 @@ func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfil
 		}
 	}
 
+	return a.scanProfiles(func(p *UserProfile) bool {
+		return strings.EqualFold(strings.TrimSpace(p.GlobalMetaID), globalMetaId)
+	})
+}
+
+func (a *Aggregator) defaultScanProfiles(match func(*UserProfile) bool) (*UserProfile, error) {
 	var found *UserProfile
 	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
 		var p UserProfile
 		if err := json.Unmarshal(value, &p); err != nil {
 			return nil
 		}
-		if strings.EqualFold(strings.TrimSpace(p.GlobalMetaID), globalMetaId) {
+		if match(&p) {
 			found = &p
 			return nil
 		}

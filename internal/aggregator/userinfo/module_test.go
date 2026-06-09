@@ -298,6 +298,10 @@ func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	if err := store.Set(namespace, globalMetaIdKey(indexedGlobal), []byte("meta_index_only_global")); err != nil {
 		t.Fatalf("seed globalMetaId index: %v", err)
 	}
+	agg.scanProfiles = func(match func(*UserProfile) bool) (*UserProfile, error) {
+		t.Fatal("valid globalMetaId reverse index lookup should not scan profiles")
+		return nil, nil
+	}
 
 	profile, err := agg.LookupByGlobalMetaId("  " + indexedGlobal + "  ")
 	if err != nil {
@@ -323,6 +327,10 @@ func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	}
 	if err := store.Set(namespace, addressKey(indexedAddress), []byte("meta_index_only_address")); err != nil {
 		t.Fatalf("seed address index: %v", err)
+	}
+	agg.scanProfiles = func(match func(*UserProfile) bool) (*UserProfile, error) {
+		t.Fatal("valid address reverse index lookup should not scan profiles")
+		return nil, nil
 	}
 
 	profile, err := agg.LookupByAddress("  " + indexedAddress + "  ")
