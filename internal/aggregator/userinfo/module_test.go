@@ -289,7 +289,7 @@ func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	indexedGlobal := "idq1indexedglobal"
 	if err := agg.saveProfile(&UserProfile{
 		MetaID:       "meta_index_only_global",
-		GlobalMetaID: "idq1storedprofileglobal",
+		GlobalMetaID: indexedGlobal,
 		Address:      "address_index_only_global",
 		Name:         "Index Only Global",
 	}); err != nil {
@@ -316,7 +316,7 @@ func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	if err := agg.saveProfile(&UserProfile{
 		MetaID:       "meta_index_only_address",
 		GlobalMetaID: "idq1indexonlyaddress",
-		Address:      "stored_address_only",
+		Address:      indexedAddress,
 		Name:         "Index Only Address",
 	}); err != nil {
 		t.Fatalf("seed profile: %v", err)
@@ -331,6 +331,74 @@ func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	}
 	if profile == nil || profile.MetaID != "meta_index_only_address" {
 		t.Fatalf("reverse index lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	global := "idq1mismatchedglobalfallback"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_wrong_global",
+		GlobalMetaID: "idq1wrongglobal",
+		Address:      "wrong_global_address",
+		Name:         "Wrong Global",
+	}); err != nil {
+		t.Fatalf("seed wrong indexed profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(global), []byte("meta_wrong_global")); err != nil {
+		t.Fatalf("seed mismatched globalMetaId index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_global_match"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_global_match",
+		GlobalMetaID: global,
+		Address:      "scan_global_match_address",
+		Name:         "Scan Global Match",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_global_match" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "address_mismatched_fallback"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_wrong_address",
+		GlobalMetaID: "idq1wrongaddress",
+		Address:      "wrong_address",
+		Name:         "Wrong Address",
+	}); err != nil {
+		t.Fatalf("seed wrong indexed profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(address), []byte("meta_wrong_address")); err != nil {
+		t.Fatalf("seed mismatched address index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_address_match"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_address_match",
+		GlobalMetaID: "idq1scanaddressmatch",
+		Address:      address,
+		Name:         "Scan Address Match",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByAddress(address)
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_address_match" {
+		t.Fatalf("scan fallback returned %#v", profile)
 	}
 }
 

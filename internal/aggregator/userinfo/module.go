@@ -360,8 +360,10 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 		indexedMetaID := string(raw)
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale address index %q -> %q: %v", address, indexedMetaID, err)
-		} else if profile != nil {
+		} else if profile != nil && strings.EqualFold(profile.Address, address) {
 			return profile, nil
+		} else if profile != nil {
+			log.Printf("[userinfo] stale address index %q -> %q: profile address %q", address, indexedMetaID, profile.Address)
 		}
 	}
 
@@ -385,8 +387,10 @@ func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfil
 		indexedMetaID := string(raw)
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale globalMetaId index %q -> %q: %v", globalMetaId, indexedMetaID, err)
-		} else if profile != nil {
+		} else if profile != nil && strings.EqualFold(profile.GlobalMetaID, globalMetaId) {
 			return profile, nil
+		} else if profile != nil {
+			log.Printf("[userinfo] stale globalMetaId index %q -> %q: profile globalMetaId %q", globalMetaId, indexedMetaID, profile.GlobalMetaID)
 		}
 	}
 
