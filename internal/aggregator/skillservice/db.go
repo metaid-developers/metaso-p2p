@@ -149,11 +149,11 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 			_ = a.store.Delete(NamespaceService,
 				updatedIndexKey(previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
 		}
-		if previous.ProviderGlobalMetaId != "" {
+		for _, providerGlobalMetaId := range a.homepageProviderGlobalMetaIds(previous) {
 			_ = a.store.Delete(NamespaceService,
-				providerGlobalIndexKey(previous.ProviderGlobalMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
+				providerGlobalIndexKey(providerGlobalMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
 			_ = a.store.Delete(NamespaceService,
-				providerGlobalChainIndexKey(previous.ProviderGlobalMetaId, previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
+				providerGlobalChainIndexKey(providerGlobalMetaId, previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
 		}
 	}
 
@@ -170,13 +170,13 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 			return err
 		}
 	}
-	if rec.ProviderGlobalMetaId != "" {
+	for _, providerGlobalMetaId := range a.homepageProviderGlobalMetaIds(rec) {
 		if err := a.store.Set(NamespaceService,
-			providerGlobalIndexKey(rec.ProviderGlobalMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
+			providerGlobalIndexKey(providerGlobalMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
 			return err
 		}
 		if err := a.store.Set(NamespaceService,
-			providerGlobalChainIndexKey(rec.ProviderGlobalMetaId, rec.ChainName, rec.UpdatedAt, rec.SourceServicePinId), []byte{}); err != nil {
+			providerGlobalChainIndexKey(providerGlobalMetaId, rec.ChainName, rec.UpdatedAt, rec.SourceServicePinId), []byte{}); err != nil {
 			return err
 		}
 	}
@@ -187,6 +187,32 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 		}
 	}
 	return nil
+}
+
+func (a *Aggregator) homepageProviderGlobalMetaIds(rec *ServiceRecord) []string {
+	if rec == nil {
+		return nil
+	}
+	profile := a.ResolveProvider(rec)
+	return uniqueNonEmptyStrings(rec.ProviderGlobalMetaId, profile.GlobalMetaId)
+}
+
+func uniqueNonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // mapPinToSource records that a non-source pin id (modify / revoke) maps

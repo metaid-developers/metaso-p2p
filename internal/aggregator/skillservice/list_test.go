@@ -608,6 +608,40 @@ func TestListHomepageByProviderGlobalMetaIdReadsNewestSix(t *testing.T) {
 	}
 }
 
+func TestListHomepageByProviderCanonicalGlobalMetaIdFromProfile(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId: map[string]*ProfileSnapshot{
+			"1GrqProvider": {
+				MetaId:        "1GrqProvider",
+				GlobalMetaId:  "idq14provider",
+				Address:       "1GrqProvider",
+				Name:          "AI_Sunny",
+				ChatPublicKey: "04sunny",
+			},
+		},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected canonical homepage provider match, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ProviderGlobalMetaId != "idq14provider" {
+		t.Fatalf("providerGlobalMetaId: got %q want canonical idq14provider", res.List[0].ProviderGlobalMetaId)
+	}
+}
+
 func TestListHomepageByProviderSkipsInactiveBeforeHasMoreLimit(t *testing.T) {
 	f := newListFixture(t)
 	for i := 1; i <= 6; i++ {
@@ -714,6 +748,36 @@ func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
 	}
 	if res.HasMore {
 		t.Fatal("expected HasMore=false when only stale indexed services exist")
+	}
+}
+
+func TestListHomepageByProviderStaleSameServiceTimestampIndexDoesNotDuplicate(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "same-service-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "same-service-home", DisplayName: "Same Service Home",
+	})
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 100, "mvc", "same-service-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed stale same-service provider-global index: %v", err)
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one homepage item after stale duplicate index, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].SourceServicePinId != "same-service-home:i0" {
+		t.Fatalf("expected same-service-home item, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false when stale same-service timestamp index exists")
 	}
 }
 

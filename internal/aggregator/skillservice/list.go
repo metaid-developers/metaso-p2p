@@ -236,14 +236,14 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 		if rec == nil {
 			return true, nil
 		}
-		if !matchesHomepageProviderCandidate(rec, p, candidate) {
+		profile := a.ResolveProvider(rec)
+		if !matchesHomepageProviderCandidate(rec, profile, p, candidate) {
 			return true, nil
 		}
 		if !p.IncludeInactive && !rec.IsVisibleDefault() {
 			return true, nil
 		}
 
-		profile := a.ResolveProvider(rec)
 		rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
 		items = append(items, a.toListItem(expandedRecord{rec: rec, profile: profile, rating: rating}))
 		if len(items) > p.Size {
@@ -262,7 +262,7 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 	return &HomepageListResult{List: items, HasMore: hasMore}, nil
 }
 
-func matchesHomepageProviderCandidate(rec *ServiceRecord, p HomepageListParams, candidate homepageProviderCandidate) bool {
+func matchesHomepageProviderCandidate(rec *ServiceRecord, profile ProfileSnapshot, p HomepageListParams, candidate homepageProviderCandidate) bool {
 	if rec == nil {
 		return false
 	}
@@ -272,13 +272,24 @@ func matchesHomepageProviderCandidate(rec *ServiceRecord, p HomepageListParams, 
 	if rec.SourceServicePinId != candidate.sourcePinId {
 		return false
 	}
-	if !strings.EqualFold(rec.ProviderGlobalMetaId, p.ProviderGlobalMetaId) {
+	if candidate.invertedUpdatedAt != invertedTimestampHex(rec.UpdatedAt) {
+		return false
+	}
+	if !matchesHomepageProviderGlobalMetaId(rec, profile, p.ProviderGlobalMetaId) {
 		return false
 	}
 	if p.ChainName != "" && !strings.EqualFold(rec.ChainName, p.ChainName) {
 		return false
 	}
 	return true
+}
+
+func matchesHomepageProviderGlobalMetaId(rec *ServiceRecord, profile ProfileSnapshot, want string) bool {
+	if want == "" {
+		return true
+	}
+	return strings.EqualFold(rec.ProviderGlobalMetaId, want) ||
+		strings.EqualFold(profile.GlobalMetaId, want)
 }
 
 // expandedRecord pairs a raw ServiceRecord with the in-process resolved
@@ -291,8 +302,9 @@ type expandedRecord struct {
 }
 
 type homepageProviderCandidate struct {
-	chainName   string
-	sourcePinId string
+	invertedUpdatedAt string
+	chainName         string
+	sourcePinId       string
 }
 
 var errStopHomepageScan = errors.New("stop homepage provider scan")
@@ -365,19 +377,27 @@ func (a *Aggregator) scanHomepageProviderCandidates(p HomepageListParams, visit 
 func parseProviderGlobalIndexKey(key, prefix string) (homepageProviderCandidate, bool) {
 	rest := strings.TrimPrefix(key, prefix)
 	parts := strings.SplitN(rest, ":", 3)
-	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return homepageProviderCandidate{}, false
 	}
-	return homepageProviderCandidate{chainName: parts[1], sourcePinId: parts[2]}, true
+	return homepageProviderCandidate{
+		invertedUpdatedAt: parts[0],
+		chainName:         parts[1],
+		sourcePinId:       parts[2],
+	}, true
 }
 
 func parseProviderGlobalChainIndexKey(key, prefix, chainName string) (homepageProviderCandidate, bool) {
 	rest := strings.TrimPrefix(key, prefix)
 	parts := strings.SplitN(rest, ":", 2)
-	if len(parts) != 2 || parts[1] == "" {
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return homepageProviderCandidate{}, false
 	}
-	return homepageProviderCandidate{chainName: chainName, sourcePinId: parts[1]}, true
+	return homepageProviderCandidate{
+		invertedUpdatedAt: parts[0],
+		chainName:         chainName,
+		sourcePinId:       parts[1],
+	}, true
 }
 
 func normaliseSortBy(sortBy string) string {
