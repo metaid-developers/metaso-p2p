@@ -532,34 +532,34 @@ func serviceActionCount(out *Data) int {
 }
 
 func (a *Aggregator) loadSections(canonicalGlobalMetaId string, opts Options, warnings []string) ([]Section, []string) {
-	sections := []Section{
-		emptySection("services", "Services", "services"),
-		emptySection("metaapps", "MetaAPPs", "metaapps"),
-		emptySection("skills", "Skills", "skills"),
-		emptySection("buzzes", "Buzzes", "buzzes"),
-	}
+	sections := make([]Section, 0, 4)
 
-	section, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
-	sections[0] = section
-	if warning != "" {
-		warnings = append(warnings, warning)
+	if opts.IncludeServices {
+		section, warning := a.loadServicesSection(canonicalGlobalMetaId, opts)
+		sections = append(sections, section)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
 	}
 
 	publishedSpecs := []struct {
-		index        int
 		id           string
 		title        string
 		kind         string
 		protocolPath string
 		warning      string
+		enabled      bool
 	}{
-		{index: 1, id: "metaapps", title: "MetaAPPs", kind: "metaapps", protocolPath: publishedcontent.PathMetaApp, warning: "metaapps section unavailable"},
-		{index: 2, id: "skills", title: "Skills", kind: "skills", protocolPath: publishedcontent.PathMetaBotSkill, warning: "skills section unavailable"},
-		{index: 3, id: "buzzes", title: "Buzzes", kind: "buzzes", protocolPath: publishedcontent.PathSimpleBuzz, warning: "buzzes section unavailable"},
+		{id: "metaapps", title: "MetaAPPs", kind: "metaapps", protocolPath: publishedcontent.PathMetaApp, warning: "metaapps section unavailable", enabled: opts.IncludeMetaApps},
+		{id: "skills", title: "Skills", kind: "skills", protocolPath: publishedcontent.PathMetaBotSkill, warning: "skills section unavailable", enabled: opts.IncludeSkills},
+		{id: "buzzes", title: "Buzzes", kind: "buzzes", protocolPath: publishedcontent.PathSimpleBuzz, warning: "buzzes section unavailable", enabled: opts.IncludeBuzzes},
 	}
 	for _, spec := range publishedSpecs {
+		if !spec.enabled {
+			continue
+		}
 		section, warning := a.loadPublishedContentSection(canonicalGlobalMetaId, opts, spec.id, spec.title, spec.kind, spec.protocolPath, spec.warning)
-		sections[spec.index] = section
+		sections = append(sections, section)
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}

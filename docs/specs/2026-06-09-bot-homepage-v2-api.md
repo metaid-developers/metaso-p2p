@@ -12,6 +12,14 @@ current `/api/bot-homepage/globalmetaid/:globalMetaId` compatibility contract.
 `chainName` query parameter filters section reads to one chain when set. An
 empty `chainName` aggregates all indexed chains.
 
+V2 section controls:
+
+- `includeSections=false` omits all homepage sections.
+- `includeServices=false` omits the services section and top-level v2 services.
+- `includeMetaApps=false` omits the MetaAPPs section.
+- `includeSkills=false` omits the Bot skills section.
+- `includeBuzzes=false` omits the recent Buzzes section.
+
 Sections are returned in fixed homepage groups:
 
 - `services`
@@ -22,6 +30,9 @@ Sections are returned in fixed homepage groups:
 Each section reads up to six records, returns at most five items, and exposes
 overflow with `hasMore`. The `more.enabled` flag is currently always `false`;
 clients should not treat it as an active pagination affordance yet.
+`serviceSize` remains supported for the default v1 response, but v2 ignores
+public size and pagination query controls and uses the fixed five-item homepage
+rule.
 
 Mempool records flow through the same read models as confirmed records and can
 appear in the matching sections or services. Content section items expose

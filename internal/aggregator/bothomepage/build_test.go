@@ -3,6 +3,7 @@ package bothomepage
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -504,7 +505,7 @@ func TestBuildV2SectionsAreOptional(t *testing.T) {
 	}
 }
 
-func TestBuildV2SectionsServicesActionEnabledWhenServicesOnlyInSection(t *testing.T) {
+func TestBuildV2SkipsServicesSectionWhenIncludeServicesFalse(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
 		t.Fatalf("Init returned error: %v", err)
@@ -531,11 +532,81 @@ func TestBuildV2SectionsServicesActionEnabledWhenServicesOnlyInSection(t *testin
 	if len(got.Services) != 0 {
 		t.Fatalf("Services length = %d, want 0 when includeServices=false", len(got.Services))
 	}
-	if len(got.Sections) == 0 || got.Sections[0].Id != "services" || got.Sections[0].Returned != 1 {
-		t.Fatalf("services section = %+v, want one returned service", got.Sections)
+	for _, section := range got.Sections {
+		if section.Id == "services" {
+			t.Fatalf("sections = %+v, want services section omitted when includeServices=false", got.Sections)
+		}
 	}
-	if !got.Actions[1].Enabled {
-		t.Fatalf("services action = %+v, want enabled from services section count", got.Actions[1])
+	if got.Actions[1].Enabled {
+		t.Fatalf("services action = %+v, want disabled when services are excluded", got.Actions[1])
+	}
+}
+
+func TestBuildV2SectionTogglesDisablePublishedSections(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Toggle Bot",
+	}})
+	lister := &recordingPublishedContentLister{result: &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+		CurrentPinId:   "buzz-pin:i0",
+		ProtocolPath:   publishedcontent.PathSimpleBuzz,
+		PayloadText:    "buzz",
+		PayloadExposed: true,
+	}}}}
+	agg.SetPublishedContentLister(lister)
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+	opts.IncludeSections = true
+	opts.IncludeMetaApps = false
+	opts.IncludeSkills = false
+	opts.IncludeBuzzes = true
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if len(got.Sections) != 2 {
+		t.Fatalf("Sections length = %d, want services plus buzzes; sections=%+v", len(got.Sections), got.Sections)
+	}
+	if got.Sections[0].Id != "services" || got.Sections[1].Id != "buzzes" {
+		t.Fatalf("section ids = %q/%q, want services/buzzes", got.Sections[0].Id, got.Sections[1].Id)
+	}
+	if len(lister.gotParams) != 1 {
+		t.Fatalf("published content list calls = %d, want 1", len(lister.gotParams))
+	}
+	if lister.gotParams[0].ProtocolPath != publishedcontent.PathSimpleBuzz {
+		t.Fatalf("ProtocolPath = %q, want %q", lister.gotParams[0].ProtocolPath, publishedcontent.PathSimpleBuzz)
+	}
+}
+
+func TestBuildV2UsesFixedServiceSize(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Fixed Size Bot",
+	}})
+	lister := &recordingServiceLister{result: &skillservice.ListResult{}}
+	agg.SetServiceLister(lister)
+
+	opts, err := ParseOptions(url.Values{"version": {"v2"}, "serviceSize": {"1"}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+
+	if _, err := agg.Build("idqBot", opts); err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if lister.gotParams.Size != homepageSectionLimit {
+		t.Fatalf("service lister Size = %d, want fixed v2 homepage limit %d", lister.gotParams.Size, homepageSectionLimit)
 	}
 }
 

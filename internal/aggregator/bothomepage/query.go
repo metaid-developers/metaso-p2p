@@ -18,6 +18,9 @@ type Options struct {
 	Version                 string
 	IncludeServices         bool
 	IncludeSections         bool
+	IncludeMetaApps         bool
+	IncludeSkills           bool
+	IncludeBuzzes           bool
 	ServiceSize             int
 	IncludeInactiveServices bool
 	IncludeProofs           bool
@@ -30,6 +33,9 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		IncludeServices: true,
+		IncludeMetaApps: true,
+		IncludeSkills:   true,
+		IncludeBuzzes:   true,
 		ServiceSize:     defaultServiceSize,
 		IncludeProofs:   true,
 		IncludePresence: true,
@@ -50,6 +56,17 @@ func ParseOptions(values url.Values) (Options, error) {
 	if opts.IncludeSections, err = parseBool(values, "includeSections", opts.IncludeSections); err != nil {
 		return Options{}, err
 	}
+	if opts.Version == "v2" {
+		if opts.IncludeMetaApps, err = parseBool(values, "includeMetaApps", opts.IncludeMetaApps); err != nil {
+			return Options{}, err
+		}
+		if opts.IncludeSkills, err = parseBool(values, "includeSkills", opts.IncludeSkills); err != nil {
+			return Options{}, err
+		}
+		if opts.IncludeBuzzes, err = parseBool(values, "includeBuzzes", opts.IncludeBuzzes); err != nil {
+			return Options{}, err
+		}
+	}
 	if opts.IncludeInactiveServices, err = parseBool(values, "includeInactiveServices", opts.IncludeInactiveServices); err != nil {
 		return Options{}, err
 	}
@@ -59,8 +76,12 @@ func ParseOptions(values url.Values) (Options, error) {
 	if opts.IncludePresence, err = parseBool(values, "includePresence", opts.IncludePresence); err != nil {
 		return Options{}, err
 	}
-	if opts.ServiceSize, err = parseServiceSize(values); err != nil {
-		return Options{}, err
+	if opts.Version == "v2" {
+		opts.ServiceSize = homepageSectionLimit
+	} else {
+		if opts.ServiceSize, err = parseServiceSize(values); err != nil {
+			return Options{}, err
+		}
 	}
 
 	return opts, nil
