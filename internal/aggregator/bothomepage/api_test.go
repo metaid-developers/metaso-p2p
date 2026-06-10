@@ -75,6 +75,50 @@ func TestHandleGlobalMetaIDSuccessEnvelope(t *testing.T) {
 	}
 }
 
+func TestHandleGlobalMetaIDVersionV2Selection(t *testing.T) {
+	router, _, _ := newHandlerFixture(t)
+
+	for _, path := range []string{
+		"/api/bot-homepage/globalmetaid/idqBot?version=v2",
+		"/api/bot-homepage/globalmetaid/idqBot?schemaVersion=botHomepage.v2",
+	} {
+		status, body := callHomepage(t, router, path)
+
+		if status != http.StatusOK {
+			t.Fatalf("%s HTTP status = %d, want 200; body=%v", path, status, body)
+		}
+		if body["code"] != float64(0) {
+			t.Fatalf("%s code = %v, want 0; body=%v", path, body["code"], body)
+		}
+		data, ok := body["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s data = %T, want object; body=%v", path, body["data"], body)
+		}
+		if data["schemaVersion"] != "botHomepage.v2" {
+			t.Fatalf("%s schemaVersion = %v, want botHomepage.v2; data=%v", path, data["schemaVersion"], data)
+		}
+		sections, ok := data["sections"].([]any)
+		if !ok {
+			t.Fatalf("%s sections = %T, want array; data=%v", path, data["sections"], data)
+		}
+		if len(sections) != 4 {
+			t.Fatalf("%s sections length = %d, want 4; sections=%v", path, len(sections), sections)
+		}
+	}
+
+	status, body := callHomepage(t, router, "/api/bot-homepage/globalmetaid/idqBot")
+	if status != http.StatusOK {
+		t.Fatalf("default HTTP status = %d, want 200; body=%v", status, body)
+	}
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("default data = %T, want object; body=%v", body["data"], body)
+	}
+	if data["schemaVersion"] != "botHomepage.v1" {
+		t.Fatalf("default schemaVersion = %v, want botHomepage.v1; data=%v", data["schemaVersion"], data)
+	}
+}
+
 func TestHandleGlobalMetaIDInvalidParameter(t *testing.T) {
 	router, _, _ := newHandlerFixture(t)
 

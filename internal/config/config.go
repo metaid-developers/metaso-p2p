@@ -10,16 +10,17 @@ import (
 )
 
 type Config struct {
-	Service    ServiceConfig    `json:"service"`
-	Socket     SocketConfig     `json:"socket"`
-	ZMQ        ZMQConfig        `json:"zmq"`
-	BlockIndex BlockIndexConfig `json:"blockIndex"`
-	Pebble     PebbleConfig     `json:"pebble"`
-	Cache      CacheConfig      `json:"cache"`
-	Profile    ProfileConfig    `json:"profile"`
-	GroupChat  GroupChatConfig  `json:"groupChat"`
-	BotHub     BotHubConfig     `json:"botHub"`
-	Federation FederationConfig `json:"federation"`
+	Service               ServiceConfig               `json:"service"`
+	Socket                SocketConfig                `json:"socket"`
+	ZMQ                   ZMQConfig                   `json:"zmq"`
+	BlockIndex            BlockIndexConfig            `json:"blockIndex"`
+	Pebble                PebbleConfig                `json:"pebble"`
+	Cache                 CacheConfig                 `json:"cache"`
+	Profile               ProfileConfig               `json:"profile"`
+	GroupChat             GroupChatConfig             `json:"groupChat"`
+	BotHub                BotHubConfig                `json:"botHub"`
+	Federation            FederationConfig            `json:"federation"`
+	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
 }
 
 // BotHubConfig holds the Bot Hub skill-service aggregator runtime knobs.
@@ -54,6 +55,14 @@ type FederationConfig struct {
 	AllowInsecureHTTP     bool          `json:"allowInsecureHttp"`
 	MaxPeers              int           `json:"maxPeers"`
 	MaxSnapshotBytes      int           `json:"maxSnapshotBytes"`
+}
+
+type BotHomepageV2BackfillConfig struct {
+	Enabled       bool          `json:"enabled"`
+	Lookback      time.Duration `json:"lookback"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
 }
 
 type BlockIndexConfig struct {
@@ -100,11 +109,14 @@ type SocketConfig struct {
 }
 
 type ZMQConfig struct {
-	Enabled bool           `json:"enabled"`
-	BTC     ChainZMQConfig `json:"btc"`
-	MVC     ChainZMQConfig `json:"mvc"`
-	DOGE    ChainZMQConfig `json:"doge"`
-	OPCAT   ChainZMQConfig `json:"opcat"`
+	Enabled               bool           `json:"enabled"`
+	MempoolPollingEnabled bool           `json:"mempoolPollingEnabled"`
+	MempoolPollInterval   time.Duration  `json:"mempoolPollInterval"`
+	MempoolDedupeTTL      time.Duration  `json:"mempoolDedupeTTL"`
+	BTC                   ChainZMQConfig `json:"btc"`
+	MVC                   ChainZMQConfig `json:"mvc"`
+	DOGE                  ChainZMQConfig `json:"doge"`
+	OPCAT                 ChainZMQConfig `json:"opcat"`
 }
 
 type ChainZMQConfig struct {
@@ -161,7 +173,10 @@ func Default() Config {
 			ExtraPushAuthKey:     "",
 		},
 		ZMQ: ZMQConfig{
-			Enabled: false,
+			Enabled:               false,
+			MempoolPollingEnabled: true,
+			MempoolPollInterval:   10 * time.Second,
+			MempoolDedupeTTL:      30 * time.Minute,
 			BTC: ChainZMQConfig{
 				Enabled:         false,
 				Endpoint:        "",
@@ -257,6 +272,13 @@ func Default() Config {
 			MaxPeers:              0,
 			MaxSnapshotBytes:      0,
 		},
+		BotHomepageV2Backfill: BotHomepageV2BackfillConfig{
+			Enabled:       false,
+			Lookback:      1440 * time.Hour,
+			Timeout:       2 * time.Minute,
+			PageSize:      100,
+			MANAPIBaseURL: "https://manapi.metaid.io",
+		},
 	}
 }
 
@@ -280,6 +302,9 @@ func Load() (Config, error) {
 	applyStringEnv("METASO_P2P_SOCKET_EXTRA_PUSH_AUTH_KEY", &cfg.Socket.ExtraPushAuthKey)
 
 	applyBoolEnv("METASO_P2P_ZMQ_ENABLED", &cfg.ZMQ.Enabled)
+	applyBoolEnv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", &cfg.ZMQ.MempoolPollingEnabled)
+	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", &cfg.ZMQ.MempoolPollInterval)
+	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", &cfg.ZMQ.MempoolDedupeTTL)
 	applyBoolEnv("METASO_P2P_ZMQ_BTC_ENABLED", &cfg.ZMQ.BTC.Enabled)
 	applyStringEnv("METASO_P2P_ZMQ_BTC_ENDPOINT", &cfg.ZMQ.BTC.Endpoint)
 	applyStringEnv("METASO_P2P_ZMQ_BTC_TOPIC", &cfg.ZMQ.BTC.Topic)
@@ -354,6 +379,12 @@ func Load() (Config, error) {
 	applyIntEnv("METASO_P2P_FEDERATION_MAX_PEERS", &cfg.Federation.MaxPeers)
 	applyIntEnv("METASO_P2P_FEDERATION_MAX_SNAPSHOT_BYTES", &cfg.Federation.MaxSnapshotBytes)
 
+	applyBoolEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED", &cfg.BotHomepageV2Backfill.Enabled)
+	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", &cfg.BotHomepageV2Backfill.Lookback)
+	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT", &cfg.BotHomepageV2Backfill.Timeout)
+	applyIntEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_PAGE_SIZE", &cfg.BotHomepageV2Backfill.PageSize)
+	applyStringEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL", &cfg.BotHomepageV2Backfill.MANAPIBaseURL)
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -393,6 +424,25 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateFederation(); err != nil {
 		return err
+	}
+	if err := c.validateBotHomepageV2Backfill(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateBotHomepageV2Backfill() error {
+	if c.BotHomepageV2Backfill.Lookback <= 0 {
+		return errors.New("botHomepageV2Backfill.lookback must be greater than zero")
+	}
+	if c.BotHomepageV2Backfill.Timeout <= 0 {
+		return errors.New("botHomepageV2Backfill.timeout must be greater than zero")
+	}
+	if c.BotHomepageV2Backfill.PageSize <= 0 {
+		return errors.New("botHomepageV2Backfill.pageSize must be greater than zero")
+	}
+	if c.BotHomepageV2Backfill.Enabled && strings.TrimSpace(c.BotHomepageV2Backfill.MANAPIBaseURL) == "" {
+		return errors.New("botHomepageV2Backfill.manapiBaseUrl is required when backfill is enabled")
 	}
 	return nil
 }

@@ -15,7 +15,12 @@ const (
 // Options captures the read-model expansion knobs accepted by the bot
 // homepage endpoint.
 type Options struct {
+	Version                 string
 	IncludeServices         bool
+	IncludeSections         bool
+	IncludeMetaApps         bool
+	IncludeSkills           bool
+	IncludeBuzzes           bool
 	ServiceSize             int
 	IncludeInactiveServices bool
 	IncludeProofs           bool
@@ -28,6 +33,9 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		IncludeServices: true,
+		IncludeMetaApps: true,
+		IncludeSkills:   true,
+		IncludeBuzzes:   true,
 		ServiceSize:     defaultServiceSize,
 		IncludeProofs:   true,
 		IncludePresence: true,
@@ -37,11 +45,27 @@ func DefaultOptions() Options {
 // ParseOptions normalizes and validates bot homepage query parameters.
 func ParseOptions(values url.Values) (Options, error) {
 	opts := DefaultOptions()
+	opts.Version = parseVersion(values)
+	opts.IncludeSections = opts.Version == "v2"
 	opts.ChainName = strings.ToLower(strings.TrimSpace(values.Get("chainName")))
 
 	var err error
 	if opts.IncludeServices, err = parseBool(values, "includeServices", opts.IncludeServices); err != nil {
 		return Options{}, err
+	}
+	if opts.IncludeSections, err = parseBool(values, "includeSections", opts.IncludeSections); err != nil {
+		return Options{}, err
+	}
+	if opts.Version == "v2" {
+		if opts.IncludeMetaApps, err = parseBool(values, "includeMetaApps", opts.IncludeMetaApps); err != nil {
+			return Options{}, err
+		}
+		if opts.IncludeSkills, err = parseBool(values, "includeSkills", opts.IncludeSkills); err != nil {
+			return Options{}, err
+		}
+		if opts.IncludeBuzzes, err = parseBool(values, "includeBuzzes", opts.IncludeBuzzes); err != nil {
+			return Options{}, err
+		}
 	}
 	if opts.IncludeInactiveServices, err = parseBool(values, "includeInactiveServices", opts.IncludeInactiveServices); err != nil {
 		return Options{}, err
@@ -52,11 +76,24 @@ func ParseOptions(values url.Values) (Options, error) {
 	if opts.IncludePresence, err = parseBool(values, "includePresence", opts.IncludePresence); err != nil {
 		return Options{}, err
 	}
-	if opts.ServiceSize, err = parseServiceSize(values); err != nil {
-		return Options{}, err
+	if opts.Version == "v2" {
+		opts.ServiceSize = homepageSectionLimit
+	} else {
+		if opts.ServiceSize, err = parseServiceSize(values); err != nil {
+			return Options{}, err
+		}
 	}
 
 	return opts, nil
+}
+
+func parseVersion(values url.Values) string {
+	version := strings.ToLower(strings.TrimSpace(values.Get("version")))
+	schemaVersion := strings.TrimSpace(values.Get("schemaVersion"))
+	if version == "v2" || schemaVersion == "botHomepage.v2" {
+		return "v2"
+	}
+	return ""
 }
 
 func parseBool(values url.Values, key string, fallback bool) (bool, error) {

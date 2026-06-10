@@ -579,3 +579,400 @@ func TestListEndpoint_ProviderFilter(t *testing.T) {
 		t.Errorf("provider filter wrong: %+v", body.Data.List)
 	}
 }
+
+func TestListHomepageByProviderGlobalMetaIdReadsNewestSix(t *testing.T) {
+	f := newListFixture(t)
+	for i := 1; i <= 7; i++ {
+		f.seed(t, servicePinOpts{
+			PinId: pinIdFor(i), Operation: OperationCreate, ChainName: "mvc",
+			ProviderMetaId: "provA", Timestamp: int64(i * 100),
+			ServiceName: "svc" + intToStr(i), DisplayName: "Service " + intToStr(i),
+		})
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 5 {
+		t.Fatalf("expected 5 homepage items, got %d", len(res.List))
+	}
+	if !res.HasMore {
+		t.Fatal("expected HasMore=true with more provider services available")
+	}
+	if res.List[0].ServiceName != "svc7" || res.List[4].ServiceName != "svc3" {
+		t.Fatalf("homepage order wrong: got first=%s fifth=%s", res.List[0].ServiceName, res.List[4].ServiceName)
+	}
+}
+
+func TestListHomepageByProviderCanonicalGlobalMetaIdFromProfile(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId: map[string]*ProfileSnapshot{
+			"1GrqProvider": {
+				MetaId:        "1GrqProvider",
+				GlobalMetaId:  "idq14provider",
+				Address:       "1GrqProvider",
+				Name:          "AI_Sunny",
+				ChatPublicKey: "04sunny",
+			},
+		},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected canonical homepage provider match, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ProviderGlobalMetaId != "idq14provider" {
+		t.Fatalf("providerGlobalMetaId: got %q want canonical idq14provider", res.List[0].ProviderGlobalMetaId)
+	}
+}
+
+func TestListHomepageByProviderLateProfileCanonicalGlobalMetaId(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-late-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+
+	profile := &ProfileSnapshot{
+		MetaId:        "1GrqProvider",
+		GlobalMetaId:  "idq14provider",
+		Address:       "1GrqProvider",
+		Name:          "AI_Sunny",
+		ChatPublicKey: "04sunny",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"1GrqProvider": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq14provider": profile},
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected late canonical homepage provider match, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ProviderGlobalMetaId != "idq14provider" {
+		t.Fatalf("providerGlobalMetaId: got %q want canonical idq14provider", res.List[0].ProviderGlobalMetaId)
+	}
+}
+
+func TestHomepageProviderMetaIndexPrefixIsProviderScopedCrossChain(t *testing.T) {
+	prefix := string(homepageProviderMetaIndexPrefix("1GrqProvider"))
+	if prefix == string(providerIndexPrefix("", "")) {
+		t.Fatalf("cross-chain late alias fallback prefix must not scan the whole provider index: %q", prefix)
+	}
+	if !strings.HasPrefix(prefix, keyServiceByProviderMeta+"1GrqProvider:") {
+		t.Fatalf("cross-chain late alias fallback prefix is not provider scoped: %q", prefix)
+	}
+}
+
+func TestListHomepageByProviderLateProfileCrossChainDoesNotNeedLegacyProviderIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.agg.SetProfileLookup(&fakeProfileLookup{})
+	f.seed(t, servicePinOpts{
+		PinId: "sunny-late-meta-home:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "1GrqProvider", Timestamp: 1000,
+		ServiceName: "metabot-metaid-wiki-service", DisplayName: "MetaID Wiki",
+	})
+	if err := f.agg.store.Delete(NamespaceService,
+		providerIndexKey("mvc", "1GrqProvider", "sunny-late-meta-home:i0")); err != nil {
+		t.Fatalf("delete legacy provider index: %v", err)
+	}
+
+	profile := &ProfileSnapshot{
+		MetaId:        "1GrqProvider",
+		GlobalMetaId:  "idq14provider",
+		Address:       "1GrqProvider",
+		Name:          "AI_Sunny",
+		ChatPublicKey: "04sunny",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"1GrqProvider": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq14provider": profile},
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq14provider",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected late canonical homepage provider match from provider-meta index, got %d items: %+v", len(res.List), res.List)
+	}
+	if res.List[0].SourceServicePinId != "sunny-late-meta-home:i0" {
+		t.Fatalf("expected provider-meta indexed service, got %+v", res.List[0])
+	}
+}
+
+func TestMatchesLateHomepageProviderAliasCandidateRejectsStaleProviderMetaTimestamp(t *testing.T) {
+	rec := &ServiceRecord{
+		ChainName:            "mvc",
+		SourceServicePinId:   "sunny-stale-home:i0",
+		ProviderMetaId:       "1GrqProvider",
+		ProviderGlobalMetaId: "idq14provider",
+		UpdatedAt:            1000,
+	}
+	profile := ProfileSnapshot{MetaId: "1GrqProvider", GlobalMetaId: "idq14provider"}
+	p := HomepageListParams{ProviderGlobalMetaId: "idq14provider"}
+	candidate := homepageProviderCandidate{
+		invertedUpdatedAt: invertedTimestampHex(999),
+		chainName:         "mvc",
+		sourcePinId:       "sunny-stale-home:i0",
+	}
+	if matchesLateHomepageProviderAliasCandidate(rec, profile, p, candidate) {
+		t.Fatal("expected stale provider-meta fallback timestamp to be rejected")
+	}
+}
+
+func TestListHomepageByProviderSkipsInactiveBeforeHasMoreLimit(t *testing.T) {
+	f := newListFixture(t)
+	for i := 1; i <= 6; i++ {
+		f.seed(t, servicePinOpts{
+			PinId: pinIdFor(i), Operation: OperationCreate, ChainName: "mvc",
+			ProviderMetaId: "provA", Timestamp: int64(i * 100),
+			ServiceName: "visible" + intToStr(i), DisplayName: "Visible " + intToStr(i),
+		})
+	}
+	f.seed(t, servicePinOpts{
+		PinId: "revoked-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 700,
+		ServiceName: "revoked-home", DisplayName: "Revoked Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "revoked-home-op:i0", Operation: OperationRevoke, ChainName: "mvc",
+		ProviderMetaId: "provA", OriginalId: "revoked-home:i0", Timestamp: 800,
+		ServiceName: "revoked-home", DisplayName: "Revoked Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "disabled-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 900, Disabled: true,
+		ServiceName: "disabled-home", DisplayName: "Disabled Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 5 {
+		t.Fatalf("expected 5 visible homepage items, got %d: %+v", len(res.List), res.List)
+	}
+	if !res.HasMore {
+		t.Fatal("expected HasMore=true with a sixth visible service")
+	}
+	for _, item := range res.List {
+		if item.Disabled || item.Operation == OperationRevoke {
+			t.Fatalf("homepage returned inactive item: %+v", item)
+		}
+	}
+	if res.List[0].ServiceName != "visible6" || res.List[4].ServiceName != "visible2" {
+		t.Fatalf("homepage order wrong after inactive filter: got first=%s fifth=%s", res.List[0].ServiceName, res.List[4].ServiceName)
+	}
+}
+
+func TestListHomepageByProviderCrossChain(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "mvc-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "mvc-home", DisplayName: "MVC Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "btc-home:i0", Operation: OperationCreate, ChainName: "btc",
+		ProviderMetaId: "provA", Timestamp: 200,
+		ServiceName: "btc-home", DisplayName: "BTC Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 2 {
+		t.Fatalf("expected 2 cross-chain homepage items, got %d", len(res.List))
+	}
+	if res.List[0].ChainName != "btc" || res.List[0].ServiceName != "btc-home" {
+		t.Fatalf("expected newest BTC service first, got %+v", res.List[0])
+	}
+	if res.List[1].ChainName != "mvc" || res.List[1].ServiceName != "mvc-home" {
+		t.Fatalf("expected MVC service second, got %+v", res.List[1])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for exactly two visible services")
+	}
+}
+
+func TestListHomepageByProviderChainNameFiltersProviderGlobalChainIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "mvc-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "mvc-home", DisplayName: "MVC Home",
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "btc-home:i0", Operation: OperationCreate, ChainName: "btc",
+		ProviderMetaId: "provA", Timestamp: 200,
+		ServiceName: "btc-home", DisplayName: "BTC Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		ChainName:            "mvc",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one MVC homepage item, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ChainName != "mvc" || res.List[0].ServiceName != "mvc-home" {
+		t.Fatalf("expected only MVC service from chain-scoped homepage list, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for single MVC service")
+	}
+}
+
+func TestListHomepageByProviderIncludeInactiveReturnsDisabledService(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "disabled-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		Disabled:    true,
+		ServiceName: "disabled-home", DisplayName: "Disabled Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		IncludeInactive:      true,
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected disabled homepage item with includeInactive, got %d: %+v", len(res.List), res.List)
+	}
+	if !res.List[0].Disabled || res.List[0].ServiceName != "disabled-home" {
+		t.Fatalf("expected disabled homepage service, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for single inactive service")
+	}
+}
+
+func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "provider-b-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provB", Timestamp: 100,
+		ServiceName: "provider-b-home", DisplayName: "Provider B Home",
+	})
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 200, "mvc", "provider-b-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed stale provider-global index: %v", err)
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 0 {
+		t.Fatalf("expected stale provider-global index to be skipped, got %+v", res.List)
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false when only stale indexed services exist")
+	}
+}
+
+func TestListHomepageByProviderStaleSameServiceTimestampIndexDoesNotDuplicate(t *testing.T) {
+	f := newListFixture(t)
+	f.seed(t, servicePinOpts{
+		PinId: "same-service-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "same-service-home", DisplayName: "Same Service Home",
+	})
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 100, "mvc", "same-service-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed stale same-service provider-global index: %v", err)
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one homepage item after stale duplicate index, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].SourceServicePinId != "same-service-home:i0" {
+		t.Fatalf("expected same-service-home item, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false when stale same-service timestamp index exists")
+	}
+}
+
+func TestListHomepageByProviderSkipsCorruptIndexedService(t *testing.T) {
+	f := newListFixture(t)
+	if err := f.agg.store.Set(NamespaceService, serviceKey("mvc", "corrupt-home:i0"), []byte("{")); err != nil {
+		t.Fatalf("seed corrupt service record: %v", err)
+	}
+	if err := f.agg.store.Set(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 200, "mvc", "corrupt-home:i0"), []byte{}); err != nil {
+		t.Fatalf("seed corrupt provider-global index: %v", err)
+	}
+	f.seed(t, servicePinOpts{
+		PinId: "valid-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 100,
+		ServiceName: "valid-home", DisplayName: "Valid Home",
+	})
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq1-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatalf("expected corrupt indexed service to be skipped, got err=%v", err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected one valid homepage item after corrupt record, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].ServiceName != "valid-home" {
+		t.Fatalf("expected valid service after corrupt record, got %+v", res.List[0])
+	}
+}

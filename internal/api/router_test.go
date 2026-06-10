@@ -17,6 +17,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
@@ -45,6 +46,7 @@ type fullRouterFixture struct {
 	privateAgg     *privatechat.Aggregator
 	botHomepageAgg *bothomepage.Aggregator
 	skillAgg       *skillservice.Aggregator
+	publishedAgg   *publishedcontent.Aggregator
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
@@ -74,6 +76,10 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(skillAgg); err != nil {
 		t.Fatalf("register skillservice: %v", err)
 	}
+	publishedAgg := &publishedcontent.Aggregator{}
+	if err := reg.Register(publishedAgg); err != nil {
+		t.Fatalf("register publishedcontent: %v", err)
+	}
 	botHomepageAgg := &bothomepage.Aggregator{}
 	if err := reg.Register(botHomepageAgg); err != nil {
 		t.Fatalf("register bothomepage: %v", err)
@@ -83,6 +89,8 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	skillAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 	botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userAgg))
 	botHomepageAgg.SetServiceLister(skillAgg)
+	botHomepageAgg.SetHomepageServiceLister(skillAgg)
+	botHomepageAgg.SetPublishedContentLister(publishedAgg)
 	botHomepageAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 	privateAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userAgg))
 
@@ -96,6 +104,88 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		privateAgg:     privateAgg,
 		botHomepageAgg: botHomepageAgg,
 		skillAgg:       skillAgg,
+		publishedAgg:   publishedAgg,
+	}
+}
+
+func seedBotProfile(t *testing.T, fixture *fullRouterFixture, globalMetaId string) {
+	t.Helper()
+
+	profile := userinfo.UserProfile{
+		GlobalMetaID:    globalMetaId,
+		MetaID:          "meta-" + globalMetaId,
+		Address:         "addr-" + globalMetaId,
+		Name:            "Homepage Bot",
+		NameId:          "name-" + globalMetaId + ":i0",
+		Bio:             "Bot homepage fixture",
+		BioId:           "bio-" + globalMetaId + ":i0",
+		Role:            "Router acceptance bot",
+		RoleId:          "role-" + globalMetaId + ":i0",
+		ChatPublicKey:   "04" + strings.Repeat("a", 64),
+		ChatPublicKeyId: "chat-key-" + globalMetaId + ":i0",
+		ChainName:       "mvc",
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	metaID := profile.MetaID
+	if err := fixture.store.Set("userinfo", []byte("profile:"+metaID), raw); err != nil {
+		t.Fatalf("seed userinfo profile: %v", err)
+	}
+	if err := fixture.store.Set("userinfo", []byte("globalmetaid:"+strings.ToLower(globalMetaId)), []byte(metaID)); err != nil {
+		t.Fatalf("seed userinfo globalMetaId index: %v", err)
+	}
+}
+
+func seedPublishedContent(t *testing.T, agg *publishedcontent.Aggregator, globalMetaId string) {
+	t.Helper()
+
+	pins := []*aggregator.PinInscription{
+		{
+			Id:           "buzz-" + globalMetaId + ":i0",
+			Path:         publishedcontent.PathSimpleBuzz,
+			Operation:    publishedcontent.OperationCreate,
+			ContentBody:  []byte("router buzz"),
+			ContentType:  "text/plain",
+			ChainName:    "mvc",
+			GlobalMetaId: globalMetaId,
+			MetaId:       "meta-" + globalMetaId,
+			Address:      "addr-" + globalMetaId,
+			Timestamp:    3000,
+			Number:       30,
+		},
+		{
+			Id:           "metaapp-" + globalMetaId + ":i0",
+			Path:         publishedcontent.PathMetaApp,
+			Operation:    publishedcontent.OperationCreate,
+			ContentBody:  mustMarshalJSON(t, map[string]interface{}{"title": "Router MetaAPP", "description": "MetaAPP fixture"}),
+			ContentType:  "application/json",
+			ChainName:    "mvc",
+			GlobalMetaId: globalMetaId,
+			MetaId:       "meta-" + globalMetaId,
+			Address:      "addr-" + globalMetaId,
+			Timestamp:    2000,
+			Number:       20,
+		},
+		{
+			Id:           "skill-" + globalMetaId + ":i0",
+			Path:         publishedcontent.PathMetaBotSkill,
+			Operation:    publishedcontent.OperationCreate,
+			ContentBody:  mustMarshalJSON(t, map[string]interface{}{"name": "Router Skill", "summary": "Skill fixture"}),
+			ContentType:  "application/json",
+			ChainName:    "mvc",
+			GlobalMetaId: globalMetaId,
+			MetaId:       "meta-" + globalMetaId,
+			Address:      "addr-" + globalMetaId,
+			Timestamp:    1000,
+			Number:       10,
+		},
+	}
+	for _, pin := range pins {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("seed published content %s: %v", pin.Id, err)
+		}
 	}
 }
 
@@ -394,6 +484,68 @@ func TestRouter_BotHomepageGlobalMetaIDAcceptance(t *testing.T) {
 	data := assertResponseDataKeys(t, body, "schemaVersion", "canonical", "profile", "homepage", "services", "actions", "proofs", "source", "warnings")
 	if data["schemaVersion"] != "botHomepage.v1" {
 		t.Fatalf("schemaVersion: want botHomepage.v1 got %v data=%v", data["schemaVersion"], data)
+	}
+}
+
+func TestRouterBotHomepageV2IncludesSections(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+	seedPublishedContent(t, fixture.publishedAgg, "idq-bot")
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v2")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if body["code"] != float64(0) {
+		t.Fatalf("code = %#v body=%s", body["code"], w.Body.String())
+	}
+	data := body["data"].(map[string]interface{})
+	if data["schemaVersion"] != "botHomepage.v2" {
+		t.Fatalf("schema = %#v", data["schemaVersion"])
+	}
+	sections, ok := data["sections"].([]interface{})
+	if !ok {
+		t.Fatalf("sections missing: %#v", data)
+	}
+	if len(sections) != 4 {
+		t.Fatalf("sections length = %d, want 4: %#v", len(sections), sections)
+	}
+
+	sectionsByID := make(map[string]map[string]interface{}, len(sections))
+	for _, section := range sections {
+		typed, ok := section.(map[string]interface{})
+		if !ok {
+			t.Fatalf("section should be object: %T %#v", section, section)
+		}
+		id, _ := typed["id"].(string)
+		sectionsByID[id] = typed
+	}
+	for _, id := range []string{"buzzes", "metaapps", "skills"} {
+		section := sectionsByID[id]
+		if section == nil {
+			t.Fatalf("section %s missing from %#v", id, sections)
+		}
+		items, ok := section["items"].([]interface{})
+		if !ok || len(items) != 1 {
+			t.Fatalf("section %s items = %T %#v, want one seeded item", id, section["items"], section["items"])
+		}
+	}
+}
+
+func TestRouterBotHomepageDefaultStillV1(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot")
+	if w.Code != http.StatusOK || body["code"] != float64(0) {
+		t.Fatalf("bad response status=%d body=%s", w.Code, w.Body.String())
+	}
+	data := body["data"].(map[string]interface{})
+	if data["schemaVersion"] != "botHomepage.v1" {
+		t.Fatalf("default schema = %#v", data["schemaVersion"])
+	}
+	if _, ok := data["sections"]; ok {
+		t.Fatalf("default v1 should not return sections: %#v", data["sections"])
 	}
 }
 

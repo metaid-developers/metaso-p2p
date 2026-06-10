@@ -16,6 +16,7 @@ type PinInscription struct {
 	OriginalPath       string `json:"originalPath,omitempty"`
 	Operation          string `json:"operation"` // init, create, modify, revoke
 	ContentBody        []byte `json:"contentBody"`
+	ContentSummary     string `json:"contentSummary,omitempty"`
 	ContentType        string `json:"contentType"`
 	Creator            string `json:"creator"`
 	CreateAddress      string `json:"createAddress"`

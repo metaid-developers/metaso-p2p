@@ -22,6 +22,18 @@ type ProfileSnapshot struct {
 	NftAvatar       string
 	Bio             string
 	BioId           string
+	Homepage        string
+	HomepageId      string
+	Role            string
+	RoleId          string
+	Soul            string
+	SoulId          string
+	Goal            string
+	GoalId          string
+	ChatSkills      string
+	ChatSkillsId    string
+	LLM             string
+	LLMId           string
 	ChatPublicKey   string
 	ChatPublicKeyId string
 	ChainName       string
@@ -64,6 +76,18 @@ func profileFromUserInfo(p *userinfo.UserProfile) *ProfileSnapshot {
 		NftAvatar:       p.NftAvatar,
 		Bio:             p.Bio,
 		BioId:           p.BioId,
+		Homepage:        p.Homepage,
+		HomepageId:      p.HomepageId,
+		Role:            p.Role,
+		RoleId:          p.RoleId,
+		Soul:            p.Soul,
+		SoulId:          p.SoulId,
+		Goal:            p.Goal,
+		GoalId:          p.GoalId,
+		ChatSkills:      p.ChatSkills,
+		ChatSkillsId:    p.ChatSkillsId,
+		LLM:             p.LLM,
+		LLMId:           p.LLMId,
 		ChatPublicKey:   p.ChatPublicKey,
 		ChatPublicKeyId: p.ChatPublicKeyId,
 		ChainName:       p.ChainName,

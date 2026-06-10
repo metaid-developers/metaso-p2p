@@ -12,6 +12,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 // setupTestAggregator creates a test-ready userinfo aggregator with a real Pebble store and cache.
@@ -206,6 +207,274 @@ func TestHandleBlockPin_GeneratesGlobalMetaId(t *testing.T) {
 		t.Errorf("GlobalMetaID should start with 'id', got %q", profile.GlobalMetaID)
 	}
 	t.Logf("GlobalMetaID: %s", profile.GlobalMetaID)
+}
+
+func TestHandleBlockPin_StoresPersonaInfoPaths(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	metaid := "meta_persona"
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	global := idaddress.EncodeGlobalMetaId(address, "mvc")
+
+	pins := []*aggregator.PinInscription{
+		{Id: "init:i0", Path: "/", Operation: "init", MetaId: metaid, Address: address, ChainName: "mvc"},
+		{Id: "role:i0", Path: "/info/role", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte("Public role")},
+		{Id: "soul:i0", Path: "/info/soul", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte("Calm soul")},
+		{Id: "goal:i0", Path: "/info/goal", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte("Help users")},
+		{Id: "skills:i0", Path: "/info/chatSkills", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte(`{"allowChatSkills":["metabot-post-buzz"]}`)},
+		{Id: "llm:i0", Path: "/info/LLM", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte(`{"primaryProvider":"deepseek","displayName":"DeepSeek"}`)},
+		{Id: "home:i0", Path: "/info/homepage", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte(`{"uri":"metaapp://abc","renderer":"html","contentType":"text/html"}`)},
+	}
+	for _, pin := range pins {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile.Role != "Public role" || profile.RoleId != "role:i0" {
+		t.Fatalf("role not stored: %#v", profile)
+	}
+	if profile.Soul != "Calm soul" || profile.SoulId != "soul:i0" || profile.Goal != "Help users" || profile.GoalId != "goal:i0" {
+		t.Fatalf("persona text not stored: %#v", profile)
+	}
+	if profile.ChatSkills != `{"allowChatSkills":["metabot-post-buzz"]}` || profile.ChatSkillsId != "skills:i0" {
+		t.Fatalf("chatSkills not stored: %#v", profile)
+	}
+	if profile.LLM != `{"primaryProvider":"deepseek","displayName":"DeepSeek"}` || profile.LLMId != "llm:i0" {
+		t.Fatalf("llm not stored: %#v", profile)
+	}
+	if profile.Homepage != `{"uri":"metaapp://abc","renderer":"html","contentType":"text/html"}` || profile.HomepageId != "home:i0" {
+		t.Fatalf("homepage not stored: %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_UsesReverseIndex(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	global := idaddress.EncodeGlobalMetaId(address, "mvc")
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id: "init:i0", Path: "/", Operation: "init", MetaId: "meta_reverse", Address: address, ChainName: "mvc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := store.Get(namespace, globalMetaIdKey(global))
+	if err != nil {
+		t.Fatalf("reverse globalMetaId index missing: %v", err)
+	}
+	if string(raw) != "meta_reverse" {
+		t.Fatalf("reverse globalMetaId index = %q, want meta_reverse", raw)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_reverse" {
+		t.Fatalf("reverse lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	indexedGlobal := "idq1indexedglobal"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_index_only_global",
+		GlobalMetaID: indexedGlobal,
+		Address:      "address_index_only_global",
+		Name:         "Index Only Global",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(indexedGlobal), []byte("meta_index_only_global")); err != nil {
+		t.Fatalf("seed globalMetaId index: %v", err)
+	}
+	agg.scanProfiles = func(match func(*UserProfile) bool) (*UserProfile, error) {
+		t.Fatal("valid globalMetaId reverse index lookup should not scan profiles")
+		return nil, nil
+	}
+
+	profile, err := agg.LookupByGlobalMetaId("  " + indexedGlobal + "  ")
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_index_only_global" {
+		t.Fatalf("reverse index lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	indexedAddress := "address_indexed_only"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_index_only_address",
+		GlobalMetaID: "idq1indexonlyaddress",
+		Address:      indexedAddress,
+		Name:         "Index Only Address",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(indexedAddress), []byte("meta_index_only_address")); err != nil {
+		t.Fatalf("seed address index: %v", err)
+	}
+	agg.scanProfiles = func(match func(*UserProfile) bool) (*UserProfile, error) {
+		t.Fatal("valid address reverse index lookup should not scan profiles")
+		return nil, nil
+	}
+
+	profile, err := agg.LookupByAddress("  " + indexedAddress + "  ")
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_index_only_address" {
+		t.Fatalf("reverse index lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	global := "idq1mismatchedglobalfallback"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_wrong_global",
+		GlobalMetaID: "idq1wrongglobal",
+		Address:      "wrong_global_address",
+		Name:         "Wrong Global",
+	}); err != nil {
+		t.Fatalf("seed wrong indexed profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(global), []byte("meta_wrong_global")); err != nil {
+		t.Fatalf("seed mismatched globalMetaId index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_global_match"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_global_match",
+		GlobalMetaID: global,
+		Address:      "scan_global_match_address",
+		Name:         "Scan Global Match",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_global_match" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "address_mismatched_fallback"
+	if err := agg.saveProfile(&UserProfile{
+		MetaID:       "meta_wrong_address",
+		GlobalMetaID: "idq1wrongaddress",
+		Address:      "wrong_address",
+		Name:         "Wrong Address",
+	}); err != nil {
+		t.Fatalf("seed wrong indexed profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(address), []byte("meta_wrong_address")); err != nil {
+		t.Fatalf("seed mismatched address index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_address_match"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_address_match",
+		GlobalMetaID: "idq1scanaddressmatch",
+		Address:      address,
+		Name:         "Scan Address Match",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByAddress(address)
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_address_match" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileIsCorrupt(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	global := "idq1corruptglobalfallback"
+	if err := store.Set(namespace, profileKey("meta_corrupt_global"), []byte("{not-json")); err != nil {
+		t.Fatalf("seed corrupt profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(global), []byte("meta_corrupt_global")); err != nil {
+		t.Fatalf("seed corrupt globalMetaId index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_global"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_global",
+		GlobalMetaID: global,
+		Address:      "scan_global_address",
+		Name:         "Scan Global",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_global" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func TestLookupByAddress_FallsBackToScanWhenIndexedProfileIsCorrupt(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	address := "address_corrupt_fallback"
+	if err := store.Set(namespace, profileKey("meta_corrupt_address"), []byte("{not-json")); err != nil {
+		t.Fatalf("seed corrupt profile: %v", err)
+	}
+	if err := store.Set(namespace, addressKey(address), []byte("meta_corrupt_address")); err != nil {
+		t.Fatalf("seed corrupt address index: %v", err)
+	}
+	if err := store.Set(namespace, profileKey("meta_scan_address"), mustMarshalProfile(t, &UserProfile{
+		MetaID:       "meta_scan_address",
+		GlobalMetaID: "idq1scanaddress",
+		Address:      address,
+		Name:         "Scan Address",
+	})); err != nil {
+		t.Fatalf("seed scan profile: %v", err)
+	}
+
+	profile, err := agg.LookupByAddress(address)
+	if err != nil {
+		t.Fatalf("LookupByAddress: %v", err)
+	}
+	if profile == nil || profile.MetaID != "meta_scan_address" {
+		t.Fatalf("scan fallback returned %#v", profile)
+	}
+}
+
+func mustMarshalProfile(t *testing.T, profile *UserProfile) []byte {
+	t.Helper()
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	return raw
 }
 
 // --- Acceptance Criteria #8: Cache hit ---

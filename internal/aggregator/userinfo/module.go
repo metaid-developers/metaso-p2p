@@ -33,6 +33,18 @@ type UserProfile struct {
 	NftAvatar       string `json:"nftAvatar,omitempty"`
 	Bio             string `json:"bio,omitempty"`
 	BioId           string `json:"bioId,omitempty"`
+	Role            string `json:"role,omitempty"`
+	RoleId          string `json:"roleId,omitempty"`
+	Soul            string `json:"soul,omitempty"`
+	SoulId          string `json:"soulId,omitempty"`
+	Goal            string `json:"goal,omitempty"`
+	GoalId          string `json:"goalId,omitempty"`
+	ChatSkills      string `json:"chatSkills,omitempty"`
+	ChatSkillsId    string `json:"chatSkillsId,omitempty"`
+	LLM             string `json:"llm,omitempty"`
+	LLMId           string `json:"llmId,omitempty"`
+	Homepage        string `json:"homepage,omitempty"`
+	HomepageId      string `json:"homepageId,omitempty"`
 	Background      string `json:"background,omitempty"`
 	BackgroundId    string `json:"backgroundId,omitempty"`
 	ChatPublicKey   string `json:"chatpubkey,omitempty"`
@@ -48,14 +60,17 @@ type Aggregator struct {
 	remoteLookup        remoteProfileLookup
 	profileMode         string
 	allowRemoteFallback bool
+	scanProfiles        func(func(*UserProfile) bool) (*UserProfile, error)
 }
 
 const (
-	namespace       = "userinfo"
-	profilePrefix   = "profile:"
-	metaidPrefix    = "metaid:" // metaid → address mapping
-	defaultTTL      = 10 * time.Minute
-	cacheMaxEntries = 5000
+	namespace          = "userinfo"
+	profilePrefix      = "profile:"
+	metaidPrefix       = "metaid:" // metaid → address mapping
+	globalMetaIdPrefix = "globalmetaid:"
+	addressPrefix      = "address:"
+	defaultTTL         = 10 * time.Minute
+	cacheMaxEntries    = 5000
 )
 
 func (a *Aggregator) Name() string { return "userinfo" }
@@ -64,6 +79,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, defaultTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	a.scanProfiles = a.defaultScanProfiles
 	a.configureRemoteProfileLookupFromEnv()
 	return nil
 }
@@ -100,6 +116,19 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 			ChainName: pin.ChainName,
 		}
 	}
+	if profile.Address == "" && address != "" {
+		profile.Address = address
+	}
+	if profile.GlobalMetaID == "" {
+		if globalMetaID := strings.TrimSpace(pin.GlobalMetaId); globalMetaID != "" {
+			profile.GlobalMetaID = globalMetaID
+		} else if address != "" {
+			profile.GlobalMetaID = idaddress.EncodeGlobalMetaId(address, pin.ChainName)
+		}
+	}
+	if profile.ChainName == "" && pin.ChainName != "" {
+		profile.ChainName = pin.ChainName
+	}
 
 	// / (init) — first-time registration
 	if path == "/" {
@@ -134,6 +163,24 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	case path == "/info/bio":
 		profile.Bio = string(pin.ContentBody)
 		profile.BioId = pin.Id
+	case path == "/info/role":
+		profile.Role = string(pin.ContentBody)
+		profile.RoleId = pin.Id
+	case path == "/info/soul":
+		profile.Soul = string(pin.ContentBody)
+		profile.SoulId = pin.Id
+	case path == "/info/goal":
+		profile.Goal = string(pin.ContentBody)
+		profile.GoalId = pin.Id
+	case path == "/info/chatSkills":
+		profile.ChatSkills = string(pin.ContentBody)
+		profile.ChatSkillsId = pin.Id
+	case path == "/info/LLM":
+		profile.LLM = string(pin.ContentBody)
+		profile.LLMId = pin.Id
+	case path == "/info/homepage":
+		profile.Homepage = string(pin.ContentBody)
+		profile.HomepageId = pin.Id
 	case path == "/info/background":
 		profile.Background = "/content/" + pin.Id
 		profile.BackgroundId = pin.Id
@@ -260,13 +307,12 @@ func (a *Aggregator) LookupByMetaId(metaid string) (*UserProfile, error) {
 }
 
 // LookupByAddress returns the profile whose Address matches (case-insensitive).
-// Currently scans the namespace; userinfo maintains no reverse index yet.
 func (a *Aggregator) LookupByAddress(address string) (*UserProfile, error) {
 	return a.lookupByAddress(context.Background(), address)
 }
 
 // LookupByGlobalMetaId returns the profile whose GlobalMetaID matches
-// (case-insensitive). Also scan-based; same caveat as LookupByAddress.
+// (case-insensitive).
 func (a *Aggregator) LookupByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
 	return a.lookupByGlobalMetaId(context.Background(), globalMetaId)
 }
@@ -303,33 +349,71 @@ func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
 	if err != nil {
 		return err
 	}
-	return a.store.Set(namespace, profileKey(key), raw)
+	if err := a.store.Set(namespace, profileKey(key), raw); err != nil {
+		return err
+	}
+
+	indexMetaID := strings.TrimSpace(profile.MetaID)
+	if indexMetaID == "" {
+		indexMetaID = key
+	}
+	if globalMetaId := strings.TrimSpace(profile.GlobalMetaID); globalMetaId != "" {
+		if err := a.store.Set(namespace, globalMetaIdKey(globalMetaId), []byte(indexMetaID)); err != nil {
+			return err
+		}
+	}
+	if address := strings.TrimSpace(profile.Address); address != "" {
+		if err := a.store.Set(namespace, addressKey(address), []byte(indexMetaID)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {
-	var found *UserProfile
-	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
-		var p UserProfile
-		if err := json.Unmarshal(value, &p); err != nil {
-			return nil // skip corrupt entries
+	address = strings.TrimSpace(address)
+	if raw, err := a.store.Get(namespace, addressKey(address)); err == nil && len(raw) > 0 {
+		indexedMetaID := string(raw)
+		if profile, err := a.getProfile(indexedMetaID); err != nil {
+			log.Printf("[userinfo] stale address index %q -> %q: %v", address, indexedMetaID, err)
+		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.Address), address) {
+			return profile, nil
+		} else if profile != nil {
+			log.Printf("[userinfo] stale address index %q -> %q: profile address %q", address, indexedMetaID, profile.Address)
 		}
-		if strings.EqualFold(p.Address, address) {
-			found = &p
-			return nil
-		}
-		return nil
+	}
+
+	return a.scanProfiles(func(p *UserProfile) bool {
+		return strings.EqualFold(strings.TrimSpace(p.Address), address)
 	})
-	return found, err
 }
 
 func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
+	globalMetaId = strings.TrimSpace(globalMetaId)
+	if raw, err := a.store.Get(namespace, globalMetaIdKey(globalMetaId)); err == nil && len(raw) > 0 {
+		indexedMetaID := string(raw)
+		if profile, err := a.getProfile(indexedMetaID); err != nil {
+			log.Printf("[userinfo] stale globalMetaId index %q -> %q: %v", globalMetaId, indexedMetaID, err)
+		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.GlobalMetaID), globalMetaId) {
+			return profile, nil
+		} else if profile != nil {
+			log.Printf("[userinfo] stale globalMetaId index %q -> %q: profile globalMetaId %q", globalMetaId, indexedMetaID, profile.GlobalMetaID)
+		}
+	}
+
+	return a.scanProfiles(func(p *UserProfile) bool {
+		return strings.EqualFold(strings.TrimSpace(p.GlobalMetaID), globalMetaId)
+	})
+}
+
+func (a *Aggregator) defaultScanProfiles(match func(*UserProfile) bool) (*UserProfile, error) {
 	var found *UserProfile
 	err := a.store.ScanPrefix(namespace, profileKey(""), func(key, value []byte) error {
 		var p UserProfile
 		if err := json.Unmarshal(value, &p); err != nil {
 			return nil
 		}
-		if strings.EqualFold(p.GlobalMetaID, globalMetaId) {
+		if match(&p) {
 			found = &p
 			return nil
 		}
@@ -344,4 +428,12 @@ func profileKey(metaid string) []byte {
 
 func metaidKey(metaid string) []byte {
 	return []byte(metaidPrefix + metaid)
+}
+
+func globalMetaIdKey(globalMetaId string) []byte {
+	return []byte(globalMetaIdPrefix + strings.ToLower(strings.TrimSpace(globalMetaId)))
+}
+
+func addressKey(address string) []byte {
+	return []byte(addressPrefix + strings.ToLower(strings.TrimSpace(address)))
 }

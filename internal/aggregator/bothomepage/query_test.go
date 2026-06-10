@@ -8,6 +8,9 @@ import (
 
 func TestParseOptionsDefaults(t *testing.T) {
 	defaults := DefaultOptions()
+	if defaults.Version != "" {
+		t.Fatalf("DefaultOptions Version = %q, want empty", defaults.Version)
+	}
 	if !defaults.IncludeServices {
 		t.Fatal("DefaultOptions IncludeServices should be true")
 	}
@@ -48,6 +51,90 @@ func TestParseOptionsDefaults(t *testing.T) {
 	}
 	if got.ChainName != "" {
 		t.Fatalf("ChainName = %q, want empty", got.ChainName)
+	}
+}
+
+func TestParseOptionsVersionV2(t *testing.T) {
+	got, err := ParseOptions(url.Values{"version": {"v2"}, "chainName": {""}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "v2" {
+		t.Fatalf("Version = %q, want v2", got.Version)
+	}
+	if got.ChainName != "" {
+		t.Fatalf("ChainName = %q, want empty", got.ChainName)
+	}
+	if !got.IncludeSections {
+		t.Fatal("IncludeSections = false, want true for version=v2")
+	}
+
+	got, err = ParseOptions(url.Values{})
+	if err != nil {
+		t.Fatalf("ParseOptions defaults returned error: %v", err)
+	}
+	if got.Version != "" {
+		t.Fatalf("default Version = %q, want empty", got.Version)
+	}
+	if got.IncludeSections {
+		t.Fatal("default IncludeSections = true, want false")
+	}
+
+	got, err = ParseOptions(url.Values{"version": {"v2"}, "includeSections": {"false"}})
+	if err != nil {
+		t.Fatalf("ParseOptions explicit includeSections=false returned error: %v", err)
+	}
+	if got.Version != "v2" {
+		t.Fatalf("explicit Version = %q, want v2", got.Version)
+	}
+	if got.IncludeSections {
+		t.Fatal("explicit IncludeSections = true, want false")
+	}
+}
+
+func TestParseOptionsV2SectionControlsAndFixedServiceSize(t *testing.T) {
+	got, err := ParseOptions(url.Values{
+		"version":         {"v2"},
+		"serviceSize":     {"99"},
+		"includeMetaApps": {"false"},
+		"includeSkills":   {"false"},
+		"includeBuzzes":   {"false"},
+	})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.ServiceSize != homepageSectionLimit {
+		t.Fatalf("ServiceSize = %d, want fixed v2 homepage limit %d", got.ServiceSize, homepageSectionLimit)
+	}
+	if got.IncludeMetaApps {
+		t.Fatal("IncludeMetaApps = true, want false")
+	}
+	if got.IncludeSkills {
+		t.Fatal("IncludeSkills = true, want false")
+	}
+	if got.IncludeBuzzes {
+		t.Fatal("IncludeBuzzes = true, want false")
+	}
+
+	got, err = ParseOptions(url.Values{"version": {"v2"}, "serviceSize": {"not-public"}})
+	if err != nil {
+		t.Fatalf("v2 serviceSize should be ignored instead of rejected: %v", err)
+	}
+	if got.ServiceSize != homepageSectionLimit {
+		t.Fatalf("ignored v2 ServiceSize = %d, want %d", got.ServiceSize, homepageSectionLimit)
+	}
+}
+
+func TestParseOptionsV1ServiceSizeCompatibility(t *testing.T) {
+	got, err := ParseOptions(url.Values{"serviceSize": {"7"}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "" {
+		t.Fatalf("Version = %q, want v1/default", got.Version)
+	}
+	if got.ServiceSize != 7 {
+		t.Fatalf("ServiceSize = %d, want v1 query size 7", got.ServiceSize)
 	}
 }
 

@@ -19,14 +19,23 @@ import (
 //   pin_to_source:<chainName>:<pinId>                         → sourceServicePinId (string)
 //   service_by_provider:<chainName>:<providerMetaId>:<sourceServicePinId>
 //                                                             → "" (index marker)
+//   service_by_provider_meta:<providerMetaId>:<invertedUpdatedAt>:<chainName>:<sourceServicePinId>
+//                                                             → "" (provider-scoped cross-chain fallback)
+//   service_by_provider_global:<providerGlobalMetaId>:<invertedUpdatedAt>:<chainName>:<sourceServicePinId>
+//                                                             → "" (index marker, descending by inverted ts)
+//   service_by_provider_global_chain:<providerGlobalMetaId>:<chainName>:<invertedUpdatedAt>:<sourceServicePinId>
+//                                                             → "" (index marker, descending by inverted ts)
 //   service_by_updated:<chainName>:<padded_updatedAt>:<sourceServicePinId>
 //                                                             → "" (index marker, descending by inverted ts)
 
 const (
-	keyService           = "service:"
-	keyPinToSource       = "pin_to_source:"
-	keyServiceByProvider = "service_by_provider:"
-	keyServiceByUpdated  = "service_by_updated:"
+	keyService                      = "service:"
+	keyPinToSource                  = "pin_to_source:"
+	keyServiceByProvider            = "service_by_provider:"
+	keyServiceByProviderMeta        = "service_by_provider_meta:"
+	keyServiceByProviderGlobal      = "service_by_provider_global:"
+	keyServiceByProviderGlobalChain = "service_by_provider_global_chain:"
+	keyServiceByUpdated             = "service_by_updated:"
 )
 
 // serviceKey builds the primary Pebble key for a service record.
@@ -47,15 +56,49 @@ func providerIndexKey(chainName, providerMetaId, sourcePinId string) []byte {
 	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":" + sourcePinId)
 }
 
+func providerIndexPrefix(chainName, providerMetaId string) []byte {
+	if chainName == "" {
+		return []byte(keyServiceByProvider)
+	}
+	return []byte(keyServiceByProvider + chainName + ":" + providerMetaId + ":")
+}
+
+func homepageProviderMetaIndexKey(providerMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderMeta + providerMetaId + ":" + invertedTimestampHex(updatedAt) + ":" + chainName + ":" + sourcePinId)
+}
+
+func homepageProviderMetaIndexPrefix(providerMetaId string) []byte {
+	return []byte(keyServiceByProviderMeta + providerMetaId + ":")
+}
+
+func providerGlobalIndexKey(providerGlobalMetaId string, updatedAt int64, chainName, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderGlobal + providerGlobalMetaId + ":" + invertedTimestampHex(updatedAt) + ":" + chainName + ":" + sourcePinId)
+}
+
+func providerGlobalIndexPrefix(providerGlobalMetaId string) []byte {
+	return []byte(keyServiceByProviderGlobal + providerGlobalMetaId + ":")
+}
+
+func providerGlobalChainIndexKey(providerGlobalMetaId, chainName string, updatedAt int64, sourcePinId string) []byte {
+	return []byte(keyServiceByProviderGlobalChain + providerGlobalMetaId + ":" + chainName + ":" + invertedTimestampHex(updatedAt) + ":" + sourcePinId)
+}
+
+func providerGlobalChainIndexPrefix(providerGlobalMetaId, chainName string) []byte {
+	return []byte(keyServiceByProviderGlobalChain + providerGlobalMetaId + ":" + chainName + ":")
+}
+
 // updatedIndexKey orders services by descending updatedAt within a chain.
 // We invert the timestamp so a forward prefix scan returns newest first,
 // which matches the spec's default sortBy=updated order.
 func updatedIndexKey(chainName string, updatedAt int64, sourcePinId string) []byte {
+	return []byte(keyServiceByUpdated + chainName + ":" + invertedTimestampHex(updatedAt) + ":" + sourcePinId)
+}
+
+func invertedTimestampHex(updatedAt int64) string {
 	inverted := ^uint64(updatedAt)
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, inverted)
-	hex := fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
-	return []byte(keyServiceByUpdated + chainName + ":" + hex + ":" + sourcePinId)
+	return fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
 }
 
 // loadService fetches a ServiceRecord by its sourceServicePinId. Returns
@@ -116,13 +159,21 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 		// keys — so we can safely tear down stale index entries even
 		// when the index was never written (e.g. previous record had an
 		// empty ProviderMetaId).
-		if previous.ProviderMetaId != "" && previous.ProviderMetaId != rec.ProviderMetaId {
+		if previous.ProviderMetaId != "" {
 			_ = a.store.Delete(NamespaceService,
 				providerIndexKey(previous.ChainName, previous.ProviderMetaId, previous.SourceServicePinId))
+			_ = a.store.Delete(NamespaceService,
+				homepageProviderMetaIndexKey(previous.ProviderMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
 		}
 		if previous.UpdatedAt > 0 && previous.UpdatedAt != rec.UpdatedAt {
 			_ = a.store.Delete(NamespaceService,
 				updatedIndexKey(previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
+		}
+		for _, providerGlobalMetaId := range a.homepageProviderGlobalMetaIds(previous) {
+			_ = a.store.Delete(NamespaceService,
+				providerGlobalIndexKey(providerGlobalMetaId, previous.UpdatedAt, previous.ChainName, previous.SourceServicePinId))
+			_ = a.store.Delete(NamespaceService,
+				providerGlobalChainIndexKey(providerGlobalMetaId, previous.ChainName, previous.UpdatedAt, previous.SourceServicePinId))
 		}
 	}
 
@@ -138,6 +189,20 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 			providerIndexKey(rec.ChainName, rec.ProviderMetaId, rec.SourceServicePinId), []byte{}); err != nil {
 			return err
 		}
+		if err := a.store.Set(NamespaceService,
+			homepageProviderMetaIndexKey(rec.ProviderMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
+	}
+	for _, providerGlobalMetaId := range a.homepageProviderGlobalMetaIds(rec) {
+		if err := a.store.Set(NamespaceService,
+			providerGlobalIndexKey(providerGlobalMetaId, rec.UpdatedAt, rec.ChainName, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
+		if err := a.store.Set(NamespaceService,
+			providerGlobalChainIndexKey(providerGlobalMetaId, rec.ChainName, rec.UpdatedAt, rec.SourceServicePinId), []byte{}); err != nil {
+			return err
+		}
 	}
 	if rec.UpdatedAt > 0 {
 		if err := a.store.Set(NamespaceService,
@@ -146,6 +211,32 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 		}
 	}
 	return nil
+}
+
+func (a *Aggregator) homepageProviderGlobalMetaIds(rec *ServiceRecord) []string {
+	if rec == nil {
+		return nil
+	}
+	profile := a.ResolveProvider(rec)
+	return uniqueNonEmptyStrings(rec.ProviderGlobalMetaId, profile.GlobalMetaId)
+}
+
+func uniqueNonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // mapPinToSource records that a non-source pin id (modify / revoke) maps

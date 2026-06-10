@@ -13,6 +13,55 @@ func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
 	}
 }
 
+func TestDefaultBotHomepageV2BackfillConfigDisabled(t *testing.T) {
+	cfg := Default()
+
+	if cfg.BotHomepageV2Backfill.Enabled {
+		t.Fatal("expected bot homepage v2 backfill to be disabled by default")
+	}
+	if cfg.BotHomepageV2Backfill.Lookback != 1440*time.Hour {
+		t.Fatalf("expected default lookback 1440h, got %s", cfg.BotHomepageV2Backfill.Lookback)
+	}
+	if cfg.BotHomepageV2Backfill.Timeout != 2*time.Minute {
+		t.Fatalf("expected default timeout 2m, got %s", cfg.BotHomepageV2Backfill.Timeout)
+	}
+	if cfg.BotHomepageV2Backfill.PageSize != 100 {
+		t.Fatalf("expected default page size 100, got %d", cfg.BotHomepageV2Backfill.PageSize)
+	}
+	if cfg.BotHomepageV2Backfill.MANAPIBaseURL != "https://manapi.metaid.io" {
+		t.Fatalf("expected default MANAPI base URL, got %q", cfg.BotHomepageV2Backfill.MANAPIBaseURL)
+	}
+}
+
+func TestLoadBotHomepageV2BackfillEnv(t *testing.T) {
+	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED", "true")
+	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", "720h")
+	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT", "30s")
+	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_PAGE_SIZE", "25")
+	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL", "https://manapi.example")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if !cfg.BotHomepageV2Backfill.Enabled {
+		t.Fatal("expected backfill enabled to load from env")
+	}
+	if cfg.BotHomepageV2Backfill.Lookback != 720*time.Hour {
+		t.Fatalf("expected lookback env value, got %s", cfg.BotHomepageV2Backfill.Lookback)
+	}
+	if cfg.BotHomepageV2Backfill.Timeout != 30*time.Second {
+		t.Fatalf("expected timeout env value, got %s", cfg.BotHomepageV2Backfill.Timeout)
+	}
+	if cfg.BotHomepageV2Backfill.PageSize != 25 {
+		t.Fatalf("expected page size env value, got %d", cfg.BotHomepageV2Backfill.PageSize)
+	}
+	if cfg.BotHomepageV2Backfill.MANAPIBaseURL != "https://manapi.example" {
+		t.Fatalf("expected MANAPI base URL env value, got %q", cfg.BotHomepageV2Backfill.MANAPIBaseURL)
+	}
+}
+
 func TestDefaultFederationConfigDisabled(t *testing.T) {
 	cfg := Default()
 
@@ -418,6 +467,41 @@ func TestLoadBlockIndexEnv(t *testing.T) {
 		t.Run(chain.name, func(t *testing.T) {
 			chain.assert(t, cfg)
 		})
+	}
+}
+
+func TestDefaultZMQMempoolPollingConfig(t *testing.T) {
+	cfg := Default()
+
+	if !cfg.ZMQ.MempoolPollingEnabled {
+		t.Fatal("expected ZMQ mempool polling to be enabled by default")
+	}
+	if cfg.ZMQ.MempoolPollInterval != 10*time.Second {
+		t.Fatalf("expected default mempool poll interval 10s, got %s", cfg.ZMQ.MempoolPollInterval)
+	}
+	if cfg.ZMQ.MempoolDedupeTTL != 30*time.Minute {
+		t.Fatalf("expected default mempool dedupe TTL 30m, got %s", cfg.ZMQ.MempoolDedupeTTL)
+	}
+}
+
+func TestLoadZMQMempoolPollingEnv(t *testing.T) {
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", "false")
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", "15s")
+	t.Setenv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", "45m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.ZMQ.MempoolPollingEnabled {
+		t.Fatal("expected ZMQ mempool polling enabled to load from env")
+	}
+	if cfg.ZMQ.MempoolPollInterval != 15*time.Second {
+		t.Fatalf("expected mempool poll interval env value, got %s", cfg.ZMQ.MempoolPollInterval)
+	}
+	if cfg.ZMQ.MempoolDedupeTTL != 45*time.Minute {
+		t.Fatalf("expected mempool dedupe TTL env value, got %s", cfg.ZMQ.MempoolDedupeTTL)
 	}
 }
 

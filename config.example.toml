@@ -241,6 +241,33 @@ maxPeers = 0
 maxSnapshotBytes = 0
 
 # ---------------------------------------------------------------------------
+# [botHomepageV2Backfill]  Optional Bot Homepage v2 MANAPI historical import
+# ---------------------------------------------------------------------------
+[botHomepageV2Backfill]
+# Disabled by default. When enabled by a later production wiring task, startup
+# can import recent simplebuzz, metaapp, and metabot-skill pins from MANAPI.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED
+enabled = false
+
+# How far back MANAPI backfill should read.
+# Format: Go duration string (e.g. "1440h" for 60 days).
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK
+lookback = "1440h"
+
+# Timeout for outbound MANAPI requests.
+# Format: Go duration string (e.g. "2m").
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT
+timeout = "2m"
+
+# Number of pins requested per MANAPI page.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_PAGE_SIZE
+pageSize = 100
+
+# MANAPI base URL used by the backfill client.
+# Env: METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL
+manapiBaseUrl = "https://manapi.metaid.io"
+
+# ---------------------------------------------------------------------------
 # [blockIndex]  Blockchain block scanning (indexer)
 #
 #   When [blockIndex].enabled is true the indexer engine starts and scans
@@ -334,16 +361,29 @@ enabled = false
   #      METASO_P2P_BLOCK_INDEX_OPCAT_INITIAL_HEIGHT
 
 # ---------------------------------------------------------------------------
-# [zmq]  ZeroMQ mempool monitoring
+# [zmq]  Mempool monitoring
 #
-#   When [zmq].enabled is true the ZMQ event loop starts and subscribes to
-#   rawtx (or other) topics on every enabled chain. Each chain's [zmq.<chain>]
-#   section must also have enabled = true.
+#   [zmq].enabled controls future ZeroMQ subscription behavior for rawtx
+#   (or other) topics on every enabled chain. mempoolPollingEnabled controls
+#   the RPC polling loop that fetches mempool transactions and routes parsed
+#   mempool pins through aggregators.
 # ---------------------------------------------------------------------------
 [zmq]
-# Master toggle for ZMQ mempool monitoring.
+# Master toggle for future ZMQ subscription behavior.
 # Env: METASO_P2P_ZMQ_ENABLED
 enabled = false
+
+# Enable RPC mempool polling.
+# Env: METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED
+mempoolPollingEnabled = true
+
+# Interval for RPC mempool polling.
+# Env: METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL
+mempoolPollInterval = "10s"
+
+# TTL for suppressing duplicate mempool transaction IDs.
+# Env: METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL
+mempoolDedupeTTL = "30m"
 
   # --- Bitcoin (BTC) ZMQ ---
   [zmq.btc]

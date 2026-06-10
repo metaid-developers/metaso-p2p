@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,13 +24,18 @@ import (
 
 // Engine is the top-level indexing engine.
 type Engine struct {
-	mu           sync.RWMutex
-	chains       map[string]*chainEntry
-	registry     *aggregator.Registry
-	store        *storage.PebbleStore
-	scanInterval time.Duration
-	running      bool
-	cancel       context.CancelFunc
+	mu                    sync.RWMutex
+	chains                map[string]*chainEntry
+	registry              *aggregator.Registry
+	store                 *storage.PebbleStore
+	scanInterval          time.Duration
+	mempoolPollingEnabled bool
+	mempoolPollInterval   time.Duration
+	mempoolDedupeTTL      time.Duration
+	mempoolSeen           map[string]time.Time
+	mempoolMu             sync.Mutex
+	running               bool
+	cancel                context.CancelFunc
 }
 
 type chainEntry struct {
@@ -41,10 +47,28 @@ type chainEntry struct {
 // NewEngine creates a new indexing engine.
 func NewEngine(store *storage.PebbleStore, registry *aggregator.Registry) *Engine {
 	return &Engine{
-		chains:       make(map[string]*chainEntry),
-		registry:     registry,
-		store:        store,
-		scanInterval: 10 * time.Second,
+		chains:                make(map[string]*chainEntry),
+		registry:              registry,
+		store:                 store,
+		scanInterval:          10 * time.Second,
+		mempoolPollingEnabled: true,
+		mempoolPollInterval:   10 * time.Second,
+		mempoolDedupeTTL:      30 * time.Minute,
+		mempoolSeen:           make(map[string]time.Time),
+	}
+}
+
+// ConfigureMempoolPolling updates RPC mempool polling behavior.
+func (e *Engine) ConfigureMempoolPolling(enabled bool, pollInterval, dedupeTTL time.Duration) {
+	e.mempoolMu.Lock()
+	defer e.mempoolMu.Unlock()
+
+	e.mempoolPollingEnabled = enabled
+	if pollInterval > 0 {
+		e.mempoolPollInterval = pollInterval
+	}
+	if dedupeTTL > 0 {
+		e.mempoolDedupeTTL = dedupeTTL
 	}
 }
 
@@ -214,6 +238,118 @@ func (e *Engine) processTransfers(entry *chainEntry, txIDs []string) {
 	_ = txIDs
 }
 
+// pollMempoolOnce fetches raw mempool transactions from each registered chain
+// over RPC, parses pins, and routes newly-seen mempool pins to aggregators.
+func (e *Engine) pollMempoolOnce() {
+	e.mu.RLock()
+	entries := make([]*chainEntry, 0, len(e.chains))
+	for _, entry := range e.chains {
+		entries = append(entries, entry)
+	}
+	e.mu.RUnlock()
+
+	now := time.Now()
+	for _, entry := range entries {
+		chainName := entry.chain.Name()
+		txList, err := entry.chain.GetMempoolTransactionList()
+		if err != nil {
+			log.Printf("[indexer] %s mempool: GetMempoolTransactionList error: %v", chainName, err)
+			continue
+		}
+		if len(txList) == 0 {
+			continue
+		}
+
+		pins, txIDs, err := entry.indexer.CatchMempoolPins(txList)
+		if err != nil {
+			log.Printf("[indexer] %s mempool: CatchMempoolPins error: %v", chainName, err)
+			continue
+		}
+		pins = e.filterSeenMempoolPins(chainName, pins, txIDs, now)
+
+		for _, pin := range pins {
+			e.registry.RouteMempoolPin(pin)
+		}
+	}
+}
+
+func (e *Engine) filterSeenMempoolPins(chainName string, pins []*aggregator.PinInscription, txIDs []string, now time.Time) []*aggregator.PinInscription {
+	e.mempoolMu.Lock()
+	defer e.mempoolMu.Unlock()
+
+	for key, seenAt := range e.mempoolSeen {
+		if e.mempoolDedupeTTL > 0 && now.Sub(seenAt) > e.mempoolDedupeTTL {
+			delete(e.mempoolSeen, key)
+		}
+	}
+
+	filtered := make([]*aggregator.PinInscription, 0, len(pins))
+	newKeys := make(map[string]time.Time)
+	for _, pin := range pins {
+		if pin == nil {
+			continue
+		}
+		stableID := mempoolStableIDForPin(pin, txIDs)
+		if stableID == "" {
+			filtered = append(filtered, pin)
+			continue
+		}
+
+		key := chainName + ":" + stableID
+		if seenAt, ok := e.mempoolSeen[key]; ok && (e.mempoolDedupeTTL <= 0 || now.Sub(seenAt) <= e.mempoolDedupeTTL) {
+			continue
+		}
+		if _, ok := newKeys[key]; ok {
+			continue
+		}
+		newKeys[key] = now
+		filtered = append(filtered, pin)
+	}
+	for key, seenAt := range newKeys {
+		e.mempoolSeen[key] = seenAt
+	}
+	return filtered
+}
+
+func mempoolStableIDForPin(pin *aggregator.PinInscription, txIDs []string) string {
+	if pin == nil {
+		return ""
+	}
+	if genesisTx := strings.TrimSpace(pin.GenesisTransaction); genesisTx != "" {
+		return genesisTx
+	}
+	pinID := strings.TrimSpace(pin.Id)
+	if txID := mempoolTxIDFromPinID(pinID); txID != "" {
+		return txID
+	}
+	for _, txID := range txIDs {
+		txID = strings.TrimSpace(txID)
+		if txID != "" && (pinID == txID || strings.HasPrefix(pinID, txID+"i") || strings.HasPrefix(pinID, txID+":")) {
+			return txID
+		}
+	}
+	return pinID
+}
+
+func mempoolTxIDFromPinID(pinID string) string {
+	if pinID == "" {
+		return ""
+	}
+	if separator := strings.Index(pinID, ":"); separator > 0 {
+		return strings.TrimSpace(pinID[:separator])
+	}
+	suffixStart := strings.LastIndex(pinID, "i")
+	if suffixStart <= 0 || suffixStart == len(pinID)-1 {
+		return ""
+	}
+	for _, r := range pinID[suffixStart+1:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return strings.TrimSpace(pinID[:suffixStart])
+}
+
 // persistHeight saves the last processed height to Pebble.
 func (e *Engine) persistHeight(chainName string, height int64) {
 	key := []byte(chainName + "_lastheight")
@@ -245,9 +381,31 @@ func (e *Engine) restoreHeights() {
 
 // zmqLoop manages ZMQ listeners for all registered chains.
 func (e *Engine) zmqLoop(ctx context.Context) {
-	// In the full implementation, this starts per-chain ZMQ subscribers
-	// that receive raw transactions, parse them via the indexer,
-	// and route mempool pins to aggregators.
-	log.Printf("[indexer] ZMQ loop started (placeholder)")
-	<-ctx.Done()
+	e.mempoolMu.Lock()
+	enabled := e.mempoolPollingEnabled
+	interval := e.mempoolPollInterval
+	e.mempoolMu.Unlock()
+
+	if !enabled {
+		log.Printf("[indexer] mempool polling disabled")
+		return
+	}
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+
+	log.Printf("[indexer] mempool RPC polling started, interval=%s", interval)
+	e.pollMempoolOnce()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.pollMempoolOnce()
+		}
+	}
 }
