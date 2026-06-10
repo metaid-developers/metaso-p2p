@@ -8,6 +8,7 @@ import (
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 )
 
 type fakeProfileLookup struct {
@@ -292,6 +293,106 @@ func TestBuildV2ParsesLegacyBioIntoPersona(t *testing.T) {
 	}
 	if got.Homepage.Summary != "Agent role" {
 		t.Fatalf("Homepage.Summary = %q, want Agent role", got.Homepage.Summary)
+	}
+}
+
+func TestProfileFromUserInfoCarriesHomepage(t *testing.T) {
+	profile := profileFromUserInfo(&userinfo.UserProfile{
+		GlobalMetaID: "idqBot",
+		Homepage:     `{"uri":"metafile://homepage-pin","renderer":"html"}`,
+		HomepageId:   "homepage-pin:i0",
+	})
+
+	if profile.Homepage != `{"uri":"metafile://homepage-pin","renderer":"html"}` {
+		t.Fatalf("Homepage = %q, want stored homepage payload", profile.Homepage)
+	}
+	if profile.HomepageId != "homepage-pin:i0" {
+		t.Fatalf("HomepageId = %q, want homepage-pin:i0", profile.HomepageId)
+	}
+}
+
+func TestBuildV2UsesCustomHomepageFromUserInfo(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Homepage Bot",
+		Bio:          `{"role":"legacy role","goal":"legacy goal"}`,
+		Role:         "Live role",
+		RoleId:       "role-pin:i0",
+		Homepage:     `{"uri":"metafile://homepage-pin","contentType":"text/html","renderer":"html","txid":"homepage-tx"}`,
+		HomepageId:   "homepage-pin:i0",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Homepage.Mode != "custom" {
+		t.Fatalf("Homepage.Mode = %q, want custom", got.Homepage.Mode)
+	}
+	if got.Homepage.Title != "Homepage Bot" {
+		t.Fatalf("Homepage.Title = %q, want Homepage Bot", got.Homepage.Title)
+	}
+	if got.Homepage.Summary != "Live role" {
+		t.Fatalf("Homepage.Summary = %q, want Live role without legacy JSON leak", got.Homepage.Summary)
+	}
+	if got.Homepage.Custom == nil {
+		t.Fatal("Homepage.Custom = nil, want custom homepage")
+	}
+	if got.Homepage.Custom.URI != "metafile://homepage-pin" {
+		t.Fatalf("Homepage.Custom.URI = %q, want metafile://homepage-pin", got.Homepage.Custom.URI)
+	}
+	if got.Homepage.Custom.PinId != "homepage-pin:i0" {
+		t.Fatalf("Homepage.Custom.PinId = %q, want homepage-pin:i0", got.Homepage.Custom.PinId)
+	}
+	if got.Homepage.Custom.ContentType != "text/html" {
+		t.Fatalf("Homepage.Custom.ContentType = %q, want text/html", got.Homepage.Custom.ContentType)
+	}
+	if got.Homepage.Custom.Renderer != "html" {
+		t.Fatalf("Homepage.Custom.Renderer = %q, want html", got.Homepage.Custom.Renderer)
+	}
+	if got.Homepage.Custom.Txid != "homepage-tx" {
+		t.Fatalf("Homepage.Custom.Txid = %q, want homepage-tx", got.Homepage.Custom.Txid)
+	}
+	if got.Homepage.Custom.ProtocolPath != "/info/homepage" {
+		t.Fatalf("Homepage.Custom.ProtocolPath = %q, want /info/homepage", got.Homepage.Custom.ProtocolPath)
+	}
+}
+
+func TestBuildV2WithoutHomepageUsesDefaultHomepage(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Default Bot",
+		Goal:         "Help people",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Homepage.Mode != "default" {
+		t.Fatalf("Homepage.Mode = %q, want default", got.Homepage.Mode)
+	}
+	if got.Homepage.Custom != nil {
+		t.Fatalf("Homepage.Custom = %+v, want nil", got.Homepage.Custom)
+	}
+	if got.Homepage.Summary != "Help people" {
+		t.Fatalf("Homepage.Summary = %q, want persona goal fallback", got.Homepage.Summary)
 	}
 }
 

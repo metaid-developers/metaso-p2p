@@ -66,6 +66,10 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		outProfile.Bio = profileBioForVersion(profile, outProfile.Bio, opts.Version)
 	}
 	resolvedPresence := a.resolvePresence(*profile, opts.IncludePresence)
+	homepage := toDefaultHomepage(outProfile, persona)
+	if opts.Version == "v2" {
+		homepage = toHomepage(outProfile, persona, profile)
+	}
 	services := make([]Service, 0)
 	proofs := Proofs{
 		VerificationState: "unverified",
@@ -86,7 +90,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		Canonical:     canonical,
 		Profile:       outProfile,
 		Persona:       persona,
-		Homepage:      toDefaultHomepage(outProfile, persona),
+		Homepage:      homepage,
 		Presence:      resolvedPresence,
 		Services:      services,
 		Proofs:        proofs,
@@ -153,6 +157,50 @@ func toDefaultHomepage(profile Profile, persona *Persona) Homepage {
 		Summary: homepageSummary(profile, persona),
 		Custom:  nil,
 	}
+}
+
+func toHomepage(profile Profile, persona *Persona, snapshot *ProfileSnapshot) Homepage {
+	homepage := toDefaultHomepage(profile, persona)
+	if snapshot == nil {
+		return homepage
+	}
+	custom, ok := parseCustomHomepage(snapshot.Homepage, snapshot.HomepageId)
+	if !ok {
+		return homepage
+	}
+	homepage.Mode = "custom"
+	homepage.Custom = custom
+	return homepage
+}
+
+func parseCustomHomepage(raw, sourcePinID string) (*CustomHomepage, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+
+	custom := CustomHomepage{
+		PinId:        strings.TrimSpace(sourcePinID),
+		ProtocolPath: "/info/homepage",
+	}
+	if startsJSONContainer(raw) {
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			return nil, false
+		}
+		custom.URI = stringValue(decoded["uri"])
+		custom.ContentType = stringValue(decoded["contentType"])
+		custom.Renderer = stringValue(decoded["renderer"])
+		custom.Txid = stringValue(decoded["txid"])
+		custom.PinId = firstNonEmpty(custom.PinId, stringValue(decoded["pinId"]))
+	} else {
+		custom.URI = raw
+	}
+
+	if strings.TrimSpace(custom.URI) == "" {
+		return nil, false
+	}
+	return &custom, true
 }
 
 func homepageSummary(profile Profile, persona *Persona) string {
