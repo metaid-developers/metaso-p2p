@@ -139,6 +139,7 @@ func main() {
 				}
 			}()
 		}
+		startPublishedContentReplayIfEnabled(publishedAgg, cfg)
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
