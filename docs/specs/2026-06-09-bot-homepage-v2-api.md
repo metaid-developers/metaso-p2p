@@ -12,6 +12,13 @@ current `/api/bot-homepage/globalmetaid/:globalMetaId` compatibility contract.
 `chainName` query parameter filters section reads to one chain when set. An
 empty `chainName` aggregates all indexed chains.
 
+When indexed `/info/homepage` content is a non-empty JSON object, `homepage.mode`
+is `custom` and `homepage.custom` returns that JSON object as-is. The backend
+does not interpret, normalize, or add fields to the custom homepage body; clients
+own renderer decisions such as `metafile://`, `metaapp://`, `renderer`, and
+`contentType`. Missing, empty, or invalid JSON homepage content keeps
+`homepage.mode=default` and `homepage.custom=null`.
+
 V2 section controls:
 
 - `includeSections=false` omits all homepage sections.

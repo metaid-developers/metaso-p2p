@@ -1,5 +1,7 @@
 package bothomepage
 
+import "encoding/json"
+
 // Data is the stable response payload for the bot homepage read model.
 type Data struct {
 	SchemaVersion string            `json:"schemaVersion"`
@@ -40,10 +42,10 @@ type Profile struct {
 }
 
 type Homepage struct {
-	Mode    string          `json:"mode"`
-	Title   string          `json:"title"`
-	Summary string          `json:"summary"`
-	Custom  *CustomHomepage `json:"custom"`
+	Mode    string           `json:"mode"`
+	Title   string           `json:"title"`
+	Summary string           `json:"summary"`
+	Custom  *json.RawMessage `json:"custom"`
 }
 
 type Persona struct {
@@ -67,15 +69,6 @@ type LLM struct {
 	Model    string `json:"model,omitempty"`
 	Name     string `json:"name,omitempty"`
 	PinId    string `json:"pinId,omitempty"`
-}
-
-type CustomHomepage struct {
-	URI          string `json:"uri"`
-	PinId        string `json:"pinId"`
-	ContentType  string `json:"contentType"`
-	Renderer     string `json:"renderer"`
-	Txid         string `json:"txid,omitempty"`
-	ProtocolPath string `json:"protocolPath"`
 }
 
 type Presence struct {

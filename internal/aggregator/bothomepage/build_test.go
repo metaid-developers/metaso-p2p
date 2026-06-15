@@ -370,7 +370,7 @@ func TestBuildV2UsesCustomHomepageFromUserInfo(t *testing.T) {
 		Bio:          `{"role":"legacy role","goal":"legacy goal"}`,
 		Role:         "Live role",
 		RoleId:       "role-pin:i0",
-		Homepage:     `{"uri":"metafile://homepage-pin","contentType":"text/html","renderer":"html","txid":"homepage-tx"}`,
+		Homepage:     `{"uri":"metafile://homepage-pin","contentType":"text/html","renderer":"html","theme":"dark","permissions":["chat"]}`,
 		HomepageId:   "homepage-pin:i0",
 	}})
 
@@ -394,23 +394,84 @@ func TestBuildV2UsesCustomHomepageFromUserInfo(t *testing.T) {
 	if got.Homepage.Custom == nil {
 		t.Fatal("Homepage.Custom = nil, want custom homepage")
 	}
-	if got.Homepage.Custom.URI != "metafile://homepage-pin" {
-		t.Fatalf("Homepage.Custom.URI = %q, want metafile://homepage-pin", got.Homepage.Custom.URI)
+	var custom map[string]any
+	if err := json.Unmarshal(*got.Homepage.Custom, &custom); err != nil {
+		t.Fatalf("Homepage.Custom is not a JSON object: %v", err)
 	}
-	if got.Homepage.Custom.PinId != "homepage-pin:i0" {
-		t.Fatalf("Homepage.Custom.PinId = %q, want homepage-pin:i0", got.Homepage.Custom.PinId)
+	if custom["uri"] != "metafile://homepage-pin" {
+		t.Fatalf("custom uri = %#v, want metafile://homepage-pin", custom["uri"])
 	}
-	if got.Homepage.Custom.ContentType != "text/html" {
-		t.Fatalf("Homepage.Custom.ContentType = %q, want text/html", got.Homepage.Custom.ContentType)
+	if custom["renderer"] != "html" {
+		t.Fatalf("custom renderer = %#v, want html", custom["renderer"])
 	}
-	if got.Homepage.Custom.Renderer != "html" {
-		t.Fatalf("Homepage.Custom.Renderer = %q, want html", got.Homepage.Custom.Renderer)
+	if custom["theme"] != "dark" {
+		t.Fatalf("custom theme = %#v, want dark", custom["theme"])
 	}
-	if got.Homepage.Custom.Txid != "homepage-tx" {
-		t.Fatalf("Homepage.Custom.Txid = %q, want homepage-tx", got.Homepage.Custom.Txid)
+	permissions, ok := custom["permissions"].([]any)
+	if !ok || len(permissions) != 1 || permissions[0] != "chat" {
+		t.Fatalf("custom permissions = %#v, want [chat]", custom["permissions"])
 	}
-	if got.Homepage.Custom.ProtocolPath != "/info/homepage" {
-		t.Fatalf("Homepage.Custom.ProtocolPath = %q, want /info/homepage", got.Homepage.Custom.ProtocolPath)
+	if _, ok := custom["pinId"]; ok {
+		t.Fatalf("custom unexpectedly contains server pinId: %#v", custom["pinId"])
+	}
+	if _, ok := custom["protocolPath"]; ok {
+		t.Fatalf("custom unexpectedly contains server protocolPath: %#v", custom["protocolPath"])
+	}
+}
+
+func TestBuildV2IgnoresNonJSONHomepageValue(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Plain Homepage Bot",
+		Homepage:     "metafile://homepage-pin",
+		HomepageId:   "homepage-pin:i0",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Homepage.Mode != "default" {
+		t.Fatalf("Homepage.Mode = %q, want default", got.Homepage.Mode)
+	}
+	if got.Homepage.Custom != nil {
+		t.Fatalf("Homepage.Custom = %s, want nil", string(*got.Homepage.Custom))
+	}
+}
+
+func TestBuildV2IgnoresEmptyJSONHomepageObject(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "Empty Homepage Bot",
+		Homepage:     `{}`,
+		HomepageId:   "homepage-pin:i0",
+	}})
+
+	opts := DefaultOptions()
+	opts.Version = "v2"
+
+	got, err := agg.Build("idqBot", opts)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if got.Homepage.Mode != "default" {
+		t.Fatalf("Homepage.Mode = %q, want default", got.Homepage.Mode)
+	}
+	if got.Homepage.Custom != nil {
+		t.Fatalf("Homepage.Custom = %s, want nil", string(*got.Homepage.Custom))
 	}
 }
 
@@ -1174,16 +1235,23 @@ func TestBuildHomepageSuppressesProofsWhenDisabled(t *testing.T) {
 }
 
 func TestCustomHomepagePlanSchema(t *testing.T) {
-	custom := CustomHomepage{
-		URI:          "metafile://homepage-pin",
-		PinId:        "homepage-pin:i0",
-		ContentType:  "text/html",
-		Renderer:     "html",
-		Txid:         "homepage-tx",
-		ProtocolPath: "/protocols/bot-homepage",
+	custom, ok := parseCustomHomepage(`{"uri":"metafile://homepage-pin","renderer":"auto","x":{"nested":true}}`)
+	if !ok {
+		t.Fatal("parseCustomHomepage returned ok=false, want true")
 	}
-	if custom.URI == "" || custom.PinId == "" || custom.ContentType == "" || custom.Renderer == "" || custom.Txid == "" || custom.ProtocolPath == "" {
-		t.Fatalf("custom homepage schema fields did not round trip: %+v", custom)
+	raw, err := custom.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON returned error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("custom homepage did not marshal as object: %v", err)
+	}
+	if decoded["uri"] != "metafile://homepage-pin" || decoded["renderer"] != "auto" {
+		t.Fatalf("custom homepage fields did not round trip: %#v", decoded)
+	}
+	if _, ok := decoded["protocolPath"]; ok {
+		t.Fatalf("custom homepage should not add protocolPath: %#v", decoded)
 	}
 }
 

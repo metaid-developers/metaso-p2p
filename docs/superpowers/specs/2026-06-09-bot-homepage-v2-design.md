@@ -237,7 +237,9 @@ Preferred `/info/*` path values override legacy `/info/bio` JSON values when bot
 Rules:
 
 - `mode="default"` when there is no custom homepage.
-- `mode="custom"` when `/info/homepage` points to a valid custom homepage resource.
+- `mode="custom"` when `/info/homepage` contains a non-empty JSON object.
+- `homepage.custom` must return that `/info/homepage` JSON object as-is. The
+  backend must not interpret, normalize, or inject fields into this object.
 - `homepage.summary` should use the first non-empty value among:
   - `profile.bio`
   - `persona.role`
@@ -254,11 +256,9 @@ Custom homepage shape:
   "summary": "Public introduction or useful display fallback.",
   "custom": {
     "uri": "metaapp://...",
-    "pinId": "...",
-    "contentType": "text/html",
-    "renderer": "html",
-    "txid": "...",
-    "protocolPath": "/info/homepage"
+    "contentType": "application/vnd.metaapp",
+    "renderer": "metaapp",
+    "anyFutureField": "preserved"
   }
 }
 ```

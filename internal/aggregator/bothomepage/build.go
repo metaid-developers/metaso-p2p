@@ -176,7 +176,7 @@ func toHomepage(profile Profile, persona *Persona, snapshot *ProfileSnapshot) Ho
 	if snapshot == nil {
 		return homepage
 	}
-	custom, ok := parseCustomHomepage(snapshot.Homepage, snapshot.HomepageId)
+	custom, ok := parseCustomHomepage(snapshot.Homepage)
 	if !ok {
 		return homepage
 	}
@@ -185,33 +185,21 @@ func toHomepage(profile Profile, persona *Persona, snapshot *ProfileSnapshot) Ho
 	return homepage
 }
 
-func parseCustomHomepage(raw, sourcePinID string) (*CustomHomepage, bool) {
+func parseCustomHomepage(raw string) (*json.RawMessage, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, false
 	}
 
-	custom := CustomHomepage{
-		PinId:        strings.TrimSpace(sourcePinID),
-		ProtocolPath: "/info/homepage",
-	}
-	if startsJSONContainer(raw) {
-		var decoded map[string]any
-		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-			return nil, false
-		}
-		custom.URI = stringValue(decoded["uri"])
-		custom.ContentType = stringValue(decoded["contentType"])
-		custom.Renderer = stringValue(decoded["renderer"])
-		custom.Txid = stringValue(decoded["txid"])
-		custom.PinId = firstNonEmpty(custom.PinId, stringValue(decoded["pinId"]))
-	} else {
-		custom.URI = raw
-	}
-
-	if strings.TrimSpace(custom.URI) == "" {
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return nil, false
 	}
+	if len(decoded) == 0 {
+		return nil, false
+	}
+
+	custom := json.RawMessage([]byte(raw))
 	return &custom, true
 }
 
