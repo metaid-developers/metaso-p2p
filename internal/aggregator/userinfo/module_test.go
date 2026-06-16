@@ -682,31 +682,53 @@ func TestHandleAddressInfo(t *testing.T) {
 	t.Logf("address info: code=%d metaid=%s globalMetaId=%s", resp.Code, resp.Data.MetaID, resp.Data.GlobalMetaID)
 }
 
-// TestHandleMempoolPin_NoOp verifies mempool pins are ignored for userinfo.
-func TestHandleMempoolPin_NoOp(t *testing.T) {
+func TestHandleMempoolPin_StoresHomepage(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
 
+	metaid := "mempool_user"
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	global := idaddress.EncodeGlobalMetaId(address, "mvc")
+
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "init:i0",
+		Path:      "/",
+		Operation: "init",
+		MetaId:    metaid,
+		Address:   address,
+		ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(init): %v", err)
+	}
+
 	pin := &aggregator.PinInscription{
-		Path:        "/info/name",
+		Id:          "mempool-home:i0",
+		Path:        "/info/homepage",
 		Operation:   "create",
-		MetaId:      "mempool_user",
-		ContentBody: []byte("MempoolName"),
-		ChainName:   "btc",
+		MetaId:      metaid,
+		Address:     address,
+		GlobalMetaId: global,
+		ContentBody: []byte(`{"uri":"metaapp://pending","renderer":"metaapp","contentType":"application/vnd.metaapp"}`),
+		ChainName:   "mvc",
 	}
 
 	evt, err := agg.HandleMempoolPin(pin)
 	if err != nil {
-		t.Errorf("HandleMempoolPin should not error: %v", err)
+		t.Fatalf("HandleMempoolPin should not error: %v", err)
 	}
 	if evt != nil {
-		t.Error("HandleMempoolPin should return nil event for userinfo")
+		t.Fatal("HandleMempoolPin should return nil event for userinfo")
 	}
 
-	// Profile should not be stored for mempool pins.
-	raw, _ := store.Get(namespace, profileKey("mempool_user"))
-	if raw != nil {
-		t.Error("mempool pin should not persist user profile")
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile.HomepageId != "mempool-home:i0" {
+		t.Fatalf("HomepageId = %q, want mempool-home:i0; profile=%#v", profile.HomepageId, profile)
+	}
+	if profile.Homepage != `{"uri":"metaapp://pending","renderer":"metaapp","contentType":"application/vnd.metaapp"}` {
+		t.Fatalf("Homepage = %q, want pending custom homepage", profile.Homepage)
 	}
 }
 

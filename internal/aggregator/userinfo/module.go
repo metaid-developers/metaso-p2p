@@ -202,8 +202,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 }
 
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	// Don't index mempool user info — wait for confirmation
-	return nil, nil
+	return a.HandleBlockPin(pin)
 }
 
 // RegisterRoutes mounts user info HTTP endpoints.
