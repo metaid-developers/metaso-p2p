@@ -917,6 +917,66 @@ func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
 	}
 }
 
+func TestListHomepageByProviderFallsBackWhenHomepageIndexesMissing(t *testing.T) {
+	f := newListFixture(t)
+	profile := &ProfileSnapshot{
+		MetaId:       "provA",
+		GlobalMetaId: "idq-canonical-provA",
+		Name:         "Provider Alpha",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"provA": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq-canonical-provA": profile},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "legacy-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "legacy-home", DisplayName: "Legacy Home",
+	})
+
+	for _, key := range [][]byte{
+		providerGlobalIndexKey("idq1-provA", 1000, "mvc", "legacy-home:i0"),
+		providerGlobalChainIndexKey("idq1-provA", "mvc", 1000, "legacy-home:i0"),
+		providerGlobalIndexKey("idq-canonical-provA", 1000, "mvc", "legacy-home:i0"),
+		providerGlobalChainIndexKey("idq-canonical-provA", "mvc", 1000, "legacy-home:i0"),
+		homepageProviderMetaIndexKey("provA", 1000, "mvc", "legacy-home:i0"),
+	} {
+		if err := f.agg.store.Delete(NamespaceService, key); err != nil {
+			t.Fatalf("delete homepage index %q: %v", string(key), err)
+		}
+	}
+
+	visible, err := f.agg.List(ListParams{
+		ProviderGlobalMetaId: "idq-canonical-provA",
+		SortBy:               "updated",
+		Order:                "desc",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(visible.List) != 1 {
+		t.Fatalf("provider-visible List returned %d items, want 1: %+v", len(visible.List), visible.List)
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq-canonical-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 {
+		t.Fatalf("expected homepage fallback to return provider-visible service, got %d: %+v", len(res.List), res.List)
+	}
+	if res.List[0].SourceServicePinId != "legacy-home:i0" {
+		t.Fatalf("expected legacy-home service, got %+v", res.List[0])
+	}
+	if res.HasMore {
+		t.Fatal("expected HasMore=false for single fallback service")
+	}
+}
+
 func TestListHomepageByProviderStaleSameServiceTimestampIndexDoesNotDuplicate(t *testing.T) {
 	f := newListFixture(t)
 	f.seed(t, servicePinOpts{

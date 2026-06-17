@@ -1731,6 +1731,121 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 	assertMinimalSectionItemV3JSON(t, got.Sections[1].Items[0])
 }
 
+func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	t.Cleanup(func() { store.Close() })
+	cacheProvider := cache.New(store)
+
+	userAgg := &userinfo.Aggregator{}
+	if err := userAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("userinfo.Init returned error: %v", err)
+	}
+	skillAgg := &skillservice.Aggregator{}
+	if err := skillAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("skillservice.Init returned error: %v", err)
+	}
+	agg := &Aggregator{}
+	if err := agg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("bothomepage.Init returned error: %v", err)
+	}
+
+	agg.SetProfileLookup(NewUserInfoLookupAdapter(userAgg))
+	agg.SetServiceLister(skillAgg)
+	agg.SetHomepageServiceLister(skillAgg)
+	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
+
+	const (
+		globalMetaID = "idq-legacy-provider"
+		metaID       = "meta-legacy-provider"
+		address      = "addr-legacy-provider"
+		servicePinID = "legacy-service-current:i0"
+	)
+
+	for _, pin := range []*aggregator.PinInscription{
+		{
+			Id:           "init-legacy-provider:i0",
+			Path:         "/",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			Timestamp:    1710000000,
+		},
+		{
+			Id:           "name-legacy-provider:i0",
+			Path:         "/info/name",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte("Legacy Provider"),
+			Timestamp:    1710000001,
+		},
+	} {
+		if _, err := userAgg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("userinfo.HandleBlockPin(%s): %v", pin.Id, err)
+		}
+	}
+
+	if _, err := skillAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            servicePinID,
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   []byte(`{"serviceName":"legacy-visible","displayName":"Legacy Visible","providerSkill":"legacy-skill","outputType":"text","price":"1","currency":"SPACE","settlementKind":"address","paymentAddress":"addr-legacy-provider"}`),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  globalMetaID,
+		MetaId:        metaID,
+		CreateMetaId:  metaID,
+		Address:       address,
+		CreateAddress: address,
+		Timestamp:     1710000020,
+		Number:        120,
+	}); err != nil {
+		t.Fatalf("skillservice.HandleBlockPin: %v", err)
+	}
+
+	for _, prefix := range [][]byte{
+		[]byte("service_by_provider_global:" + globalMetaID + ":"),
+		[]byte("service_by_provider_global_chain:" + globalMetaID + ":"),
+		[]byte("service_by_provider_meta:" + metaID + ":"),
+	} {
+		if err := store.DeleteByPrefix(skillservice.NamespaceService, prefix); err != nil {
+			t.Fatalf("delete legacy homepage index prefix %q: %v", string(prefix), err)
+		}
+	}
+
+	v2Opts := DefaultOptions()
+	v2Opts.Version = "v2"
+	v2Opts.IncludeServices = true
+	v2, err := agg.Build(globalMetaID, v2Opts)
+	if err != nil {
+		t.Fatalf("Build v2 returned error: %v", err)
+	}
+	if len(v2.Services) != 1 {
+		t.Fatalf("v2 provider-visible services length = %d, want 1: %+v", len(v2.Services), v2.Services)
+	}
+	if v2.Services[0].CurrentPinId != servicePinID {
+		t.Fatalf("v2 service CurrentPinId = %q, want %q", v2.Services[0].CurrentPinId, servicePinID)
+	}
+
+	v3, err := agg.BuildV3(globalMetaID, defaultV3Options())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	assertExactSectionIDsV3(t, v3.Sections, []string{"services", "buzzes", "metaapps"})
+	services := v3.Sections[0]
+	if len(services.Items) != 1 {
+		t.Fatalf("v3 services section length = %d, want 1 when v2 services are visible: %+v", len(services.Items), services.Items)
+	}
+	if services.Items[0].PinId != servicePinID {
+		t.Fatalf("v3 service pinId = %q, want current service pin %q", services.Items[0].PinId, servicePinID)
+	}
+	if services.Items[0].Data.Payload == nil {
+		t.Fatal("v3 service payload = nil, want public payload")
+	}
+}
+
 func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 	store := storage.NewPebbleStore(t.TempDir())
 	t.Cleanup(func() { store.Close() })

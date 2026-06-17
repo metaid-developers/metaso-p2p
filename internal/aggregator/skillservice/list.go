@@ -241,6 +241,11 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 			return nil, err
 		}
 	}
+	if len(records) < p.Size {
+		if err := a.addHomepageProviderFullScanFallbackCandidates(records, p); err != nil {
+			return nil, err
+		}
+	}
 
 	page, hasMore := a.pageHomepageProviderRecords(records, p.Size)
 	items := make([]ServiceListItem, 0, len(page))
@@ -293,6 +298,42 @@ func (a *Aggregator) addLateHomepageProviderAliasCandidate(records map[string]ex
 	rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
 	records[homepageProviderRecordKey(rec)] = expandedRecord{rec: rec, profile: profile, rating: rating}
 	a.backfillHomepageProviderGlobalIndex(p.ProviderGlobalMetaId, rec)
+}
+
+func (a *Aggregator) addHomepageProviderFullScanFallbackCandidates(records map[string]expandedRecord, p HomepageListParams) error {
+	var services []*ServiceRecord
+	var err error
+	if p.ChainName != "" {
+		services, err = a.listServicesByChain(p.ChainName)
+	} else {
+		services, err = a.listAllServices()
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, rec := range services {
+		if rec == nil {
+			continue
+		}
+		profile := a.ResolveProvider(rec)
+		candidate := homepageProviderCandidate{
+			invertedUpdatedAt: invertedTimestampHex(rec.UpdatedAt),
+			chainName:         rec.ChainName,
+			sourcePinId:       rec.SourceServicePinId,
+		}
+		if !matchesHomepageProviderCandidate(rec, profile, p, candidate) {
+			continue
+		}
+		if !p.IncludeInactive && !rec.IsVisibleDefault() {
+			continue
+		}
+
+		rating, _ := a.LoadRatingAggregate(rec.ChainName, rec.SourceServicePinId)
+		records[homepageProviderRecordKey(rec)] = expandedRecord{rec: rec, profile: profile, rating: rating}
+		a.backfillHomepageProviderGlobalIndex(p.ProviderGlobalMetaId, rec)
+	}
+	return nil
 }
 
 func (a *Aggregator) lookupHomepageProviderGlobalProfile(providerGlobalMetaId string) (ProfileSnapshot, bool) {
