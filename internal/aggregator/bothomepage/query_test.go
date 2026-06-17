@@ -92,6 +92,117 @@ func TestParseOptionsVersionV2(t *testing.T) {
 	}
 }
 
+func TestParseOptionsVersionV3(t *testing.T) {
+	got, err := ParseOptions(url.Values{"version": {"v3"}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "v3" {
+		t.Fatalf("Version = %q, want v3", got.Version)
+	}
+
+	got, err = ParseOptions(url.Values{"schemaVersion": {"botHomepage.v3"}})
+	if err != nil {
+		t.Fatalf("ParseOptions schemaVersion returned error: %v", err)
+	}
+	if got.Version != "v3" {
+		t.Fatalf("schemaVersion Version = %q, want v3", got.Version)
+	}
+}
+
+func TestParseOptionsV3Defaults(t *testing.T) {
+	got, err := ParseOptions(url.Values{"version": {"v3"}, "chainName": {"btc"}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if !got.IncludePresence {
+		t.Fatal("IncludePresence = false, want true")
+	}
+	if !got.IncludeSections {
+		t.Fatal("IncludeSections = false, want true")
+	}
+	if !got.IncludeServices {
+		t.Fatal("IncludeServices = false, want true")
+	}
+	if !got.IncludeBuzzes {
+		t.Fatal("IncludeBuzzes = false, want true")
+	}
+	if !got.IncludeMetaApps {
+		t.Fatal("IncludeMetaApps = false, want true")
+	}
+	if got.IncludeSkills {
+		t.Fatal("IncludeSkills = true, want false")
+	}
+	if got.IncludeProofs {
+		t.Fatal("IncludeProofs = true, want false")
+	}
+	if got.ServiceSize != homepageSectionLimit {
+		t.Fatalf("ServiceSize = %d, want homepage section limit %d", got.ServiceSize, homepageSectionLimit)
+	}
+	if got.ChainName != "" {
+		t.Fatalf("ChainName = %q, want empty", got.ChainName)
+	}
+}
+
+func TestParseOptionsV3Toggles(t *testing.T) {
+	got, err := ParseOptions(url.Values{
+		"version":                 {"v3"},
+		"includePresence":         {"false"},
+		"includeSections":         {"false"},
+		"includeServices":         {"false"},
+		"includeBuzzes":           {"false"},
+		"includeMetaApps":         {"false"},
+		"includeInactiveServices": {"true"},
+	})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.IncludePresence {
+		t.Fatal("IncludePresence = true, want false")
+	}
+	if got.IncludeSections {
+		t.Fatal("IncludeSections = true, want false")
+	}
+	if got.IncludeServices {
+		t.Fatal("IncludeServices = true, want false")
+	}
+	if got.IncludeBuzzes {
+		t.Fatal("IncludeBuzzes = true, want false")
+	}
+	if got.IncludeMetaApps {
+		t.Fatal("IncludeMetaApps = true, want false")
+	}
+	if !got.IncludeInactiveServices {
+		t.Fatal("IncludeInactiveServices = false, want true")
+	}
+}
+
+func TestParseOptionsDefaultSelectorRemainsV1(t *testing.T) {
+	got, err := ParseOptions(url.Values{})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "" {
+		t.Fatalf("Version = %q, want empty v1 selector", got.Version)
+	}
+}
+
+func TestParseOptionsSchemaVersionV2KeepsV2Defaults(t *testing.T) {
+	got, err := ParseOptions(url.Values{"schemaVersion": {"botHomepage.v2"}})
+	if err != nil {
+		t.Fatalf("ParseOptions returned error: %v", err)
+	}
+	if got.Version != "v2" {
+		t.Fatalf("Version = %q, want v2", got.Version)
+	}
+	if !got.IncludeSkills {
+		t.Fatal("IncludeSkills = false, want true")
+	}
+	if !got.IncludeProofs {
+		t.Fatal("IncludeProofs = false, want true")
+	}
+}
+
 func TestParseOptionsV2SectionControlsAndFixedServiceSize(t *testing.T) {
 	got, err := ParseOptions(url.Values{
 		"version":         {"v2"},
