@@ -663,6 +663,21 @@ Post a `metabot-post-buzz` development journal entry with the commit hash, parse
 Add tests in `internal/aggregator/bothomepage/build_test.go`:
 
 ```go
+func defaultV3Options() Options {
+	opts := DefaultOptions()
+	opts.Version = "v3"
+	opts.IncludePresence = true
+	opts.IncludeSections = true
+	opts.IncludeServices = true
+	opts.IncludeBuzzes = true
+	opts.IncludeMetaApps = true
+	opts.IncludeSkills = false
+	opts.IncludeProofs = false
+	opts.ServiceSize = homepageSectionLimit
+	opts.ChainName = ""
+	return opts
+}
+
 func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -779,6 +794,8 @@ func TestBuildV3TopLevelShapeExcludesV2Fields(t *testing.T) {
 	}
 }
 ```
+
+The Task 3 profile tests intentionally use bare `DefaultOptions()` because they assert profile and top-level shape only; `DefaultOptions()` does not represent v3 query defaults and does not enable v3 sections. Any test that asserts v3 sections must use `defaultV3Options()`.
 
 - [ ] **Step 2: Run tests to verify failure**
 
@@ -951,7 +968,7 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 	}}}})
 	agg.SetPublishedContentLister(&pathPublishedContentLister{})
 
-	data, err := agg.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", defaultV3Options())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -998,7 +1015,7 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 		PayloadExposed: true,
 	}}}})
 
-	data, err := agg.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", defaultV3Options())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -1331,7 +1348,7 @@ userinfo.HandleMempoolPin(/info/homepage)
 skillservice.HandleMempoolPin(/protocols/skill-service)
 publishedcontent.HandleMempoolPin(/protocols/simplebuzz)
 publishedcontent.HandleMempoolPin(/protocols/metaapp)
-bothomepage.BuildV3(...)
+bothomepage.BuildV3(..., defaultV3Options())
 ```
 
 Assert:
