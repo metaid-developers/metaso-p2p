@@ -253,6 +253,163 @@ func TestHandleBlockPin_StoresPersonaInfoPaths(t *testing.T) {
 	}
 }
 
+func TestHandleBlockPin_StoresV3BotInfoPathsAndClears(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	metaid := "meta_v3_bot"
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+
+	pins := []*aggregator.PinInscription{
+		{Id: "init-v3:i0", Path: "/", Operation: "init", MetaId: metaid, Address: address, ChainName: "mvc"},
+		{Id: "avatar-v3:i0", Path: "/info/avatar", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentType: "image/png", ContentBody: []byte{0x89, 'P', 'N', 'G'}},
+		{Id: "llm-v3:i0", Path: "/info/llm", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte(`{"provider":"deepseek","model":"v3"}`)},
+		{Id: "persona-v3:i0", Path: "/info/persona", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentBody: []byte(`{"style":"direct","language":"zh-CN"}`)},
+	}
+	for _, pin := range pins {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	profile, err := agg.LookupByMetaId(metaid)
+	if err != nil {
+		t.Fatalf("LookupByMetaId: %v", err)
+	}
+	if profile.Avatar != "/content/avatar-v3:i0" || profile.AvatarId != "avatar-v3:i0" || profile.AvatarContentType != "image/png" {
+		t.Fatalf("avatar fields not stored: %#v", profile)
+	}
+	if profile.LLM != `{"provider":"deepseek","model":"v3"}` || profile.LLMId != "llm-v3:i0" {
+		t.Fatalf("canonical lowercase llm not stored: %#v", profile)
+	}
+	if profile.Persona != `{"style":"direct","language":"zh-CN"}` || profile.PersonaId != "persona-v3:i0" {
+		t.Fatalf("persona raw JSON not stored: %#v", profile)
+	}
+
+	clearPins := []*aggregator.PinInscription{
+		{Id: "avatar-clear:i0", Path: "/info/avatar", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc"},
+		{Id: "llm-clear:i0", Path: "/info/LLM", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc"},
+		{Id: "persona-clear:i0", Path: "/info/persona", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc"},
+	}
+	for _, pin := range clearPins {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(clear %s): %v", pin.Path, err)
+		}
+	}
+
+	profile, err = agg.LookupByMetaId(metaid)
+	if err != nil {
+		t.Fatalf("LookupByMetaId after clears: %v", err)
+	}
+	if profile.Avatar != "" || profile.AvatarId != "" || profile.AvatarContentType != "" {
+		t.Fatalf("empty avatar body should clear avatar fields: %#v", profile)
+	}
+	if profile.LLM != "" || profile.LLMId != "" {
+		t.Fatalf("empty LLM body should clear llm fields: %#v", profile)
+	}
+	if profile.Persona != "" || profile.PersonaId != "" {
+		t.Fatalf("empty persona body should clear persona fields: %#v", profile)
+	}
+}
+
+func TestHandleMempoolPin_StoresPersona(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	metaid := "mempool_persona_user"
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	global := idaddress.EncodeGlobalMetaId(address, "mvc")
+
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "mempool-persona-init:i0",
+		Path:      "/",
+		Operation: "init",
+		MetaId:    metaid,
+		Address:   address,
+		ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(init): %v", err)
+	}
+
+	evt, err := agg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:           "mempool-persona:i0",
+		Path:         "/info/persona",
+		Operation:    "create",
+		MetaId:       metaid,
+		Address:      address,
+		GlobalMetaId: global,
+		ContentBody:  []byte(`{"style":"pending"}`),
+		ChainName:    "mvc",
+	})
+	if err != nil {
+		t.Fatalf("HandleMempoolPin(persona): %v", err)
+	}
+	if evt != nil {
+		t.Fatal("HandleMempoolPin should return nil event for userinfo")
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(global)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile.Persona != `{"style":"pending"}` || profile.PersonaId != "mempool-persona:i0" {
+		t.Fatalf("mempool persona not stored: %#v", profile)
+	}
+}
+
+func TestDefaultBackfillPaths_IncludesV3BotInfoPaths(t *testing.T) {
+	paths := DefaultBackfillPaths()
+	for _, want := range []string{"/info/LLM", "/info/llm", "/info/persona"} {
+		found := false
+		for _, got := range paths {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("DefaultBackfillPaths() missing %q: %v", want, paths)
+		}
+	}
+}
+
+func TestHandleBlockPin_PreservesEmptyChatPubkeyPinId(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	metaid := "meta_empty_chatpubkey"
+	address := "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "empty-chatpubkey-init:i0",
+		Path:      "/",
+		Operation: "init",
+		MetaId:    metaid,
+		Address:   address,
+		ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(init): %v", err)
+	}
+
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "empty-chatpubkey:i0",
+		Path:      "/info/chatpubkey",
+		Operation: "create",
+		MetaId:    metaid,
+		Address:   address,
+		ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("HandleBlockPin(chatpubkey): %v", err)
+	}
+
+	profile, err := agg.LookupByMetaId(metaid)
+	if err != nil {
+		t.Fatalf("LookupByMetaId: %v", err)
+	}
+	if profile.ChatPublicKey != "" || profile.ChatPublicKeyId != "empty-chatpubkey:i0" {
+		t.Fatalf("empty chatpubkey body should preserve pin id behavior: %#v", profile)
+	}
+}
+
 func TestLookupByGlobalMetaId_UsesReverseIndex(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
@@ -702,14 +859,14 @@ func TestHandleMempoolPin_StoresHomepage(t *testing.T) {
 	}
 
 	pin := &aggregator.PinInscription{
-		Id:          "mempool-home:i0",
-		Path:        "/info/homepage",
-		Operation:   "create",
-		MetaId:      metaid,
-		Address:     address,
+		Id:           "mempool-home:i0",
+		Path:         "/info/homepage",
+		Operation:    "create",
+		MetaId:       metaid,
+		Address:      address,
 		GlobalMetaId: global,
-		ContentBody: []byte(`{"uri":"metaapp://pending","renderer":"metaapp","contentType":"application/vnd.metaapp"}`),
-		ChainName:   "mvc",
+		ContentBody:  []byte(`{"uri":"metaapp://pending","renderer":"metaapp","contentType":"application/vnd.metaapp"}`),
+		ChainName:    "mvc",
 	}
 
 	evt, err := agg.HandleMempoolPin(pin)

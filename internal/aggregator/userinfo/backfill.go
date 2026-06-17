@@ -38,6 +38,8 @@ var defaultBackfillPaths = []string{
 	"/info/goal",
 	"/info/chatSkills",
 	"/info/LLM",
+	"/info/llm",
+	"/info/persona",
 	"/info/homepage",
 }
 
