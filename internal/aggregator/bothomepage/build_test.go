@@ -7,9 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 type fakeProfileLookup struct {
@@ -21,6 +24,21 @@ type fakeProfileLookup struct {
 func (f *fakeProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
 	f.seen = globalMetaId
 	return f.profile, f.err
+}
+
+func defaultV3Options() Options {
+	opts := DefaultOptions()
+	opts.Version = "v3"
+	opts.IncludePresence = true
+	opts.IncludeSections = true
+	opts.IncludeServices = true
+	opts.IncludeBuzzes = true
+	opts.IncludeMetaApps = true
+	opts.IncludeSkills = false
+	opts.IncludeProofs = false
+	opts.ServiceSize = homepageSectionLimit
+	opts.ChainName = ""
+	return opts
 }
 
 type fakeServiceLister struct {
@@ -65,6 +83,23 @@ type recordingPublishedContentLister struct {
 func (r *recordingPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
 	r.gotParams = append(r.gotParams, params)
 	return r.result, r.err
+}
+
+type protocolRecordingPublishedContentLister struct {
+	gotParams []publishedcontent.ListParams
+	results   map[string]*publishedcontent.ListResult
+	errs      map[string]error
+}
+
+func (r *protocolRecordingPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
+	r.gotParams = append(r.gotParams, params)
+	if err := r.errs[params.ProtocolPath]; err != nil {
+		return nil, err
+	}
+	if result := r.results[params.ProtocolPath]; result != nil {
+		return result, nil
+	}
+	return &publishedcontent.ListResult{}, nil
 }
 
 type identityPublishedContentLister struct {
@@ -1232,6 +1267,767 @@ func TestBuildHomepageSuppressesProofsWhenDisabled(t *testing.T) {
 	if len(got.Warnings) != 0 {
 		t.Fatalf("Warnings = %v, want empty", got.Warnings)
 	}
+}
+
+func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+
+	lookup := &fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:      "idqCanonicalBotLongValue",
+		MetaId:            "metaBot",
+		Name:              "Fortune Bot",
+		NameId:            "name-pin:i0",
+		Bio:               "Reads the chain and answers directly.",
+		BioId:             "bio-pin:i0",
+		ChatPublicKey:     "02chatpubkey",
+		ChatPublicKeyId:   "chat-pin:i0",
+		AvatarId:          "avatar-pin:i0",
+		AvatarContentType: "image/png;binary",
+		LLM:               `{"provider":"openai","model":"gpt-4.1"}`,
+		LLMId:             "llm-pin:i0",
+		Persona:           `{"style":"direct","language":"zh-CN"}`,
+		PersonaId:         "persona-pin:i0",
+		Homepage:          `{"uri":"metaapp://homepage","renderer":"metaapp"}`,
+		HomepageId:        "homepage-pin:i0",
+	}}
+	agg.SetProfileLookup(lookup)
+
+	got, err := agg.BuildV3("idqRequestedBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+
+	if lookup.seen != "idqRequestedBot" {
+		t.Fatalf("lookup globalMetaId = %q, want idqRequestedBot", lookup.seen)
+	}
+	if got.SchemaVersion != schemaVersionV3 {
+		t.Fatalf("SchemaVersion = %q, want %q", got.SchemaVersion, schemaVersionV3)
+	}
+	if got.Identity.GlobalMetaId != "idqCanonicalBotLongValue" {
+		t.Fatalf("Identity.GlobalMetaId = %q", got.Identity.GlobalMetaId)
+	}
+	if got.Identity.LegacyMetaId != "metaBot" {
+		t.Fatalf("Identity.LegacyMetaId = %q", got.Identity.LegacyMetaId)
+	}
+	if got.Identity.Display == "" || got.Identity.Display == got.Identity.GlobalMetaId {
+		t.Fatalf("Identity.Display = %q, want abbreviated canonical id", got.Identity.Display)
+	}
+	if got.Profile.Name != "Fortune Bot" {
+		t.Fatalf("Profile.Name = %q", got.Profile.Name)
+	}
+	if got.Profile.Bio != "Reads the chain and answers directly." {
+		t.Fatalf("Profile.Bio = %q", got.Profile.Bio)
+	}
+	if got.Profile.ChatPubkey != "02chatpubkey" {
+		t.Fatalf("Profile.ChatPubkey = %q", got.Profile.ChatPubkey)
+	}
+	if got.Profile.Avatar == nil {
+		t.Fatal("Profile.Avatar = nil, want avatar block")
+	}
+	if got.Profile.Avatar.PinId != "avatar-pin:i0" {
+		t.Fatalf("Profile.Avatar.PinId = %q", got.Profile.Avatar.PinId)
+	}
+	if got.Profile.Avatar.ContentType != "image/png" {
+		t.Fatalf("Profile.Avatar.ContentType = %q, want image/png", got.Profile.Avatar.ContentType)
+	}
+	if got.Profile.Pins.Name != "name-pin:i0" {
+		t.Fatalf("Profile.Pins.Name = %q", got.Profile.Pins.Name)
+	}
+	if got.Profile.Pins.Bio != "bio-pin:i0" {
+		t.Fatalf("Profile.Pins.Bio = %q", got.Profile.Pins.Bio)
+	}
+	if got.Profile.Pins.ChatPubkey != "chat-pin:i0" {
+		t.Fatalf("Profile.Pins.ChatPubkey = %q", got.Profile.Pins.ChatPubkey)
+	}
+	assertJSONBlockV3Field(t, got.Profile.LLM, "llm-pin:i0", "provider", "openai")
+	assertJSONBlockV3Field(t, got.Profile.LLM, "llm-pin:i0", "model", "gpt-4.1")
+	assertJSONBlockV3Field(t, got.Profile.Persona, "persona-pin:i0", "style", "direct")
+	assertJSONBlockV3Field(t, got.Profile.Persona, "persona-pin:i0", "language", "zh-CN")
+	assertJSONBlockV3Field(t, got.Profile.Homepage, "homepage-pin:i0", "uri", "metaapp://homepage")
+	assertJSONBlockV3Field(t, got.Profile.Homepage, "homepage-pin:i0", "renderer", "metaapp")
+	if len(got.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want empty", got.Warnings)
+	}
+}
+
+func TestBuildV3InvalidJSONBlocksReturnNullWithWarnings(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "IDQ Bot",
+		LLM:          `{"provider":`,
+		LLMId:        "llm-pin:i0",
+		Persona:      `{"style":`,
+		PersonaId:    "persona-pin:i0",
+		Homepage:     `{"uri":`,
+		HomepageId:   "homepage-pin:i0",
+	}})
+
+	got, err := agg.BuildV3("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+
+	if got.Profile.LLM != nil {
+		t.Fatalf("Profile.LLM = %+v, want nil", got.Profile.LLM)
+	}
+	if got.Profile.Persona != nil {
+		t.Fatalf("Profile.Persona = %+v, want nil", got.Profile.Persona)
+	}
+	if got.Profile.Homepage != nil {
+		t.Fatalf("Profile.Homepage = %+v, want nil", got.Profile.Homepage)
+	}
+	assertWarnings(t, got.Warnings, []string{
+		"invalid JSON in /info/llm",
+		"invalid JSON in /info/persona",
+		"invalid JSON in /info/homepage",
+	})
+}
+
+func TestBuildV3TopLevelShapeExcludesV2Fields(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		MetaId:       "metaBot",
+		Name:         "IDQ Bot",
+	}})
+
+	got, err := agg.BuildV3("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+
+	for _, key := range []string{"globalMetaId", "canonical", "persona", "homepage", "services", "actions", "proofs", "source", "resolvedAt"} {
+		if _, ok := decoded[key]; ok {
+			t.Fatalf("top-level key %q present in v3 payload: %s", key, string(encoded))
+		}
+	}
+}
+
+func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
+	t.Run("loads sections in v3 order from homepage and published content listers", func(t *testing.T) {
+		agg := &Aggregator{}
+		if err := agg.Init(nil, nil); err != nil {
+			t.Fatalf("Init returned error: %v", err)
+		}
+		agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+			ChainName:    "mvc",
+			Name:         "Section Bot",
+		}})
+
+		serviceLister := &recordingHomepageServiceLister{result: &skillservice.HomepageListResult{
+			List: []skillservice.ServiceListItem{{
+				CurrentPinId:       "service-current:i0",
+				SourceServicePinId: "service-source:i0",
+				ServiceName:        "chain-reader",
+				DisplayName:        "Chain Reader",
+				Description:        "Reads chain state",
+				ServiceIcon:        "metafile://service-icon",
+				ProviderSkill:      "read-chain",
+				OutputType:         "text",
+				Price:              "0.10",
+				Currency:           "SPACE",
+				SettlementKind:     "address",
+				PaymentAddress:     "1payAddress",
+				UpdatedAt:          1710000002,
+			}},
+			HasMore: true,
+		}}
+		agg.SetHomepageServiceLister(serviceLister)
+
+		contentLister := &protocolRecordingPublishedContentLister{
+			results: map[string]*publishedcontent.ListResult{
+				publishedcontent.PathSimpleBuzz: {
+					Items: []publishedcontent.SectionItem{{
+						SourcePinId:    "buzz-source:i0",
+						CurrentPinId:   "buzz-current:i0",
+						ProtocolPath:   publishedcontent.PathSimpleBuzz,
+						PayloadText:    "latest buzz",
+						PayloadExposed: true,
+						CreatedAt:      1710000003,
+					}},
+					HasMore: true,
+				},
+				publishedcontent.PathMetaApp: {
+					Items: []publishedcontent.SectionItem{{
+						SourcePinId:  "metaapp-source:i0",
+						CurrentPinId: "metaapp-current:i0",
+						ProtocolPath: publishedcontent.PathMetaApp,
+						PayloadJSON: map[string]any{
+							"title": "Homepage MetaApp",
+							"kind":  "tool",
+						},
+						PayloadExposed: true,
+						UpdatedAt:      1710000004,
+					}},
+				},
+			},
+		}
+		agg.SetPublishedContentLister(contentLister)
+
+		opts := defaultV3Options()
+		opts.IncludeInactiveServices = true
+		got, err := agg.BuildV3("idqRequestedBot", opts)
+		if err != nil {
+			t.Fatalf("BuildV3 returned error: %v", err)
+		}
+
+		assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+
+		services := got.Sections[0]
+		if services.ProtocolPath != skillservice.PathSkillService {
+			t.Fatalf("services.ProtocolPath = %q, want %q", services.ProtocolPath, skillservice.PathSkillService)
+		}
+		if services.Page.Limit != homepageSectionLimit || services.Page.Count != 1 || !services.Page.HasMore {
+			t.Fatalf("services.Page = %+v", services.Page)
+		}
+		if len(services.Items) != 1 {
+			t.Fatalf("services.Items length = %d, want 1", len(services.Items))
+		}
+		if services.Items[0].PinId != "service-current:i0" {
+			t.Fatalf("services.Items[0].PinId = %q, want current pin id", services.Items[0].PinId)
+		}
+		if services.Items[0].Timestamp != 1710000002 {
+			t.Fatalf("services.Items[0].Timestamp = %d, want UpdatedAt", services.Items[0].Timestamp)
+		}
+		if services.Items[0].Data.Payload == nil {
+			t.Fatal("services.Items[0].Data.Payload = nil, want allow-list payload")
+		}
+		if serviceLister.gotParams.ProviderGlobalMetaId != "idqCanonicalBot" {
+			t.Fatalf("service lister ProviderGlobalMetaId = %q, want idqCanonicalBot", serviceLister.gotParams.ProviderGlobalMetaId)
+		}
+		if serviceLister.gotParams.Size != homepageSectionReadSize {
+			t.Fatalf("service lister Size = %d, want %d", serviceLister.gotParams.Size, homepageSectionReadSize)
+		}
+		if !serviceLister.gotParams.IncludeInactive {
+			t.Fatal("service lister IncludeInactive = false, want true")
+		}
+		if serviceLister.gotParams.ChainName != "" {
+			t.Fatalf("service lister ChainName = %q, want empty", serviceLister.gotParams.ChainName)
+		}
+
+		buzzes := got.Sections[1]
+		if buzzes.ProtocolPath != publishedcontent.PathSimpleBuzz {
+			t.Fatalf("buzzes.ProtocolPath = %q, want %q", buzzes.ProtocolPath, publishedcontent.PathSimpleBuzz)
+		}
+		if len(buzzes.Items) != 1 {
+			t.Fatalf("buzzes.Items length = %d, want 1", len(buzzes.Items))
+		}
+		if buzzes.Items[0].PinId != "buzz-current:i0" {
+			t.Fatalf("buzzes.Items[0].PinId = %q, want current pin id", buzzes.Items[0].PinId)
+		}
+		if buzzes.Items[0].Timestamp != 1710000003 {
+			t.Fatalf("buzzes.Items[0].Timestamp = %d, want CreatedAt", buzzes.Items[0].Timestamp)
+		}
+		if payload, ok := buzzes.Items[0].Data.Payload.(string); !ok || payload != "latest buzz" {
+			t.Fatalf("buzzes.Items[0].Data.Payload = %#v, want latest buzz", buzzes.Items[0].Data.Payload)
+		}
+
+		metaapps := got.Sections[2]
+		if metaapps.ProtocolPath != publishedcontent.PathMetaApp {
+			t.Fatalf("metaapps.ProtocolPath = %q, want %q", metaapps.ProtocolPath, publishedcontent.PathMetaApp)
+		}
+		if len(metaapps.Items) != 1 {
+			t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
+		}
+		if payload, ok := metaapps.Items[0].Data.Payload.(map[string]any); !ok || payload["title"] != "Homepage MetaApp" || payload["kind"] != "tool" {
+			t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want JSON payload", metaapps.Items[0].Data.Payload)
+		}
+
+		if len(contentLister.gotParams) != 6 {
+			t.Fatalf("published content calls = %d, want 6 identity queries across buzzes/metaapps; params=%+v", len(contentLister.gotParams), contentLister.gotParams)
+		}
+		assertPublishedContentProtocolCalls(t, contentLister.gotParams, publishedcontent.PathSimpleBuzz, 3)
+		assertPublishedContentProtocolCalls(t, contentLister.gotParams, publishedcontent.PathMetaApp, 3)
+		for _, params := range contentLister.gotParams {
+			if params.ChainName != "" {
+				t.Fatalf("published content ChainName = %q, want empty for v3 sections", params.ChainName)
+			}
+		}
+		if len(got.Warnings) != 0 {
+			t.Fatalf("Warnings = %v, want empty", got.Warnings)
+		}
+	})
+
+	t.Run("returns empty sections with warnings when a section source fails", func(t *testing.T) {
+		agg := &Aggregator{}
+		if err := agg.Init(nil, nil); err != nil {
+			t.Fatalf("Init returned error: %v", err)
+		}
+		agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+			Name:         "Section Bot",
+		}})
+		agg.SetHomepageServiceLister(&recordingHomepageServiceLister{err: errors.New("services unavailable")})
+		agg.SetPublishedContentLister(&protocolRecordingPublishedContentLister{
+			errs: map[string]error{
+				publishedcontent.PathSimpleBuzz: errors.New("buzzes unavailable"),
+				publishedcontent.PathMetaApp:    errors.New("metaapps unavailable"),
+			},
+		})
+
+		got, err := agg.BuildV3("idqRequestedBot", defaultV3Options())
+		if err != nil {
+			t.Fatalf("BuildV3 returned error: %v", err)
+		}
+
+		assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+		for _, section := range got.Sections {
+			if len(section.Items) != 0 {
+				t.Fatalf("section %q items = %+v, want empty after source error", section.ID, section.Items)
+			}
+		}
+		assertWarnings(t, got.Warnings, []string{
+			"services section source unavailable",
+			"buzzes section source unavailable",
+			"metaapps section source unavailable",
+		})
+	})
+}
+
+func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqCanonicalBot",
+		MetaId:       "metaBot",
+		Address:      "1BotAddress",
+		ChainName:    "btc",
+		Name:         "Minimal Bot",
+	}})
+	agg.SetHomepageServiceLister(&recordingHomepageServiceLister{result: &skillservice.HomepageListResult{
+		List: []skillservice.ServiceListItem{{
+			SourceServicePinId: "service-source:i0",
+			ServiceName:        "deep-read",
+			DisplayName:        "Deep Read",
+			Description:        "Strict payload",
+			ServiceIcon:        "metafile://service-icon",
+			ProviderSkill:      "qa",
+			OutputType:         "json",
+			Price:              "1.00",
+			Currency:           "BTC",
+			SettlementKind:     "address",
+			PaymentAddress:     "1btcPayment",
+			ProviderName:       "Provider Name",
+			ProviderAvatar:     "metafile://avatar",
+			ProviderChatPubkey: "02pub",
+			RatingAvg:          4.7,
+			RatingCount:        9,
+			Status:             1,
+			Operation:          "modify",
+			ChainName:          "btc",
+			CreatedAt:          1710000010,
+			UpdatedAt:          1710000011,
+		}},
+	}})
+	agg.SetPublishedContentLister(&protocolRecordingPublishedContentLister{
+		results: map[string]*publishedcontent.ListResult{
+			publishedcontent.PathSimpleBuzz: {
+				Items: []publishedcontent.SectionItem{{
+					SourcePinId:    "buzz-source:i0",
+					ProtocolPath:   publishedcontent.PathSimpleBuzz,
+					PayloadText:    "payload text",
+					PayloadExposed: true,
+					CreatedAt:      1710000012,
+				}},
+			},
+			publishedcontent.PathMetaApp: {
+				Items: []publishedcontent.SectionItem{
+					{
+						SourcePinId:  "metaapp-json-source:i0",
+						ProtocolPath: publishedcontent.PathMetaApp,
+						PayloadJSON: map[string]any{
+							"title": "MetaApp JSON",
+							"kind":  "utility",
+						},
+						PayloadExposed: true,
+						UpdatedAt:      1710000013,
+					},
+					{
+						SourcePinId:    "metaapp-hidden-source:i0",
+						ProtocolPath:   publishedcontent.PathMetaApp,
+						ContentType:    "image/png",
+						PayloadExposed: false,
+						UpdatedAt:      1710000014,
+					},
+				},
+			},
+		},
+	})
+
+	got, err := agg.BuildV3("idqRequestedBot", defaultV3Options())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+
+	services := got.Sections[0]
+	if len(services.Items) != 1 {
+		t.Fatalf("services.Items length = %d, want 1", len(services.Items))
+	}
+	if services.Items[0].PinId != "service-source:i0" {
+		t.Fatalf("services.Items[0].PinId = %q, want source pin fallback", services.Items[0].PinId)
+	}
+	servicePayload, ok := services.Items[0].Data.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("services.Items[0].Data.Payload = %#v, want object", services.Items[0].Data.Payload)
+	}
+	assertMapHasOnlyKeys(t, servicePayload, []string{
+		"serviceName",
+		"displayName",
+		"description",
+		"providerSkill",
+		"outputType",
+		"price",
+		"currency",
+		"settlementKind",
+		"paymentAddress",
+	})
+	if servicePayload["serviceName"] != "deep-read" || servicePayload["paymentAddress"] != "1btcPayment" {
+		t.Fatalf("service payload = %#v, want allow-list values", servicePayload)
+	}
+
+	metaapps := got.Sections[2]
+	if len(metaapps.Items) != 1 {
+		t.Fatalf("metaapps.Items length = %d, want 1 exposed payload item", len(metaapps.Items))
+	}
+	metaappPayload, ok := metaapps.Items[0].Data.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want object", metaapps.Items[0].Data.Payload)
+	}
+	if _, nested := metaappPayload["payload"]; nested {
+		t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want direct payload instead of nested payload key", metaappPayload)
+	}
+	if metaappPayload["title"] != "MetaApp JSON" || metaappPayload["kind"] != "utility" {
+		t.Fatalf("metaapp payload = %#v, want flattened published content payload", metaappPayload)
+	}
+
+	assertMinimalSectionItemV3JSON(t, services.Items[0])
+	assertMinimalSectionItemV3JSON(t, metaapps.Items[0])
+	assertMinimalSectionItemV3JSON(t, got.Sections[1].Items[0])
+}
+
+func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	t.Cleanup(func() { store.Close() })
+	cacheProvider := cache.New(store)
+
+	userAgg := &userinfo.Aggregator{}
+	if err := userAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("userinfo.Init returned error: %v", err)
+	}
+	skillAgg := &skillservice.Aggregator{}
+	if err := skillAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("skillservice.Init returned error: %v", err)
+	}
+	publishedAgg := &publishedcontent.Aggregator{}
+	if err := publishedAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("publishedcontent.Init returned error: %v", err)
+	}
+	agg := &Aggregator{}
+	if err := agg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("bothomepage.Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(NewUserInfoLookupAdapter(userAgg))
+	agg.SetHomepageServiceLister(skillAgg)
+	agg.SetPublishedContentLister(publishedAgg)
+
+	const (
+		globalMetaID = "idq-bot"
+		metaID       = "meta-idq-bot"
+		address      = "addr-idq-bot"
+	)
+
+	blockPins := []*aggregator.PinInscription{
+		{
+			Id:           "init-idq-bot:i0",
+			Path:         "/",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			Timestamp:    1710000000,
+		},
+		{
+			Id:           "name-idq-bot:i0",
+			Path:         "/info/name",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte("Pending Bot"),
+			Timestamp:    1710000001,
+		},
+	}
+	for _, pin := range blockPins {
+		if _, err := userAgg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	mempoolPins := []*aggregator.PinInscription{
+		{
+			Id:           "persona-pending:i0",
+			Path:         "/info/persona",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte(`{"style":"direct"}`),
+			ContentType:  "application/json",
+			Timestamp:    1710000010,
+		},
+		{
+			Id:           "llm-pending:i0",
+			Path:         "/info/llm",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte(`{"provider":"openai","model":"gpt-4.1"}`),
+			ContentType:  "application/json",
+			Timestamp:    1710000011,
+		},
+		{
+			Id:           "homepage-pending:i0",
+			Path:         "/info/homepage",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte(`{"uri":"metaapp://pending-homepage"}`),
+			ContentType:  "application/json",
+			Timestamp:    1710000012,
+		},
+	}
+	for _, pin := range mempoolPins {
+		if _, err := userAgg.HandleMempoolPin(pin); err != nil {
+			t.Fatalf("userinfo.HandleMempoolPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	if _, err := skillAgg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:            "service-pending:i0",
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   []byte(`{"serviceName":"fortune","displayName":"Fortune","providerSkill":"fortune-skill","outputType":"text","price":"1","currency":"SPACE","settlementKind":"address","paymentAddress":"addr-idq-bot"}`),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  globalMetaID,
+		MetaId:        metaID,
+		CreateMetaId:  metaID,
+		Address:       address,
+		CreateAddress: address,
+		Timestamp:     1710000020,
+		Number:        120,
+	}); err != nil {
+		t.Fatalf("skillservice.HandleMempoolPin: %v", err)
+	}
+	if _, err := publishedAgg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:           "buzz-pending:i0",
+		Path:         publishedcontent.PathSimpleBuzz,
+		Operation:    publishedcontent.OperationCreate,
+		ContentBody:  []byte("pending buzz"),
+		ContentType:  "text/plain",
+		ChainName:    "mvc",
+		GlobalMetaId: globalMetaID,
+		MetaId:       metaID,
+		Address:      address,
+		Timestamp:    1710000030,
+		Number:       130,
+	}); err != nil {
+		t.Fatalf("publishedcontent.HandleMempoolPin(simplebuzz): %v", err)
+	}
+	if _, err := publishedAgg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:           "metaapp-pending:i0",
+		Path:         publishedcontent.PathMetaApp,
+		Operation:    publishedcontent.OperationCreate,
+		ContentBody:  []byte(`{"title":"Pending MetaAPP","kind":"tool"}`),
+		ContentType:  "application/json",
+		ChainName:    "mvc",
+		GlobalMetaId: globalMetaID,
+		MetaId:       metaID,
+		Address:      address,
+		Timestamp:    1710000040,
+		Number:       140,
+	}); err != nil {
+		t.Fatalf("publishedcontent.HandleMempoolPin(metaapp): %v", err)
+	}
+
+	got, err := agg.BuildV3(globalMetaID, defaultV3Options())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+
+	if got.Profile.Persona == nil || got.Profile.Persona.PinId != "persona-pending:i0" {
+		t.Fatalf("Profile.Persona = %+v, want pending persona pin", got.Profile.Persona)
+	}
+	if got.Profile.LLM == nil || got.Profile.LLM.PinId != "llm-pending:i0" {
+		t.Fatalf("Profile.LLM = %+v, want pending llm pin", got.Profile.LLM)
+	}
+	if got.Profile.Homepage == nil || got.Profile.Homepage.PinId != "homepage-pending:i0" {
+		t.Fatalf("Profile.Homepage = %+v, want pending homepage pin", got.Profile.Homepage)
+	}
+
+	assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+
+	services := got.Sections[0]
+	if len(services.Items) != 1 {
+		t.Fatalf("services.Items length = %d, want 1", len(services.Items))
+	}
+	if services.Items[0].PinId != "service-pending:i0" {
+		t.Fatalf("services.Items[0].PinId = %q, want pending service pin", services.Items[0].PinId)
+	}
+	if services.Items[0].Data.Payload == nil {
+		t.Fatal("services.Items[0].Data.Payload = nil, want payload")
+	}
+
+	buzzes := got.Sections[1]
+	if len(buzzes.Items) != 1 {
+		t.Fatalf("buzzes.Items length = %d, want 1", len(buzzes.Items))
+	}
+	if buzzes.Items[0].PinId != "buzz-pending:i0" {
+		t.Fatalf("buzzes.Items[0].PinId = %q, want pending buzz pin", buzzes.Items[0].PinId)
+	}
+	if payload, ok := buzzes.Items[0].Data.Payload.(string); !ok || payload != "pending buzz" {
+		t.Fatalf("buzzes.Items[0].Data.Payload = %#v, want pending buzz", buzzes.Items[0].Data.Payload)
+	}
+
+	metaapps := got.Sections[2]
+	if len(metaapps.Items) != 1 {
+		t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
+	}
+	if metaapps.Items[0].PinId != "metaapp-pending:i0" {
+		t.Fatalf("metaapps.Items[0].PinId = %q, want pending metaapp pin", metaapps.Items[0].PinId)
+	}
+	metaappPayload, ok := metaapps.Items[0].Data.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want object", metaapps.Items[0].Data.Payload)
+	}
+	if metaappPayload["title"] != "Pending MetaAPP" {
+		t.Fatalf("metaapp payload = %#v, want pending payload", metaappPayload)
+	}
+}
+
+func assertJSONBlockV3Field(t *testing.T, block *JSONBlockV3, pinID, key string, want any) {
+	t.Helper()
+	if block == nil {
+		t.Fatalf("JSONBlockV3 for key %q = nil", key)
+	}
+	if block.PinId != pinID {
+		t.Fatalf("JSONBlockV3.PinId = %q, want %q", block.PinId, pinID)
+	}
+	if got := block.Payload[key]; got != want {
+		t.Fatalf("JSONBlockV3.Payload[%q] = %#v, want %#v", key, got, want)
+	}
+}
+
+func assertWarnings(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("Warnings = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Warnings = %v, want %v", got, want)
+		}
+	}
+}
+
+func assertExactSectionIDsV3(t *testing.T, sections []SectionV3, want []string) {
+	t.Helper()
+	if len(sections) != len(want) {
+		t.Fatalf("Sections length = %d, want %d; sections=%+v", len(sections), len(want), sections)
+	}
+	for i, id := range want {
+		if sections[i].ID != id {
+			t.Fatalf("Sections[%d].ID = %q, want %q; sections=%+v", i, sections[i].ID, id, sections)
+		}
+	}
+}
+
+func assertPublishedContentProtocolCalls(t *testing.T, params []publishedcontent.ListParams, protocolPath string, want int) {
+	t.Helper()
+	got := 0
+	for _, param := range params {
+		if param.ProtocolPath == protocolPath {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("protocol path %q calls = %d, want %d; params=%+v", protocolPath, got, want, params)
+	}
+}
+
+func assertMapHasOnlyKeys(t *testing.T, got map[string]any, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("map keys = %v, want %v", mapKeys(got), want)
+	}
+	for _, key := range want {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("map missing key %q; keys=%v", key, mapKeys(got))
+		}
+	}
+}
+
+func assertMinimalSectionItemV3JSON(t *testing.T, item SectionItemV3) {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal section item: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("json.Unmarshal section item %s: %v", raw, err)
+	}
+
+	assertMapHasOnlyKeys(t, encoded, []string{"data", "pinId", "protocolPath", "timestamp"})
+	for _, forbidden := range []string{"sourcePinId", "currentPinId", "createdAt", "updatedAt", "chainName", "publisher", "proof", "service", "payloadJson", "payloadText", "payloadExposed"} {
+		if _, ok := encoded[forbidden]; ok {
+			t.Fatalf("top-level key %q present in v3 section item JSON: %s", forbidden, raw)
+		}
+	}
+	data, ok := encoded["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("encoded data = %#v, want object; raw=%s", encoded["data"], raw)
+	}
+	assertMapHasOnlyKeys(t, data, []string{"payload"})
+	if _, ok := data["payload"]; !ok {
+		t.Fatalf("encoded data missing payload: %s", raw)
+	}
+}
+
+func mapKeys(in map[string]any) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func TestCustomHomepagePlanSchema(t *testing.T) {

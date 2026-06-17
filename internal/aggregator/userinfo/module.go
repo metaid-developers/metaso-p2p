@@ -23,33 +23,36 @@ import (
 // `chatpubkeyId` in all-lowercase) can consume metaso-p2p as a drop-in
 // replacement without any TypeScript changes.
 type UserProfile struct {
-	GlobalMetaID    string `json:"globalMetaId"`
-	MetaID          string `json:"metaid"`
-	Address         string `json:"address"`
-	Name            string `json:"name,omitempty"`
-	NameId          string `json:"nameId,omitempty"`
-	Avatar          string `json:"avatar,omitempty"`
-	AvatarId        string `json:"avatarId,omitempty"`
-	NftAvatar       string `json:"nftAvatar,omitempty"`
-	Bio             string `json:"bio,omitempty"`
-	BioId           string `json:"bioId,omitempty"`
-	Role            string `json:"role,omitempty"`
-	RoleId          string `json:"roleId,omitempty"`
-	Soul            string `json:"soul,omitempty"`
-	SoulId          string `json:"soulId,omitempty"`
-	Goal            string `json:"goal,omitempty"`
-	GoalId          string `json:"goalId,omitempty"`
-	ChatSkills      string `json:"chatSkills,omitempty"`
-	ChatSkillsId    string `json:"chatSkillsId,omitempty"`
-	LLM             string `json:"llm,omitempty"`
-	LLMId           string `json:"llmId,omitempty"`
-	Homepage        string `json:"homepage,omitempty"`
-	HomepageId      string `json:"homepageId,omitempty"`
-	Background      string `json:"background,omitempty"`
-	BackgroundId    string `json:"backgroundId,omitempty"`
-	ChatPublicKey   string `json:"chatpubkey,omitempty"`
-	ChatPublicKeyId string `json:"chatpubkeyId,omitempty"`
-	ChainName       string `json:"chainName,omitempty"`
+	GlobalMetaID      string `json:"globalMetaId"`
+	MetaID            string `json:"metaid"`
+	Address           string `json:"address"`
+	Name              string `json:"name,omitempty"`
+	NameId            string `json:"nameId,omitempty"`
+	Avatar            string `json:"avatar,omitempty"`
+	AvatarId          string `json:"avatarId,omitempty"`
+	AvatarContentType string `json:"avatarContentType,omitempty"`
+	NftAvatar         string `json:"nftAvatar,omitempty"`
+	Bio               string `json:"bio,omitempty"`
+	BioId             string `json:"bioId,omitempty"`
+	Role              string `json:"role,omitempty"`
+	RoleId            string `json:"roleId,omitempty"`
+	Soul              string `json:"soul,omitempty"`
+	SoulId            string `json:"soulId,omitempty"`
+	Goal              string `json:"goal,omitempty"`
+	GoalId            string `json:"goalId,omitempty"`
+	ChatSkills        string `json:"chatSkills,omitempty"`
+	ChatSkillsId      string `json:"chatSkillsId,omitempty"`
+	LLM               string `json:"llm,omitempty"`
+	LLMId             string `json:"llmId,omitempty"`
+	Persona           string `json:"persona,omitempty"`
+	PersonaId         string `json:"personaId,omitempty"`
+	Homepage          string `json:"homepage,omitempty"`
+	HomepageId        string `json:"homepageId,omitempty"`
+	Background        string `json:"background,omitempty"`
+	BackgroundId      string `json:"backgroundId,omitempty"`
+	ChatPublicKey     string `json:"chatpubkey,omitempty"`
+	ChatPublicKeyId   string `json:"chatpubkeyId,omitempty"`
+	ChainName         string `json:"chainName,omitempty"`
 }
 
 // Aggregator indexes /info/* pins and serves user profile queries.
@@ -94,7 +97,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		return nil, nil
 	}
 
-	path := pin.Path
+	path := normaliseInfoPath(pin.Path)
 	metaid := pin.MetaId
 	if metaid == "" {
 		metaid = pin.CreateMetaId
@@ -155,8 +158,15 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		profile.Name = string(pin.ContentBody)
 		profile.NameId = pin.Id
 	case path == "/info/avatar":
-		profile.Avatar = "/content/" + pin.Id
-		profile.AvatarId = pin.Id
+		if len(pin.ContentBody) == 0 {
+			profile.Avatar = ""
+			profile.AvatarId = ""
+			profile.AvatarContentType = ""
+		} else {
+			profile.Avatar = "/content/" + pin.Id
+			profile.AvatarId = pin.Id
+			profile.AvatarContentType = strings.TrimSpace(pin.ContentType)
+		}
 		a.cache.InvalidateByPrefix("avatar:" + metaid)
 	case path == "/info/nft-avatar":
 		profile.NftAvatar = "/content/" + pin.Id
@@ -172,15 +182,15 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	case path == "/info/goal":
 		profile.Goal = string(pin.ContentBody)
 		profile.GoalId = pin.Id
-	case path == "/info/chatSkills":
+	case path == "/info/chatskills":
 		profile.ChatSkills = string(pin.ContentBody)
 		profile.ChatSkillsId = pin.Id
-	case path == "/info/LLM":
-		profile.LLM = string(pin.ContentBody)
-		profile.LLMId = pin.Id
+	case path == "/info/llm":
+		setClearableTextProfileField(pin, &profile.LLM, &profile.LLMId)
+	case path == "/info/persona":
+		setClearableTextProfileField(pin, &profile.Persona, &profile.PersonaId)
 	case path == "/info/homepage":
-		profile.Homepage = string(pin.ContentBody)
-		profile.HomepageId = pin.Id
+		setClearableTextProfileField(pin, &profile.Homepage, &profile.HomepageId)
 	case path == "/info/background":
 		profile.Background = "/content/" + pin.Id
 		profile.BackgroundId = pin.Id
@@ -203,6 +213,24 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	return a.HandleBlockPin(pin)
+}
+
+func normaliseInfoPath(path string) string {
+	path = strings.TrimSpace(path)
+	if strings.HasPrefix(strings.ToLower(path), "/info/") {
+		return strings.ToLower(path)
+	}
+	return path
+}
+
+func setClearableTextProfileField(pin *aggregator.PinInscription, value *string, id *string) {
+	if len(pin.ContentBody) == 0 {
+		*value = ""
+		*id = ""
+		return
+	}
+	*value = string(pin.ContentBody)
+	*id = pin.Id
 }
 
 // RegisterRoutes mounts user info HTTP endpoints.

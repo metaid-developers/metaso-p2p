@@ -1,0 +1,276 @@
+package bothomepage
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+)
+
+func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3, error) {
+	requestGlobalMetaId = strings.TrimSpace(requestGlobalMetaId)
+	if requestGlobalMetaId == "" {
+		return nil, ErrInvalidParameter
+	}
+	if a == nil || a.profileLookup == nil {
+		return nil, ErrAggregationUnavailable
+	}
+
+	profile, err := a.profileLookup.LookupByGlobalMetaId(requestGlobalMetaId)
+	if err != nil {
+		return nil, ErrAggregationUnavailable
+	}
+	if profile == nil {
+		return nil, ErrNotFound
+	}
+
+	canonical := CanonicalIdentity{
+		GlobalMetaId: firstNonEmpty(profile.GlobalMetaId, requestGlobalMetaId),
+		MetaId:       strings.TrimSpace(profile.MetaId),
+		Address:      strings.TrimSpace(profile.Address),
+		ChainName:    firstNonEmpty(strings.TrimSpace(profile.ChainName), strings.TrimSpace(opts.ChainName)),
+	}
+	outProfile, warnings := buildProfileV3(profile)
+	sections := make([]SectionV3, 0)
+	if opts.IncludeSections {
+		var sectionWarnings []string
+		sections, sectionWarnings = a.loadSectionsV3(canonical, opts)
+		warnings = append(warnings, sectionWarnings...)
+	}
+
+	return &DataV3{
+		SchemaVersion: schemaVersionV3,
+		Identity: IdentityV3{
+			GlobalMetaId: canonical.GlobalMetaId,
+			LegacyMetaId: canonical.MetaId,
+			Display:      abbreviateGlobalMetaId(canonical.GlobalMetaId),
+		},
+		Profile:  outProfile,
+		Presence: a.resolvePresence(*profile, opts.IncludePresence),
+		Sections: sections,
+		Warnings: warnings,
+	}, nil
+}
+
+func (a *Aggregator) loadSectionsV3(canonical CanonicalIdentity, opts Options) ([]SectionV3, []string) {
+	sections := make([]SectionV3, 0, 3)
+	warnings := make([]string, 0)
+
+	if opts.IncludeServices {
+		section, warning := a.loadServicesSectionV3(canonical, opts)
+		sections = append(sections, section)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	if opts.IncludeBuzzes {
+		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "buzzes", publishedcontent.PathSimpleBuzz, "buzzes section source unavailable")
+		sections = append(sections, section)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	if opts.IncludeMetaApps {
+		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "metaapps", publishedcontent.PathMetaApp, "metaapps section source unavailable")
+		sections = append(sections, section)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+
+	return sections, warnings
+}
+
+func emptySectionV3(id, protocolPath string) SectionV3 {
+	return SectionV3{
+		ID:           id,
+		ProtocolPath: protocolPath,
+		Page: SectionPageV3{
+			Limit:   homepageSectionLimit,
+			Count:   0,
+			HasMore: false,
+		},
+		Items: []SectionItemV3{},
+	}
+}
+
+func sectionWithItemsV3(id, protocolPath string, items []SectionItemV3, hasMore bool) SectionV3 {
+	if len(items) > homepageSectionLimit {
+		hasMore = true
+		items = items[:homepageSectionLimit]
+	}
+	return SectionV3{
+		ID:           id,
+		ProtocolPath: protocolPath,
+		Page: SectionPageV3{
+			Limit:   homepageSectionLimit,
+			Count:   len(items),
+			HasMore: hasMore,
+		},
+		Items: items,
+	}
+}
+
+func (a *Aggregator) loadServicesSectionV3(canonical CanonicalIdentity, opts Options) (SectionV3, string) {
+	if a == nil || a.homepageServiceLister == nil {
+		return emptySectionV3("services", skillservice.PathSkillService), ""
+	}
+
+	result, err := a.homepageServiceLister.ListHomepageByProvider(skillservice.HomepageListParams{
+		ProviderGlobalMetaId: canonical.GlobalMetaId,
+		Size:                 homepageSectionReadSize,
+		IncludeInactive:      opts.IncludeInactiveServices,
+	})
+	if err != nil {
+		return emptySectionV3("services", skillservice.PathSkillService), "services section source unavailable"
+	}
+	if result == nil || len(result.List) == 0 {
+		return emptySectionV3("services", skillservice.PathSkillService), ""
+	}
+
+	items := make([]SectionItemV3, 0, len(result.List))
+	for _, item := range result.List {
+		items = append(items, sectionItemFromHomepageServiceV3(item))
+	}
+
+	return sectionWithItemsV3("services", skillservice.PathSkillService, items, result.HasMore), ""
+}
+
+func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) SectionItemV3 {
+	return SectionItemV3{
+		PinId:        firstNonEmpty(item.CurrentPinId, item.SourceServicePinId),
+		ProtocolPath: skillservice.PathSkillService,
+		Timestamp:    item.UpdatedAt,
+		Data: SectionItemDataV3{
+			Payload: map[string]any{
+				"serviceName":    item.ServiceName,
+				"displayName":    item.DisplayName,
+				"description":    item.Description,
+				"providerSkill":  item.ProviderSkill,
+				"outputType":     item.OutputType,
+				"price":          item.Price,
+				"currency":       item.Currency,
+				"settlementKind": item.SettlementKind,
+				"paymentAddress": item.PaymentAddress,
+			},
+		},
+	}
+}
+
+func (a *Aggregator) loadPublishedContentSectionV3(canonical CanonicalIdentity, opts Options, id, protocolPath, warning string) (SectionV3, string) {
+	if a == nil || a.publishedContentLister == nil {
+		return emptySectionV3(id, protocolPath), ""
+	}
+
+	contentOpts := opts
+	contentOpts.ChainName = ""
+
+	result, err := a.loadPublishedContentByCanonicalIdentity(canonical, contentOpts, protocolPath)
+	if err != nil {
+		return emptySectionV3(id, protocolPath), warning
+	}
+	if result == nil || len(result.Items) == 0 {
+		return emptySectionV3(id, protocolPath), ""
+	}
+
+	items := make([]SectionItemV3, 0, len(result.Items))
+	for _, item := range result.Items {
+		payload, ok := sectionItemPayloadV3(item)
+		if !ok {
+			continue
+		}
+		items = append(items, SectionItemV3{
+			PinId:        firstNonEmpty(item.CurrentPinId, item.SourcePinId),
+			ProtocolPath: item.ProtocolPath,
+			Timestamp:    publishedContentItemSortTimestamp(item),
+			Data: SectionItemDataV3{
+				Payload: payload,
+			},
+		})
+	}
+	if len(items) == 0 {
+		return emptySectionV3(id, protocolPath), ""
+	}
+
+	return sectionWithItemsV3(id, protocolPath, items, result.HasMore), ""
+}
+
+func sectionItemPayloadV3(item publishedcontent.SectionItem) (any, bool) {
+	data := sectionItemData(item)
+	if len(data) == 0 {
+		return nil, false
+	}
+	payload, ok := data["payload"]
+	if !ok {
+		return nil, false
+	}
+	return payload, true
+}
+
+func buildProfileV3(profile *ProfileSnapshot) (ProfileV3, []string) {
+	if profile == nil {
+		return ProfileV3{}, nil
+	}
+
+	warnings := make([]string, 0)
+	llm, llmWarnings := parseJSONBlockV3(profile.LLM, profile.LLMId, "/info/llm")
+	warnings = append(warnings, llmWarnings...)
+	persona, personaWarnings := parseJSONBlockV3(profile.Persona, profile.PersonaId, "/info/persona")
+	warnings = append(warnings, personaWarnings...)
+	homepage, homepageWarnings := parseJSONBlockV3(profile.Homepage, profile.HomepageId, "/info/homepage")
+	warnings = append(warnings, homepageWarnings...)
+
+	return ProfileV3{
+		Name:       strings.TrimSpace(profile.Name),
+		Avatar:     avatarV3(profile),
+		Bio:        strings.TrimSpace(profile.Bio),
+		ChatPubkey: strings.TrimSpace(profile.ChatPublicKey),
+		LLM:        llm,
+		Persona:    persona,
+		Homepage:   homepage,
+		Pins: ProfilePinsV3{
+			Name:       strings.TrimSpace(profile.NameId),
+			Bio:        strings.TrimSpace(profile.BioId),
+			ChatPubkey: strings.TrimSpace(profile.ChatPublicKeyId),
+		},
+	}, warnings
+}
+
+func avatarV3(profile *ProfileSnapshot) *AvatarV3 {
+	if profile == nil {
+		return nil
+	}
+	pinID := strings.TrimSpace(profile.AvatarId)
+	if pinID == "" {
+		return nil
+	}
+	return &AvatarV3{
+		PinId:       pinID,
+		ContentType: avatarContentTypeV3(profile.AvatarContentType),
+	}
+}
+
+func parseJSONBlockV3(raw, pinID, path string) (*JSONBlockV3, []string) {
+	raw = strings.TrimSpace(raw)
+	pinID = strings.TrimSpace(pinID)
+	if raw == "" || pinID == "" {
+		return nil, nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, []string{"invalid JSON in " + path}
+	}
+
+	return &JSONBlockV3{
+		PinId:   pinID,
+		Payload: payload,
+	}, nil
+}
+
+func avatarContentTypeV3(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	contentType = strings.TrimSuffix(contentType, ";binary")
+	return strings.TrimSpace(contentType)
+}

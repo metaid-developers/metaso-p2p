@@ -46,6 +46,9 @@ func DefaultOptions() Options {
 func ParseOptions(values url.Values) (Options, error) {
 	opts := DefaultOptions()
 	opts.Version = parseVersion(values)
+	if opts.Version == "v3" {
+		return parseV3Options(values)
+	}
 	opts.IncludeSections = opts.Version == "v2"
 	opts.ChainName = strings.ToLower(strings.TrimSpace(values.Get("chainName")))
 
@@ -87,9 +90,46 @@ func ParseOptions(values url.Values) (Options, error) {
 	return opts, nil
 }
 
+func parseV3Options(values url.Values) (Options, error) {
+	opts := Options{
+		Version:         "v3",
+		IncludeServices: true,
+		IncludeSections: true,
+		IncludeMetaApps: true,
+		IncludeBuzzes:   true,
+		ServiceSize:     homepageSectionLimit,
+		IncludePresence: true,
+	}
+
+	var err error
+	if opts.IncludeServices, err = parseBool(values, "includeServices", opts.IncludeServices); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeSections, err = parseBool(values, "includeSections", opts.IncludeSections); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeMetaApps, err = parseBool(values, "includeMetaApps", opts.IncludeMetaApps); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeBuzzes, err = parseBool(values, "includeBuzzes", opts.IncludeBuzzes); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeInactiveServices, err = parseBool(values, "includeInactiveServices", opts.IncludeInactiveServices); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludePresence, err = parseBool(values, "includePresence", opts.IncludePresence); err != nil {
+		return Options{}, err
+	}
+
+	return opts, nil
+}
+
 func parseVersion(values url.Values) string {
 	version := strings.ToLower(strings.TrimSpace(values.Get("version")))
 	schemaVersion := strings.TrimSpace(values.Get("schemaVersion"))
+	if version == "v3" || schemaVersion == schemaVersionV3 {
+		return "v3"
+	}
 	if version == "v2" || schemaVersion == "botHomepage.v2" {
 		return "v2"
 	}

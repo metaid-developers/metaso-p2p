@@ -15,18 +15,32 @@ func (a *Aggregator) handleGlobalMetaID(c *gin.Context) {
 		return
 	}
 
+	if opts.Version == "v3" {
+		data, err := a.BuildV3(c.Param("globalMetaId"), opts)
+		if err != nil {
+			respondBuildError(c, err)
+			return
+		}
+		api.RespSuccess(c, data)
+		return
+	}
+
 	data, err := a.Build(c.Param("globalMetaId"), opts)
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidParameter):
-			api.RespErr(c, 40000, "invalid parameter")
-		case errors.Is(err, ErrNotFound):
-			api.RespErr(c, 40400, "bot homepage not found")
-		default:
-			api.RespErr(c, 50000, "aggregation unavailable")
-		}
+		respondBuildError(c, err)
 		return
 	}
 
 	api.RespSuccess(c, data)
+}
+
+func respondBuildError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidParameter):
+		api.RespErr(c, 40000, "invalid parameter")
+	case errors.Is(err, ErrNotFound):
+		api.RespErr(c, 40400, "bot homepage not found")
+	default:
+		api.RespErr(c, 50000, "aggregation unavailable")
+	}
 }

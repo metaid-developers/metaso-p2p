@@ -14,6 +14,7 @@ import (
 const (
 	schemaVersionV1         = "botHomepage.v1"
 	schemaVersionV2         = "botHomepage.v2"
+	schemaVersionV3         = "botHomepage.v3"
 	homepageSectionLimit    = 5
 	homepageSectionReadSize = homepageSectionLimit + 1
 )
