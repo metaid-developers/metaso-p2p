@@ -23,6 +23,21 @@ func (f *fakeProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileS
 	return f.profile, f.err
 }
 
+func defaultV3Options() Options {
+	opts := DefaultOptions()
+	opts.Version = "v3"
+	opts.IncludePresence = true
+	opts.IncludeSections = true
+	opts.IncludeServices = true
+	opts.IncludeBuzzes = true
+	opts.IncludeMetaApps = true
+	opts.IncludeSkills = false
+	opts.IncludeProofs = false
+	opts.ServiceSize = homepageSectionLimit
+	opts.ChainName = ""
+	return opts
+}
+
 type fakeServiceLister struct {
 	result *skillservice.ListResult
 	err    error
@@ -1231,6 +1246,185 @@ func TestBuildHomepageSuppressesProofsWhenDisabled(t *testing.T) {
 	}
 	if len(got.Warnings) != 0 {
 		t.Fatalf("Warnings = %v, want empty", got.Warnings)
+	}
+}
+
+func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+
+	lookup := &fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:      "idqCanonicalBotLongValue",
+		MetaId:            "metaBot",
+		Name:              "Fortune Bot",
+		NameId:            "name-pin:i0",
+		Bio:               "Reads the chain and answers directly.",
+		BioId:             "bio-pin:i0",
+		ChatPublicKey:     "02chatpubkey",
+		ChatPublicKeyId:   "chat-pin:i0",
+		AvatarId:          "avatar-pin:i0",
+		AvatarContentType: "image/png;binary",
+		LLM:               `{"provider":"openai","model":"gpt-4.1"}`,
+		LLMId:             "llm-pin:i0",
+		Persona:           `{"style":"direct","language":"zh-CN"}`,
+		PersonaId:         "persona-pin:i0",
+		Homepage:          `{"uri":"metaapp://homepage","renderer":"metaapp"}`,
+		HomepageId:        "homepage-pin:i0",
+	}}
+	agg.SetProfileLookup(lookup)
+
+	// Profile-only v3 build currently ignores section flags; later section tests
+	// can use defaultV3Options when section loading is implemented.
+	got, err := agg.BuildV3("idqRequestedBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+
+	if lookup.seen != "idqRequestedBot" {
+		t.Fatalf("lookup globalMetaId = %q, want idqRequestedBot", lookup.seen)
+	}
+	if got.SchemaVersion != schemaVersionV3 {
+		t.Fatalf("SchemaVersion = %q, want %q", got.SchemaVersion, schemaVersionV3)
+	}
+	if got.Identity.GlobalMetaId != "idqCanonicalBotLongValue" {
+		t.Fatalf("Identity.GlobalMetaId = %q", got.Identity.GlobalMetaId)
+	}
+	if got.Identity.LegacyMetaId != "metaBot" {
+		t.Fatalf("Identity.LegacyMetaId = %q", got.Identity.LegacyMetaId)
+	}
+	if got.Identity.Display == "" || got.Identity.Display == got.Identity.GlobalMetaId {
+		t.Fatalf("Identity.Display = %q, want abbreviated canonical id", got.Identity.Display)
+	}
+	if got.Profile.Name != "Fortune Bot" {
+		t.Fatalf("Profile.Name = %q", got.Profile.Name)
+	}
+	if got.Profile.Bio != "Reads the chain and answers directly." {
+		t.Fatalf("Profile.Bio = %q", got.Profile.Bio)
+	}
+	if got.Profile.ChatPubkey != "02chatpubkey" {
+		t.Fatalf("Profile.ChatPubkey = %q", got.Profile.ChatPubkey)
+	}
+	if got.Profile.Avatar == nil {
+		t.Fatal("Profile.Avatar = nil, want avatar block")
+	}
+	if got.Profile.Avatar.PinId != "avatar-pin:i0" {
+		t.Fatalf("Profile.Avatar.PinId = %q", got.Profile.Avatar.PinId)
+	}
+	if got.Profile.Avatar.ContentType != "image/png" {
+		t.Fatalf("Profile.Avatar.ContentType = %q, want image/png", got.Profile.Avatar.ContentType)
+	}
+	if got.Profile.Pins.Name != "name-pin:i0" {
+		t.Fatalf("Profile.Pins.Name = %q", got.Profile.Pins.Name)
+	}
+	if got.Profile.Pins.Bio != "bio-pin:i0" {
+		t.Fatalf("Profile.Pins.Bio = %q", got.Profile.Pins.Bio)
+	}
+	if got.Profile.Pins.ChatPubkey != "chat-pin:i0" {
+		t.Fatalf("Profile.Pins.ChatPubkey = %q", got.Profile.Pins.ChatPubkey)
+	}
+	assertJSONBlockV3Field(t, got.Profile.LLM, "llm-pin:i0", "provider", "openai")
+	assertJSONBlockV3Field(t, got.Profile.LLM, "llm-pin:i0", "model", "gpt-4.1")
+	assertJSONBlockV3Field(t, got.Profile.Persona, "persona-pin:i0", "style", "direct")
+	assertJSONBlockV3Field(t, got.Profile.Persona, "persona-pin:i0", "language", "zh-CN")
+	assertJSONBlockV3Field(t, got.Profile.Homepage, "homepage-pin:i0", "uri", "metaapp://homepage")
+	assertJSONBlockV3Field(t, got.Profile.Homepage, "homepage-pin:i0", "renderer", "metaapp")
+	if len(got.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want empty", got.Warnings)
+	}
+}
+
+func TestBuildV3InvalidJSONBlocksReturnNullWithWarnings(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		Name:         "IDQ Bot",
+		LLM:          `{"provider":`,
+		LLMId:        "llm-pin:i0",
+		Persona:      `{"style":`,
+		PersonaId:    "persona-pin:i0",
+		Homepage:     `{"uri":`,
+		HomepageId:   "homepage-pin:i0",
+	}})
+
+	got, err := agg.BuildV3("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+
+	if got.Profile.LLM != nil {
+		t.Fatalf("Profile.LLM = %+v, want nil", got.Profile.LLM)
+	}
+	if got.Profile.Persona != nil {
+		t.Fatalf("Profile.Persona = %+v, want nil", got.Profile.Persona)
+	}
+	if got.Profile.Homepage != nil {
+		t.Fatalf("Profile.Homepage = %+v, want nil", got.Profile.Homepage)
+	}
+	assertWarnings(t, got.Warnings, []string{
+		"invalid JSON in /info/llm",
+		"invalid JSON in /info/persona",
+		"invalid JSON in /info/homepage",
+	})
+}
+
+func TestBuildV3TopLevelShapeExcludesV2Fields(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqBot",
+		MetaId:       "metaBot",
+		Name:         "IDQ Bot",
+	}})
+
+	got, err := agg.BuildV3("idqBot", DefaultOptions())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+
+	for _, key := range []string{"globalMetaId", "canonical", "persona", "homepage", "services", "actions", "proofs", "source", "resolvedAt"} {
+		if _, ok := decoded[key]; ok {
+			t.Fatalf("top-level key %q present in v3 payload: %s", key, string(encoded))
+		}
+	}
+}
+
+func assertJSONBlockV3Field(t *testing.T, block *JSONBlockV3, pinID, key string, want any) {
+	t.Helper()
+	if block == nil {
+		t.Fatalf("JSONBlockV3 for key %q = nil", key)
+	}
+	if block.PinId != pinID {
+		t.Fatalf("JSONBlockV3.PinId = %q, want %q", block.PinId, pinID)
+	}
+	if got := block.Payload[key]; got != want {
+		t.Fatalf("JSONBlockV3.Payload[%q] = %#v, want %#v", key, got, want)
+	}
+}
+
+func assertWarnings(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("Warnings = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Warnings = %v, want %v", got, want)
+		}
 	}
 }
 
