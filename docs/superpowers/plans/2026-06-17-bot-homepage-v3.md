@@ -608,9 +608,11 @@ type SectionItemV3 struct {
 }
 
 type SectionItemDataV3 struct {
-	Payload any `json:"payload,omitempty"`
+	Payload any `json:"payload"`
 }
 ```
+
+For JSON and non-binary text records, `data.payload` is a public contract field and must always be present. Binary-only or otherwise non-exposed records should be skipped from v3 sections rather than returned with a missing payload.
 
 - [ ] **Step 5: Add API branch for v3**
 
@@ -662,31 +664,30 @@ Add tests in `internal/aggregator/bothomepage/build_test.go`:
 
 ```go
 func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
-	builder := setupTestBuilder(t)
-	builder.profileLookup = &fakeProfileLookup{
-		byGlobal: map[string]*ProfileSnapshot{
-			"idqbot": {
-				GlobalMetaId:       "idqbot",
-				MetaId:             "legacy-meta",
-				Name:               "AI_Sunny",
-				NameId:             "name:i0",
-				Bio:                "Public bio",
-				BioId:              "bio:i0",
-				ChatPublicKey:      "046a",
-				ChatPublicKeyId:    "chat:i0",
-				AvatarId:           "avatar:i0",
-				AvatarContentType:  "image/png;binary",
-				LLM:                `{"primaryProvider":"codex","fallbackProvider":"claude-code"}`,
-				LLMId:              "llm:i0",
-				Persona:            `{"role":"assistant","soul":"careful","goal":"help"}`,
-				PersonaId:          "persona:i0",
-				Homepage:           `{"uri":"metaapp://abc","renderer":"metaapp","contentType":"application/vnd.metaapp"}`,
-				HomepageId:         "homepage:i0",
-			},
-		},
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
 	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId:      "idqbot",
+		MetaId:            "legacy-meta",
+		Name:              "AI_Sunny",
+		NameId:            "name:i0",
+		Bio:               "Public bio",
+		BioId:             "bio:i0",
+		ChatPublicKey:     "046a",
+		ChatPublicKeyId:   "chat:i0",
+		AvatarId:          "avatar:i0",
+		AvatarContentType: "image/png;binary",
+		LLM:               `{"primaryProvider":"codex","fallbackProvider":"claude-code"}`,
+		LLMId:             "llm:i0",
+		Persona:           `{"role":"assistant","soul":"careful","goal":"help"}`,
+		PersonaId:         "persona:i0",
+		Homepage:          `{"uri":"metaapp://abc","renderer":"metaapp","contentType":"application/vnd.metaapp"}`,
+		HomepageId:        "homepage:i0",
+	}})
 
-	data, err := builder.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -717,23 +718,22 @@ func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
 }
 
 func TestBuildV3InvalidJSONBlocksReturnNullWithWarnings(t *testing.T) {
-	builder := setupTestBuilder(t)
-	builder.profileLookup = &fakeProfileLookup{
-		byGlobal: map[string]*ProfileSnapshot{
-			"idqbot": {
-				GlobalMetaId: "idqbot",
-				MetaId:       "legacy-meta",
-				LLM:          `{bad`,
-				LLMId:        "llm:i0",
-				Persona:      `{bad`,
-				PersonaId:    "persona:i0",
-				Homepage:     `{bad`,
-				HomepageId:   "homepage:i0",
-			},
-		},
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
 	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqbot",
+		MetaId:       "legacy-meta",
+		LLM:          `{bad`,
+		LLMId:        "llm:i0",
+		Persona:      `{bad`,
+		PersonaId:    "persona:i0",
+		Homepage:     `{bad`,
+		HomepageId:   "homepage:i0",
+	}})
 
-	data, err := builder.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -751,14 +751,16 @@ func TestBuildV3InvalidJSONBlocksReturnNullWithWarnings(t *testing.T) {
 }
 
 func TestBuildV3TopLevelShapeExcludesV2Fields(t *testing.T) {
-	builder := setupTestBuilder(t)
-	builder.profileLookup = &fakeProfileLookup{
-		byGlobal: map[string]*ProfileSnapshot{
-			"idqbot": {GlobalMetaId: "idqbot", MetaId: "legacy-meta"},
-		},
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
 	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqbot",
+		MetaId:       "legacy-meta",
+	}})
 
-	data, err := builder.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -824,12 +826,9 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 			Display:      abbreviateGlobalMetaId(canonical.GlobalMetaId),
 		},
 		Profile:  buildProfileV3(profile, &warnings),
-		Presence: Presence{State: PresenceUnknown, UpdatedAt: nil, Source: ""},
+		Presence: a.resolvePresence(profile, opts.IncludePresence),
 		Sections: []SectionV3{},
 		Warnings: warnings,
-	}
-	if opts.IncludePresence {
-		data.Presence = a.resolvePresence(canonical)
 	}
 	if opts.IncludeSections {
 		sections, sectionWarnings := a.loadSectionsV3(canonical, opts)
@@ -934,47 +933,25 @@ Add tests in `internal/aggregator/bothomepage/build_test.go`:
 
 ```go
 func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
-	builder := setupTestBuilder(t)
-	builder.profileLookup = &fakeProfileLookup{
-		byGlobal: map[string]*ProfileSnapshot{
-			"idqbot": {GlobalMetaId: "idqbot", MetaId: "legacy-meta"},
-		},
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
 	}
-	builder.homepageServices = &fakeHomepageServiceLister{
-		items: []skillservice.ServiceListItem{{
-			CurrentPinId: "service-current:i0",
-			ServiceName:  "topup",
-			DisplayName:  "Top Up",
-			Description:  "Mobile top up",
-			UpdatedAt:    100,
-		}},
-	}
-	builder.publishedContent = &fakePublishedContentLister{
-		byPath: map[string]publishedcontent.ListResult{
-			publishedcontent.PathSimpleBuzz: {
-				Items: []publishedcontent.SectionItem{{
-					CurrentPinId:    "buzz-current:i0",
-					ProtocolPath:    publishedcontent.PathSimpleBuzz,
-					CreatedAt:       200,
-					UpdatedAt:       210,
-					PayloadJSON:     map[string]any{"content": "hello"},
-					PayloadExposed:  true,
-				}},
-			},
-			publishedcontent.PathMetaApp: {
-				Items: []publishedcontent.SectionItem{{
-					CurrentPinId:    "metaapp-current:i0",
-					ProtocolPath:    publishedcontent.PathMetaApp,
-					CreatedAt:       300,
-					UpdatedAt:       310,
-					PayloadJSON:     map[string]any{"name": "Home"},
-					PayloadExposed:  true,
-				}},
-			},
-		},
-	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqbot",
+		MetaId:       "legacy-meta",
+	}})
+	agg.SetHomepageServiceLister(&recordingHomepageServiceLister{result: &skillservice.HomepageListResult{List: []skillservice.ServiceListItem{{
+		CurrentPinId:       "service-current:i0",
+		SourceServicePinId: "service-source:i0",
+		ServiceName:        "topup",
+		DisplayName:        "Top Up",
+		Description:        "Mobile top up",
+		UpdatedAt:          100,
+	}}}})
+	agg.SetPublishedContentLister(&pathPublishedContentLister{})
 
-	data, err := builder.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -989,34 +966,39 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 	if data.Sections[0].ProtocolPath != "/protocols/skill-service" {
 		t.Fatalf("services protocolPath = %q", data.Sections[0].ProtocolPath)
 	}
-	if data.Sections[1].Items[0].PinId != "buzz-current:i0" || data.Sections[2].Items[0].PinId != "metaapp-current:i0" {
+	if len(data.Sections[0].Items) != 1 || data.Sections[0].Items[0].PinId != "service-current:i0" {
+		t.Fatalf("services items mismatch: %#v", data.Sections[0].Items)
+	}
+	if data.Sections[0].Items[0].Data.Payload == nil {
+		t.Fatalf("services data.payload must be present: %#v", data.Sections[0].Items[0])
+	}
+	if data.Sections[1].Items[0].PinId != publishedcontent.PathSimpleBuzz+":current" || data.Sections[2].Items[0].PinId != publishedcontent.PathMetaApp+":current" {
 		t.Fatalf("published content pin ids mismatch: %#v", data.Sections)
+	}
+	if data.Sections[1].Items[0].Data.Payload == nil || data.Sections[2].Items[0].Data.Payload == nil {
+		t.Fatalf("published content data.payload must be present: %#v", data.Sections)
 	}
 }
 
 func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
-	builder := setupTestBuilder(t)
-	builder.profileLookup = &fakeProfileLookup{
-		byGlobal: map[string]*ProfileSnapshot{
-			"idqbot": {GlobalMetaId: "idqbot", MetaId: "legacy-meta"},
-		},
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
 	}
-	builder.publishedContent = &fakePublishedContentLister{
-		byPath: map[string]publishedcontent.ListResult{
-			publishedcontent.PathSimpleBuzz: {
-				Items: []publishedcontent.SectionItem{{
-					CurrentPinId:   "buzz-current:i0",
-					ProtocolPath:   publishedcontent.PathSimpleBuzz,
-					CreatedAt:      200,
-					UpdatedAt:      210,
-					PayloadText:    "hello",
-					PayloadExposed: true,
-				}},
-			},
-		},
-	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqbot",
+		MetaId:       "legacy-meta",
+	}})
+	agg.SetPublishedContentLister(&recordingPublishedContentLister{result: &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+		CurrentPinId:   "buzz-current:i0",
+		ProtocolPath:   publishedcontent.PathSimpleBuzz,
+		CreatedAt:      200,
+		UpdatedAt:      210,
+		PayloadText:    "hello",
+		PayloadExposed: true,
+	}}}})
 
-	data, err := builder.BuildV3("idqbot", DefaultOptions())
+	data, err := agg.BuildV3("idqbot", DefaultOptions())
 	if err != nil {
 		t.Fatalf("BuildV3: %v", err)
 	}
@@ -1036,6 +1018,13 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 	sort.Strings(gotKeys)
 	if !reflect.DeepEqual(gotKeys, wantKeys) {
 		t.Fatalf("item keys = %#v, want %#v", gotKeys, wantKeys)
+	}
+	dataObj, ok := got["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data should be an object: %#v", got["data"])
+	}
+	if _, ok := dataObj["payload"]; !ok {
+		t.Fatalf("data.payload must be present for text payload items: %#v", got)
 	}
 	for _, forbidden := range []string{"sourcePinId", "currentPinId", "createdAt", "updatedAt", "chainName", "publisher", "proof", "service", "payloadJson", "payloadText", "payloadExposed"} {
 		if _, ok := got[forbidden]; ok {
@@ -1090,11 +1079,11 @@ For services, use the same provider-global service list as v2:
 
 ```go
 func (a *Aggregator) loadServicesSectionV3(canonical CanonicalIdentity, opts Options) (SectionV3, error) {
-	section := emptySectionV3("services", skillservice.ProtocolPath, homepageSectionLimit)
-	if a.homepageServices == nil {
+	section := emptySectionV3("services", skillservice.PathSkillService, homepageSectionLimit)
+	if a.homepageServiceLister == nil {
 		return section, nil
 	}
-	result, err := a.homepageServices.ListHomepageByProvider(skillservice.HomepageListParams{
+	result, err := a.homepageServiceLister.ListHomepageByProvider(skillservice.HomepageListParams{
 		ProviderGlobalMetaId: canonical.GlobalMetaId,
 		Size:                 homepageSectionReadSize,
 		IncludeInactive:      opts.IncludeInactiveServices,
@@ -1103,7 +1092,7 @@ func (a *Aggregator) loadServicesSectionV3(canonical CanonicalIdentity, opts Opt
 		return section, err
 	}
 	section.Page.HasMore = result.HasMore
-	for _, item := range result.Items {
+	for _, item := range result.List {
 		if len(section.Items) >= homepageSectionLimit {
 			break
 		}
@@ -1120,7 +1109,7 @@ Map service payloads with an allow-list:
 func serviceSectionItemV3(item skillservice.ServiceListItem) SectionItemV3 {
 	return SectionItemV3{
 		PinId:        firstNonEmpty(item.CurrentPinId, item.SourceServicePinId),
-		ProtocolPath: skillservice.ProtocolPath,
+		ProtocolPath: skillservice.PathSkillService,
 		Timestamp:    item.UpdatedAt,
 		Data: SectionItemDataV3{
 			Payload: map[string]any{
@@ -1147,34 +1136,42 @@ For buzzes and metaapps:
 ```go
 func (a *Aggregator) loadPublishedContentSectionV3(canonical CanonicalIdentity, opts Options, id, protocolPath string) (SectionV3, error) {
 	section := emptySectionV3(id, protocolPath, homepageSectionLimit)
-	result, err := a.loadPublishedContentByCanonicalIdentity(canonical, Options{Version: "v3"}, protocolPath)
+	contentResult, err := a.loadPublishedContentByCanonicalIdentity(canonical, Options{Version: "v3"}, protocolPath)
 	if err != nil {
 		return section, err
 	}
-	section.Page.HasMore = result.HasMore
-	for _, item := range result.Items {
+	section.Page.HasMore = contentResult.HasMore
+	for _, item := range contentResult.Items {
 		if len(section.Items) >= homepageSectionLimit {
 			break
 		}
-		section.Items = append(section.Items, publishedContentSectionItemV3(item))
+		sectionItem, ok := publishedContentSectionItemV3(item)
+		if !ok {
+			continue
+		}
+		section.Items = append(section.Items, sectionItem)
 	}
 	section.Page.Count = len(section.Items)
 	return section, nil
 }
 
-func publishedContentSectionItemV3(item publishedcontent.SectionItem) SectionItemV3 {
+func publishedContentSectionItemV3(item publishedcontent.SectionItem) (SectionItemV3, bool) {
+	payload := sectionItemData(item)
+	if payload == nil {
+		return SectionItemV3{}, false
+	}
 	return SectionItemV3{
 		PinId:        firstNonEmpty(item.CurrentPinId, item.SourcePinId),
 		ProtocolPath: item.ProtocolPath,
 		Timestamp:    publishedContentItemSortTimestamp(item),
 		Data: SectionItemDataV3{
-			Payload: sectionItemData(item),
+			Payload: payload,
 		},
-	}
+	}, true
 }
 ```
 
-Do not include `publishedcontent.PathMetaBotSkill` in v3.
+Do not include `publishedcontent.PathMetaBotSkill` in v3. Skip binary-only or non-exposed published content records in v3 sections so JSON/text items always carry `data.payload`.
 
 - [ ] **Step 4: Run focused section tests**
 
@@ -1233,7 +1230,97 @@ if got.Data.SchemaVersion != "botHomepage.v3" {
 }
 ```
 
-- [ ] **Step 2: Write mempool visibility tests**
+- [ ] **Step 2: Write provider-visible services regression test**
+
+Add this route-level regression test in `internal/api/router_test.go` so it uses the real `skillservice.Aggregator` and catches the bug where v3 accidentally reads the wrong homepage-provider path:
+
+```go
+func seedVisibleSkillService(t *testing.T, agg *skillservice.Aggregator, globalMetaId string) string {
+	t.Helper()
+	currentPinId := "service-" + globalMetaId + ":i0"
+	body := mustMarshalJSON(t, map[string]interface{}{
+		"serviceName":    "topup",
+		"displayName":    "Top Up",
+		"description":    "Mobile top up",
+		"providerSkill":  "S1",
+		"outputType":     "text",
+		"price":          "1",
+		"currency":       "SPACE",
+		"settlementKind": "native",
+		"paymentAddress": "addr-" + globalMetaId,
+	})
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            currentPinId,
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   body,
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		CreateMetaId:  "meta-" + globalMetaId,
+		MetaId:        "meta-" + globalMetaId,
+		CreateAddress: "addr-" + globalMetaId,
+		Address:       "addr-" + globalMetaId,
+		GlobalMetaId:  globalMetaId,
+		Timestamp:     4000,
+		Number:        40,
+	}); err != nil {
+		t.Fatalf("seed skill service: %v", err)
+	}
+	return currentPinId
+}
+
+func TestRouterBotHomepageV3ServicesMatchesProviderVisibleList(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+	currentPinId := seedVisibleSkillService(t, fixture.skillAgg, "idq-bot")
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v2")
+	if w.Code != http.StatusOK || body["code"] != float64(0) {
+		t.Fatalf("v2 response status=%d body=%s", w.Code, w.Body.String())
+	}
+	v2Data := body["data"].(map[string]interface{})
+	v2Services := v2Data["services"].([]interface{})
+	if len(v2Services) == 0 {
+		t.Fatalf("v2 provider-visible services should not be empty: %#v", v2Data)
+	}
+	v2Service := v2Services[0].(map[string]interface{})
+	if v2Service["currentPinId"] != currentPinId {
+		t.Fatalf("v2 currentPinId = %#v, want %s", v2Service["currentPinId"], currentPinId)
+	}
+
+	w, body = get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v3")
+	if w.Code != http.StatusOK || body["code"] != float64(0) {
+		t.Fatalf("v3 response status=%d body=%s", w.Code, w.Body.String())
+	}
+	v3Data := body["data"].(map[string]interface{})
+	sections := v3Data["sections"].([]interface{})
+	var servicesSection map[string]interface{}
+	for _, rawSection := range sections {
+		section := rawSection.(map[string]interface{})
+		if section["id"] == "services" {
+			servicesSection = section
+			break
+		}
+	}
+	if servicesSection == nil {
+		t.Fatalf("v3 services section missing: %#v", sections)
+	}
+	items := servicesSection["items"].([]interface{})
+	if len(items) == 0 {
+		t.Fatalf("v3 services items should not be empty when v2 sees provider services: %#v", servicesSection)
+	}
+	item := items[0].(map[string]interface{})
+	if item["pinId"] != currentPinId {
+		t.Fatalf("v3 service pinId = %#v, want %s", item["pinId"], currentPinId)
+	}
+	data := item["data"].(map[string]interface{})
+	if _, ok := data["payload"]; !ok {
+		t.Fatalf("v3 service data.payload missing: %#v", item)
+	}
+}
+```
+
+- [ ] **Step 3: Write mempool visibility tests**
 
 Add one integrated test path that seeds pending records through existing aggregator mempool handlers and then builds v3:
 
@@ -1260,7 +1347,7 @@ sections.metaapps has the pending metaapp
 
 Use existing test helpers where possible. Do not add a new fake read model if an existing package-level mempool test can exercise the real folding path.
 
-- [ ] **Step 3: Run route and mempool tests**
+- [ ] **Step 4: Run route and mempool tests**
 
 ```bash
 CGO_ENABLED=0 go test ./internal/aggregator/bothomepage ./internal/aggregator/userinfo ./internal/aggregator/skillservice ./internal/aggregator/publishedcontent ./internal/api -count=1
@@ -1268,7 +1355,7 @@ CGO_ENABLED=0 go test ./internal/aggregator/bothomepage ./internal/aggregator/us
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit and post buzz**
+- [ ] **Step 5: Commit and post buzz**
 
 ```bash
 git status --short
