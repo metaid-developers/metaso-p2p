@@ -549,6 +549,169 @@ func TestRouterBotHomepageDefaultStillV1(t *testing.T) {
 	}
 }
 
+func TestRouterBotHomepageVersionAndSchemaSelectors(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "version v2",
+			path: "/api/bot-homepage/globalmetaid/idq-bot?version=v2",
+			want: "botHomepage.v2",
+		},
+		{
+			name: "schemaVersion v2",
+			path: "/api/bot-homepage/globalmetaid/idq-bot?schemaVersion=botHomepage.v2",
+			want: "botHomepage.v2",
+		},
+		{
+			name: "version v3",
+			path: "/api/bot-homepage/globalmetaid/idq-bot?version=v3",
+			want: "botHomepage.v3",
+		},
+		{
+			name: "schemaVersion v3",
+			path: "/api/bot-homepage/globalmetaid/idq-bot?schemaVersion=botHomepage.v3",
+			want: "botHomepage.v3",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, body := get(t, fixture.router, tc.path)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+			}
+			if body["code"] != float64(0) {
+				t.Fatalf("code = %#v body=%s", body["code"], w.Body.String())
+			}
+
+			data, ok := body["data"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("data = %T %#v, want object", body["data"], body["data"])
+			}
+			if data["schemaVersion"] != tc.want {
+				t.Fatalf("schemaVersion = %#v, want %q", data["schemaVersion"], tc.want)
+			}
+
+			if tc.want == "botHomepage.v2" {
+				if _, ok := data["sections"]; !ok {
+					t.Fatalf("v2 response missing sections: %#v", data)
+				}
+				return
+			}
+
+			for _, forbidden := range []string{"proofs", "source", "actions", "services", "globalMetaId", "canonical", "resolvedAt"} {
+				if _, ok := data[forbidden]; ok {
+					t.Fatalf("v3 top-level field %q should be absent: %#v", forbidden, data)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterBotHomepageV2AndV3ExposeProviderVisibleServices(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+
+	const currentPinID = "service-idq-bot:i0"
+	if _, err := fixture.skillAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            currentPinID,
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   mustMarshalJSON(t, map[string]interface{}{"serviceName": "fortune", "displayName": "Fortune", "providerSkill": "fortune-skill", "outputType": "text", "price": "1", "currency": "SPACE", "settlementKind": "address", "paymentAddress": "addr-idq-bot"}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000001,
+		Number:        101,
+	}); err != nil {
+		t.Fatalf("seed skill service: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v2")
+	if w.Code != http.StatusOK || body["code"] != float64(0) {
+		t.Fatalf("v2 status=%d body=%s", w.Code, w.Body.String())
+	}
+	v2Data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v2 data = %T %#v, want object", body["data"], body["data"])
+	}
+	services, ok := v2Data["services"].([]interface{})
+	if !ok || len(services) == 0 {
+		t.Fatalf("v2 services = %T %#v, want non-empty array", v2Data["services"], v2Data["services"])
+	}
+	firstV2, ok := services[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v2 first service = %T %#v, want object", services[0], services[0])
+	}
+	if firstV2["currentPinId"] != currentPinID {
+		t.Fatalf("v2 currentPinId = %#v, want %q", firstV2["currentPinId"], currentPinID)
+	}
+
+	w, body = get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v3")
+	if w.Code != http.StatusOK {
+		t.Fatalf("v3 status=%d body=%s", w.Code, w.Body.String())
+	}
+	if body["code"] != float64(0) {
+		t.Fatalf("v3 code = %#v body=%s", body["code"], w.Body.String())
+	}
+	v3Data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v3 data = %T %#v, want object", body["data"], body["data"])
+	}
+	if v3Data["schemaVersion"] != "botHomepage.v3" {
+		t.Fatalf("v3 schemaVersion = %#v", v3Data["schemaVersion"])
+	}
+	sections, ok := v3Data["sections"].([]interface{})
+	if !ok {
+		t.Fatalf("v3 sections = %T %#v, want array", v3Data["sections"], v3Data["sections"])
+	}
+	servicesSection := routerSectionByID(t, sections, "services")
+	items, ok := servicesSection["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		t.Fatalf("v3 services.items = %T %#v, want non-empty array", servicesSection["items"], servicesSection["items"])
+	}
+	firstV3, ok := items[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v3 first service item = %T %#v, want object", items[0], items[0])
+	}
+	if firstV3["pinId"] != currentPinID {
+		t.Fatalf("v3 pinId = %#v, want %q", firstV3["pinId"], currentPinID)
+	}
+	data, ok := firstV3["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v3 first service data = %T %#v, want object", firstV3["data"], firstV3["data"])
+	}
+	if _, ok := data["payload"]; !ok {
+		t.Fatalf("v3 first service data.payload missing: %#v", data)
+	}
+}
+
+func routerSectionByID(t *testing.T, sections []interface{}, wantID string) map[string]interface{} {
+	t.Helper()
+
+	for _, section := range sections {
+		typed, ok := section.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if typed["id"] == wantID {
+			return typed
+		}
+	}
+	t.Fatalf("section %q missing from %#v", wantID, sections)
+	return nil
+}
+
 // TestRouter_PrivateChatRoutesHandledByPrivateChat verifies the four
 // /api/group-chat/private-* routes are handled by the privatechat aggregator
 // (which returns a real payload) rather than the groupchat handleStub (which
