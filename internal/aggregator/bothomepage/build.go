@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 )
@@ -35,6 +36,10 @@ type HomepageServiceLister interface {
 
 type PublishedContentLister interface {
 	List(publishedcontent.ListParams) (*publishedcontent.ListResult, error)
+}
+
+type ChatInteractionLister interface {
+	ListOutgoingHomepageInteractions(privatechat.HomepageInteractionListParams) (*privatechat.HomepageInteractionListResult, error)
 }
 
 func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, error) {

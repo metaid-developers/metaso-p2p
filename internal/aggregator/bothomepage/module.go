@@ -28,6 +28,7 @@ type Aggregator struct {
 	serviceLister          ServiceLister
 	homepageServiceLister  HomepageServiceLister
 	publishedContentLister PublishedContentLister
+	chatInteractionLister  ChatInteractionLister
 	localPresence          presence.LocalReader
 	globalPresence         presence.GlobalReader
 	assetResolver          *skillservice.AssetResolver
@@ -66,6 +67,10 @@ func (a *Aggregator) SetHomepageServiceLister(lister HomepageServiceLister) {
 
 func (a *Aggregator) SetPublishedContentLister(lister PublishedContentLister) {
 	a.publishedContentLister = lister
+}
+
+func (a *Aggregator) SetChatInteractionLister(lister ChatInteractionLister) {
+	a.chatInteractionLister = lister
 }
 
 func (a *Aggregator) SetPresenceReaders(local presence.LocalReader, global presence.GlobalReader) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 )
@@ -54,7 +55,7 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 }
 
 func (a *Aggregator) loadSectionsV3(canonical CanonicalIdentity, opts Options) ([]SectionV3, []string) {
-	sections := make([]SectionV3, 0, 3)
+	sections := make([]SectionV3, 0, 4)
 	warnings := make([]string, 0)
 
 	if opts.IncludeServices {
@@ -64,15 +65,20 @@ func (a *Aggregator) loadSectionsV3(canonical CanonicalIdentity, opts Options) (
 			warnings = append(warnings, warning)
 		}
 	}
-	if opts.IncludeBuzzes {
-		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "buzzes", publishedcontent.PathSimpleBuzz, "buzzes section source unavailable")
+	if opts.IncludeMetaApps {
+		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "metaapps", publishedcontent.PathMetaApp, "metaapps section source unavailable")
 		sections = append(sections, section)
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
 	}
-	if opts.IncludeMetaApps {
-		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "metaapps", publishedcontent.PathMetaApp, "metaapps section source unavailable")
+	section, warning := a.loadChatsSectionV3(canonical)
+	sections = append(sections, section)
+	if warning != "" {
+		warnings = append(warnings, warning)
+	}
+	if opts.IncludeBuzzes {
+		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "buzzes", publishedcontent.PathSimpleBuzz, "buzzes section source unavailable")
 		sections = append(sections, section)
 		if warning != "" {
 			warnings = append(warnings, warning)
@@ -135,6 +141,47 @@ func (a *Aggregator) loadServicesSectionV3(canonical CanonicalIdentity, opts Opt
 	}
 
 	return sectionWithItemsV3("services", skillservice.PathSkillService, items, result.HasMore), ""
+}
+
+func (a *Aggregator) loadChatsSectionV3(canonical CanonicalIdentity) (SectionV3, string) {
+	if a == nil || a.chatInteractionLister == nil {
+		return emptySectionV3("chats", privatechat.HomepageSimpleMsgProtocolPath), ""
+	}
+
+	result, err := a.chatInteractionLister.ListOutgoingHomepageInteractions(privatechat.HomepageInteractionListParams{
+		GlobalMetaId: canonical.GlobalMetaId,
+		MetaId:       canonical.MetaId,
+		Address:      canonical.Address,
+		Size:         homepageSectionReadSize,
+	})
+	if err != nil {
+		return emptySectionV3("chats", privatechat.HomepageSimpleMsgProtocolPath), "chats section source unavailable"
+	}
+	if result == nil || len(result.Items) == 0 {
+		return emptySectionV3("chats", privatechat.HomepageSimpleMsgProtocolPath), ""
+	}
+
+	items := make([]SectionItemV3, 0, len(result.Items))
+	for _, item := range result.Items {
+		pinID := strings.TrimSpace(item.PinId)
+		interactWith := strings.TrimSpace(item.InteractWith)
+		if pinID == "" || interactWith == "" {
+			continue
+		}
+		items = append(items, SectionItemV3{
+			PinId:        pinID,
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    item.Timestamp,
+			Data: SectionItemDataV3{
+				InteractWith: interactWith,
+			},
+		})
+	}
+	if len(items) == 0 {
+		return emptySectionV3("chats", privatechat.HomepageSimpleMsgProtocolPath), ""
+	}
+
+	return sectionWithItemsV3("chats", privatechat.HomepageSimpleMsgProtocolPath, items, result.HasMore), ""
 }
 
 func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) SectionItemV3 {

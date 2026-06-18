@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
@@ -82,6 +83,17 @@ type recordingPublishedContentLister struct {
 
 func (r *recordingPublishedContentLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
 	r.gotParams = append(r.gotParams, params)
+	return r.result, r.err
+}
+
+type recordingChatInteractionLister struct {
+	gotParams privatechat.HomepageInteractionListParams
+	result    *privatechat.HomepageInteractionListResult
+	err       error
+}
+
+func (r *recordingChatInteractionLister) ListOutgoingHomepageInteractions(params privatechat.HomepageInteractionListParams) (*privatechat.HomepageInteractionListResult, error) {
+	r.gotParams = params
 	return r.result, r.err
 }
 
@@ -1421,7 +1433,7 @@ func TestBuildV3TopLevelShapeExcludesV2Fields(t *testing.T) {
 	}
 }
 
-func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
+func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 	t.Run("loads sections in v3 order from homepage and published content listers", func(t *testing.T) {
 		agg := &Aggregator{}
 		if err := agg.Init(nil, nil); err != nil {
@@ -1485,6 +1497,31 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 		}
 		agg.SetPublishedContentLister(contentLister)
 
+		chatLister := &recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+			Items: []privatechat.HomepageInteraction{
+				{
+					PinId:        "chat-current:i0",
+					ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+					Timestamp:    1710000005,
+					InteractWith: "idqPeerBot",
+				},
+				{
+					PinId:        "",
+					ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+					Timestamp:    1710000006,
+					InteractWith: "idqSkippedPeer",
+				},
+				{
+					PinId:        "chat-missing-peer:i0",
+					ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+					Timestamp:    1710000007,
+					InteractWith: "",
+				},
+			},
+			HasMore: true,
+		}}
+		agg.SetChatInteractionLister(chatLister)
+
 		opts := defaultV3Options()
 		opts.IncludeInactiveServices = true
 		got, err := agg.BuildV3("idqRequestedBot", opts)
@@ -1492,7 +1529,7 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 			t.Fatalf("BuildV3 returned error: %v", err)
 		}
 
-		assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+		assertExactSectionIDsV3(t, got.Sections, []string{"services", "metaapps", "chats", "buzzes"})
 
 		services := got.Sections[0]
 		if services.ProtocolPath != skillservice.PathSkillService {
@@ -1526,7 +1563,57 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 			t.Fatalf("service lister ChainName = %q, want empty", serviceLister.gotParams.ChainName)
 		}
 
-		buzzes := got.Sections[1]
+		metaapps := got.Sections[1]
+		if metaapps.ProtocolPath != publishedcontent.PathMetaApp {
+			t.Fatalf("metaapps.ProtocolPath = %q, want %q", metaapps.ProtocolPath, publishedcontent.PathMetaApp)
+		}
+		if len(metaapps.Items) != 1 {
+			t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
+		}
+		if payload, ok := metaapps.Items[0].Data.Payload.(map[string]any); !ok || payload["title"] != "Homepage MetaApp" || payload["kind"] != "tool" {
+			t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want JSON payload", metaapps.Items[0].Data.Payload)
+		}
+
+		chats := got.Sections[2]
+		if chats.ProtocolPath != privatechat.HomepageSimpleMsgProtocolPath {
+			t.Fatalf("chats.ProtocolPath = %q, want %q", chats.ProtocolPath, privatechat.HomepageSimpleMsgProtocolPath)
+		}
+		if chats.Page.Limit != homepageSectionLimit || chats.Page.Count != 1 || !chats.Page.HasMore {
+			t.Fatalf("chats.Page = %+v", chats.Page)
+		}
+		if len(chats.Items) != 1 {
+			t.Fatalf("chats.Items length = %d, want 1", len(chats.Items))
+		}
+		if chats.Items[0].PinId != "chat-current:i0" {
+			t.Fatalf("chats.Items[0].PinId = %q, want chat-current:i0", chats.Items[0].PinId)
+		}
+		if chats.Items[0].ProtocolPath != privatechat.HomepageSimpleMsgProtocolPath {
+			t.Fatalf("chats.Items[0].ProtocolPath = %q, want %q", chats.Items[0].ProtocolPath, privatechat.HomepageSimpleMsgProtocolPath)
+		}
+		if chats.Items[0].Timestamp != 1710000005 {
+			t.Fatalf("chats.Items[0].Timestamp = %d, want source timestamp", chats.Items[0].Timestamp)
+		}
+		if chats.Items[0].Data.InteractWith != "idqPeerBot" {
+			t.Fatalf("chats.Items[0].Data.InteractWith = %q, want idqPeerBot", chats.Items[0].Data.InteractWith)
+		}
+		if chats.Items[0].Data.Payload != nil {
+			t.Fatalf("chats.Items[0].Data.Payload = %#v, want nil", chats.Items[0].Data.Payload)
+		}
+		assertMinimalChatSectionItemV3JSON(t, chats.Items[0])
+		if chatLister.gotParams.GlobalMetaId != "idqCanonicalBot" {
+			t.Fatalf("chat lister GlobalMetaId = %q, want idqCanonicalBot", chatLister.gotParams.GlobalMetaId)
+		}
+		if chatLister.gotParams.MetaId != "metaBot" {
+			t.Fatalf("chat lister MetaId = %q, want metaBot", chatLister.gotParams.MetaId)
+		}
+		if chatLister.gotParams.Address != "1BotAddress" {
+			t.Fatalf("chat lister Address = %q, want 1BotAddress", chatLister.gotParams.Address)
+		}
+		if chatLister.gotParams.Size != homepageSectionReadSize {
+			t.Fatalf("chat lister Size = %d, want %d", chatLister.gotParams.Size, homepageSectionReadSize)
+		}
+
+		buzzes := got.Sections[3]
 		if buzzes.ProtocolPath != publishedcontent.PathSimpleBuzz {
 			t.Fatalf("buzzes.ProtocolPath = %q, want %q", buzzes.ProtocolPath, publishedcontent.PathSimpleBuzz)
 		}
@@ -1541,17 +1628,6 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 		}
 		if payload, ok := buzzes.Items[0].Data.Payload.(string); !ok || payload != "latest buzz" {
 			t.Fatalf("buzzes.Items[0].Data.Payload = %#v, want latest buzz", buzzes.Items[0].Data.Payload)
-		}
-
-		metaapps := got.Sections[2]
-		if metaapps.ProtocolPath != publishedcontent.PathMetaApp {
-			t.Fatalf("metaapps.ProtocolPath = %q, want %q", metaapps.ProtocolPath, publishedcontent.PathMetaApp)
-		}
-		if len(metaapps.Items) != 1 {
-			t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
-		}
-		if payload, ok := metaapps.Items[0].Data.Payload.(map[string]any); !ok || payload["title"] != "Homepage MetaApp" || payload["kind"] != "tool" {
-			t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want JSON payload", metaapps.Items[0].Data.Payload)
 		}
 
 		if len(contentLister.gotParams) != 6 {
@@ -1581,6 +1657,7 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 			Name:         "Section Bot",
 		}})
 		agg.SetHomepageServiceLister(&recordingHomepageServiceLister{err: errors.New("services unavailable")})
+		agg.SetChatInteractionLister(&recordingChatInteractionLister{err: errors.New("chats unavailable")})
 		agg.SetPublishedContentLister(&protocolRecordingPublishedContentLister{
 			errs: map[string]error{
 				publishedcontent.PathSimpleBuzz: errors.New("buzzes unavailable"),
@@ -1593,7 +1670,7 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 			t.Fatalf("BuildV3 returned error: %v", err)
 		}
 
-		assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+		assertExactSectionIDsV3(t, got.Sections, []string{"services", "metaapps", "chats", "buzzes"})
 		for _, section := range got.Sections {
 			if len(section.Items) != 0 {
 				t.Fatalf("section %q items = %+v, want empty after source error", section.ID, section.Items)
@@ -1601,8 +1678,9 @@ func TestBuildV3SectionsAreServicesBuzzesMetaapps(t *testing.T) {
 		}
 		assertWarnings(t, got.Warnings, []string{
 			"services section source unavailable",
-			"buzzes section source unavailable",
 			"metaapps section source unavailable",
+			"chats section source unavailable",
+			"buzzes section source unavailable",
 		})
 	})
 }
@@ -1678,12 +1756,20 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 			},
 		},
 	})
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{{
+			PinId:        "chat-source:i0",
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    1710000015,
+			InteractWith: "idqPeerBot",
+		}},
+	}})
 
 	got, err := agg.BuildV3("idqRequestedBot", defaultV3Options())
 	if err != nil {
 		t.Fatalf("BuildV3 returned error: %v", err)
 	}
-	assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+	assertExactSectionIDsV3(t, got.Sections, []string{"services", "metaapps", "chats", "buzzes"})
 
 	services := got.Sections[0]
 	if len(services.Items) != 1 {
@@ -1711,7 +1797,7 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 		t.Fatalf("service payload = %#v, want allow-list values", servicePayload)
 	}
 
-	metaapps := got.Sections[2]
+	metaapps := got.Sections[1]
 	if len(metaapps.Items) != 1 {
 		t.Fatalf("metaapps.Items length = %d, want 1 exposed payload item", len(metaapps.Items))
 	}
@@ -1728,7 +1814,8 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 
 	assertMinimalSectionItemV3JSON(t, services.Items[0])
 	assertMinimalSectionItemV3JSON(t, metaapps.Items[0])
-	assertMinimalSectionItemV3JSON(t, got.Sections[1].Items[0])
+	assertMinimalChatSectionItemV3JSON(t, got.Sections[2].Items[0])
+	assertMinimalSectionItemV3JSON(t, got.Sections[3].Items[0])
 }
 
 func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) {
@@ -1833,7 +1920,7 @@ func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) 
 	if err != nil {
 		t.Fatalf("BuildV3 returned error: %v", err)
 	}
-	assertExactSectionIDsV3(t, v3.Sections, []string{"services", "buzzes", "metaapps"})
+	assertExactSectionIDsV3(t, v3.Sections, []string{"services", "metaapps", "chats", "buzzes"})
 	services := v3.Sections[0]
 	if len(services.Items) != 1 {
 		t.Fatalf("v3 services section length = %d, want 1 when v2 services are visible: %+v", len(services.Items), services.Items)
@@ -2008,7 +2095,7 @@ func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 		t.Fatalf("Profile.Homepage = %+v, want pending homepage pin", got.Profile.Homepage)
 	}
 
-	assertExactSectionIDsV3(t, got.Sections, []string{"services", "buzzes", "metaapps"})
+	assertExactSectionIDsV3(t, got.Sections, []string{"services", "metaapps", "chats", "buzzes"})
 
 	services := got.Sections[0]
 	if len(services.Items) != 1 {
@@ -2021,7 +2108,7 @@ func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 		t.Fatal("services.Items[0].Data.Payload = nil, want payload")
 	}
 
-	buzzes := got.Sections[1]
+	buzzes := got.Sections[3]
 	if len(buzzes.Items) != 1 {
 		t.Fatalf("buzzes.Items length = %d, want 1", len(buzzes.Items))
 	}
@@ -2032,7 +2119,7 @@ func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 		t.Fatalf("buzzes.Items[0].Data.Payload = %#v, want pending buzz", buzzes.Items[0].Data.Payload)
 	}
 
-	metaapps := got.Sections[2]
+	metaapps := got.Sections[1]
 	if len(metaapps.Items) != 1 {
 		t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
 	}
@@ -2134,6 +2221,31 @@ func assertMinimalSectionItemV3JSON(t *testing.T, item SectionItemV3) {
 	assertMapHasOnlyKeys(t, data, []string{"payload"})
 	if _, ok := data["payload"]; !ok {
 		t.Fatalf("encoded data missing payload: %s", raw)
+	}
+}
+
+func assertMinimalChatSectionItemV3JSON(t *testing.T, item SectionItemV3) {
+	t.Helper()
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("json.Marshal chat section item: %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("json.Unmarshal chat section item %s: %v", raw, err)
+	}
+
+	assertMapHasOnlyKeys(t, encoded, []string{"data", "pinId", "protocolPath", "timestamp"})
+	data, ok := encoded["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("encoded data = %#v, want object; raw=%s", encoded["data"], raw)
+	}
+	assertMapHasOnlyKeys(t, data, []string{"interactWith"})
+	if _, ok := data["payload"]; ok {
+		t.Fatalf("encoded chat data unexpectedly contains payload: %s", raw)
+	}
+	if got, ok := data["interactWith"].(string); !ok || got == "" {
+		t.Fatalf("encoded chat data interactWith = %#v, want non-empty string; raw=%s", data["interactWith"], raw)
 	}
 }
 

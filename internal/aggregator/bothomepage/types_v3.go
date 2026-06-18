@@ -64,5 +64,6 @@ type SectionItemV3 struct {
 }
 
 type SectionItemDataV3 struct {
-	Payload any `json:"payload"`
+	Payload      any    `json:"payload,omitempty"`
+	InteractWith string `json:"interactWith,omitempty"`
 }
