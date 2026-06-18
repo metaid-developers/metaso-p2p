@@ -111,5 +111,7 @@ func aliasKey(value string) string {
 }
 
 func isHomepageSimpleMsgProtocol(protocol string) bool {
-	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(protocol)), "simplemsg")
+	normalized := strings.ToLower(strings.TrimSpace(protocol))
+	normalized = "/" + strings.Trim(normalized, "/")
+	return normalized == HomepageSimpleMsgProtocolPath
 }

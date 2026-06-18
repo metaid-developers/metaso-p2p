@@ -85,11 +85,25 @@ func TestListOutgoingHomepageInteractionsUsesIdentityAliases(t *testing.T) {
 		To:               "peer_meta",
 		TxId:             "legacy-out",
 		PinId:            "legacy-out:i0",
-		Protocol:         "/private/chat/simplemsg",
+		Protocol:         "/protocols/simplemsg",
 		Timestamp:        123,
 		Index:            -1,
 	}); err != nil {
 		t.Fatalf("save legacy message: %v", err)
+	}
+	if err := agg.SavePrivateMessage(&PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "legacy_bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "private_legacy_peer",
+		TxId:             "legacy-private",
+		PinId:            "legacy-private:i0",
+		Protocol:         "/private/chat/simplemsg",
+		Timestamp:        999,
+		Index:            -1,
+	}); err != nil {
+		t.Fatalf("save private-path message: %v", err)
 	}
 
 	got, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{

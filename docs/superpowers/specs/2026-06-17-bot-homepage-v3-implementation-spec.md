@@ -307,7 +307,6 @@ v3 should keep only consumer-useful query knobs:
 | `includeSections` | `true` | Allows callers to request profile-only v3. |
 | `includeServices` | `true` | Omits services section when false. |
 | `includeMetaApps` | `true` | Omits metaapps section when false. |
-| `includeChats` | `true` | Omits chats section when false. |
 | `includeBuzzes` | `true` | Omits buzzes section when false. |
 | `includeInactiveServices` | `false` | Matches existing service visibility behavior. |
 
