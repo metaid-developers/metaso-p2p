@@ -115,8 +115,8 @@ Business errors keep the existing codes:
       "items": []
     },
     {
-      "id": "buzzes",
-      "protocolPath": "/protocols/simplebuzz",
+      "id": "metaapps",
+      "protocolPath": "/protocols/metaapp",
       "page": {
         "limit": 5,
         "count": 0,
@@ -125,8 +125,18 @@ Business errors keep the existing codes:
       "items": []
     },
     {
-      "id": "metaapps",
-      "protocolPath": "/protocols/metaapp",
+      "id": "chats",
+      "protocolPath": "/protocols/simplemsg",
+      "page": {
+        "limit": 5,
+        "count": 0,
+        "hasMore": false
+      },
+      "items": []
+    },
+    {
+      "id": "buzzes",
+      "protocolPath": "/protocols/simplebuzz",
       "page": {
         "limit": 5,
         "count": 0,
@@ -239,8 +249,9 @@ v3 returns exactly these homepage sections, in this order:
 | Section ID | Protocol path |
 | --- | --- |
 | `services` | `/protocols/skill-service` |
-| `buzzes` | `/protocols/simplebuzz` |
 | `metaapps` | `/protocols/metaapp` |
+| `chats` | `/protocols/simplemsg` |
+| `buzzes` | `/protocols/simplebuzz` |
 
 v3 does not include a `skills` section.
 
@@ -248,8 +259,8 @@ Each section returns at most five items:
 
 ```json
 {
-  "id": "buzzes",
-  "protocolPath": "/protocols/simplebuzz",
+  "id": "services",
+  "protocolPath": "/protocols/skill-service",
   "page": {
     "limit": 5,
     "count": 5,
@@ -271,9 +282,7 @@ All section item arrays use one common shape:
   "pinId": "string",
   "protocolPath": "string",
   "timestamp": 0,
-  "data": {
-    "payload": {}
-  }
+  "data": {}
 }
 ```
 
@@ -283,12 +292,44 @@ Rules:
 - `protocolPath` is repeated on the item so the item remains self-describing
   when cached or rendered outside its parent section.
 - `timestamp` is the indexer timestamp used for ordering/display.
-- `data.payload` is the parsed protocol payload. JSON payloads are objects;
-  non-binary text payloads are strings.
+- Non-chat section items expose `data.payload`, the parsed protocol payload.
+  JSON payloads are objects; non-binary text payloads are strings.
 - Binary payload bytes are not returned.
 - Do not return `sourcePinId`, `currentPinId`, `createdAt`, `updatedAt`,
   `proof`, `payloadJson`, `payloadText`, `payloadExposed`, `chainName`, or
   publisher identity fields.
+
+## Chats Section
+
+The `chats` section uses protocol path `/protocols/simplemsg`. Its source is
+currently outgoing simplemsg records created by privatechat, but consumers
+should treat it as an abstract list of chat interactions rather than a
+privatechat-specific feed.
+
+Current extraction rule:
+
+- Include only outgoing simplemsg records for the current Bot.
+- Parse the simplemsg payload as JSON.
+- Set `data.interactWith` from the payload JSON `to` field.
+- Skip records that do not provide a usable `to` value.
+
+Chat items use the normal v3 item envelope:
+
+```json
+{
+  "pinId": "8bc2...i0",
+  "protocolPath": "/protocols/simplemsg",
+  "timestamp": 1781258875,
+  "data": {
+    "interactWith": "idq..."
+  }
+}
+```
+
+For `chats`, `data.interactWith` is the only exposed data field. The response
+must not expose message content, encryption metadata, the original simplemsg
+payload, txid fields, address fields, chain fields, or source fields inside
+`data`.
 
 Example service item:
 
