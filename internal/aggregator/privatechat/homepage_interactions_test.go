@@ -1,10 +1,13 @@
 package privatechat
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 func TestListOutgoingHomepageInteractionsFiltersSortsAndLimits(t *testing.T) {
@@ -126,6 +129,99 @@ func TestListOutgoingHomepageInteractionsUsesIdentityAliases(t *testing.T) {
 		InteractWith: "peer_meta",
 	}) {
 		t.Fatalf("item = %#v", got.Items[0])
+	}
+}
+
+func TestSavePrivateMessageWritesHomepageSenderIndexes(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	msg := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "indexed-out",
+		PinId:            "indexed-out:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        321,
+		Index:            -1,
+	}
+	if err := agg.SavePrivateMessage(msg); err != nil {
+		t.Fatalf("SavePrivateMessage: %v", err)
+	}
+
+	for _, alias := range []string{"global_bot", "bot_meta", "1botlegacyaddress"} {
+		count := 0
+		err := store.ScanPrefix(namespace, homepageSenderIndexPrefix(alias), func(key, value []byte) error {
+			count++
+			var got PrivateMessage
+			if err := json.Unmarshal(value, &got); err != nil {
+				t.Fatalf("unmarshal index value: %v", err)
+			}
+			if got.PinId != "indexed-out:i0" {
+				t.Fatalf("indexed pinId = %q, want indexed-out:i0", got.PinId)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("ScanPrefix(%s): %v", alias, err)
+		}
+		if count != 1 {
+			t.Fatalf("index entries for %s = %d, want 1", alias, count)
+		}
+	}
+}
+
+func TestListOutgoingHomepageInteractionsBackfillsHomepageSenderIndexes(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	legacy := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "legacy-backfill",
+		PinId:            "legacy-backfill:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        456,
+		Index:            0,
+	}
+	raw := mustMarshal(t, legacy)
+	if err := store.Set(namespace, pchatKey(legacy.From, legacy.To, legacy.Timestamp, legacy.TxId), raw); err != nil {
+		t.Fatalf("store.Set legacy message: %v", err)
+	}
+
+	agg := &Aggregator{}
+	if err := agg.Init(store, cache.New(store)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{
+		MetaId: "bot_meta",
+	})
+	if err != nil {
+		t.Fatalf("ListOutgoingHomepageInteractions: %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].PinId != "legacy-backfill:i0" {
+		t.Fatalf("items = %#v, want legacy-backfill:i0", got.Items)
+	}
+
+	count := 0
+	if err := store.ScanPrefix(namespace, homepageSenderIndexPrefix("bot_meta"), func(key, value []byte) error {
+		count++
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanPrefix(bot_meta): %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("backfilled index entries = %d, want 1", count)
+	}
+	if _, err := store.Get(namespace, homepageSenderIndexStateKey()); err != nil {
+		t.Fatalf("homepage sender index state key missing: %v", err)
 	}
 }
 

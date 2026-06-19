@@ -1,6 +1,8 @@
 package privatechat
 
 import (
+	"sync"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -15,6 +17,7 @@ type Aggregator struct {
 	cache         *cache.Cache[[]byte]
 	notifyCh      chan *aggregator.NotifyEvent
 	profileLookup ProfileLookup
+	homepageIndex sync.Mutex
 }
 
 const (
@@ -29,7 +32,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
-	return nil
+	return a.ensureHomepageSenderIndexes()
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {

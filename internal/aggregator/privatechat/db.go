@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -55,7 +57,10 @@ type PrivateGroupPath struct {
 }
 
 const (
-	pchatKeyConst = "pchat:"
+	pchatKeyConst                    = "pchat:"
+	homepageSenderIndexKeyConst      = "hpchat:from:"
+	homepageSenderIndexStateKeyConst = "hpchat:index-state:"
+	homepageSenderIndexVersion       = "v1"
 )
 
 // sortMetas returns the lower and higher metaId alphabetically.
@@ -94,7 +99,23 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 	if err != nil {
 		return err
 	}
-	return a.store.Set(namespace, pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId), raw)
+
+	db, err := a.store.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+
+	batch := db.NewBatch()
+	defer batch.Close()
+
+	if err := batch.Set(pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId), raw, pebble.Sync); err != nil {
+		return err
+	}
+	if err := writeHomepageSenderIndexEntries(batch, msg, raw); err != nil {
+		return err
+	}
+
+	return batch.Commit(pebble.Sync)
 }
 
 // GetPrivateChatList returns bidirectionally filtered messages between two users
@@ -255,6 +276,79 @@ func privateMessageDedupeKey(msg *PrivateMessage) string {
 		return msg.PinId
 	}
 	return msg.TxId + ":" + msg.From + ":" + msg.To
+}
+
+func homepageSenderIndexPrefix(alias string) []byte {
+	return []byte(fmt.Sprintf("%s%s:", homepageSenderIndexKeyConst, aliasKey(alias)))
+}
+
+func homepageSenderIndexKey(alias string, msg *PrivateMessage) []byte {
+	return []byte(fmt.Sprintf(
+		"%s%s:%019d:%s",
+		homepageSenderIndexKeyConst,
+		aliasKey(alias),
+		descendingTimestamp(msg.Timestamp),
+		homepageSenderIndexEntryID(msg),
+	))
+}
+
+func homepageSenderIndexStateKey() []byte {
+	return []byte(homepageSenderIndexStateKeyConst + homepageSenderIndexVersion)
+}
+
+func descendingTimestamp(timestamp int64) int64 {
+	if timestamp < 0 {
+		timestamp = 0
+	}
+	return math.MaxInt64 - timestamp
+}
+
+func homepageSenderIndexEntryID(msg *PrivateMessage) string {
+	if msg == nil {
+		return ""
+	}
+
+	id := privateMessageDedupeKey(msg)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = fmt.Sprintf("%019d", msg.Timestamp)
+	}
+	return strings.ReplaceAll(id, ":", "_")
+}
+
+func homepageSenderIndexAliases(msg *PrivateMessage) []string {
+	if msg == nil || !isHomepageSimpleMsgProtocol(msg.Protocol) || strings.TrimSpace(msg.To) == "" {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	aliases := make([]string, 0, 3)
+	add := func(value string) {
+		key := aliasKey(value)
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		aliases = append(aliases, key)
+	}
+
+	add(msg.From)
+	add(msg.FromGlobalMetaId)
+	add(msg.FromAddress)
+	return aliases
+}
+
+func writeHomepageSenderIndexEntries(batch *pebble.Batch, msg *PrivateMessage, raw []byte) error {
+	if batch == nil || msg == nil || len(raw) == 0 {
+		return nil
+	}
+
+	for _, alias := range homepageSenderIndexAliases(msg) {
+		if err := batch.Set(homepageSenderIndexKey(alias, msg), raw, pebble.Sync); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetPrivateChatHomes returns a list of conversation partners with last message preview.

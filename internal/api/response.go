@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +22,7 @@ func RespSuccess(c *gin.Context, data interface{}) {
 		"code":           0,
 		"data":           data,
 		"message":        "",
-		"processingTime": time.Now().UnixMilli(),
+		"processingTime": processingTimeMillis(c),
 	})
 }
 
@@ -36,7 +35,7 @@ func RespSuccessCode(c *gin.Context, code int, data interface{}) {
 		"code":           code,
 		"data":           data,
 		"message":        "",
-		"processingTime": time.Now().UnixMilli(),
+		"processingTime": processingTimeMillis(c),
 	})
 }
 

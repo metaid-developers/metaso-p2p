@@ -23,7 +23,7 @@ func SetupRouter(
 	version string,
 ) *gin.Engine {
 	router := gin.New()
-	router.Use(corsMiddleware(), gin.Logger(), gin.Recovery())
+	router.Use(RequestTimingMiddleware(), corsMiddleware(), gin.Logger(), gin.Recovery())
 
 	// Health check
 	router.GET(cfg.Service.HealthPath, func(c *gin.Context) {
