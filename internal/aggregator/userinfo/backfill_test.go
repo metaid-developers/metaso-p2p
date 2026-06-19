@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -82,6 +83,46 @@ func TestBackfillInfoPathsStoresPersonaAndHomepage(t *testing.T) {
 	}
 }
 
+func TestBackfillReplaysInfoPinsOldestToNewestAcrossPages(t *testing.T) {
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	metaID := "meta-user"
+	globalMetaID := "gid-user"
+	address := "addr-user"
+
+	olderClear := manapiInfoPinForTest("older-clear:i0", "/info/homepage", "", now.Add(-2*time.Minute), metaID, globalMetaID, address)
+	newerHomepage := manapiInfoPinForTest("newer-homepage:i0", "/info/homepage", `{"uri":"metaapp://homepage","renderer":"metaapp","contentType":"application/vnd.metaapp"}`, now.Add(-time.Minute), metaID, globalMetaID, address)
+
+	server := newUserInfoBackfillMANAPIServer(t, map[string]int{}, map[string][]map[string]any{
+		"/info/homepage": {newerHomepage, olderClear},
+	})
+	defer server.Close()
+
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	if err := agg.Backfill(BackfillOptions{
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Since:    now.Add(-time.Hour),
+		PageSize: 1,
+	}); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(globalMetaID)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("LookupByGlobalMetaId returned nil profile")
+	}
+	if profile.HomepageId != "newer-homepage:i0" {
+		t.Fatalf("HomepageId = %q, want newer-homepage:i0; profile=%#v", profile.HomepageId, profile)
+	}
+	if profile.Homepage != `{"uri":"metaapp://homepage","renderer":"metaapp","contentType":"application/vnd.metaapp"}` {
+		t.Fatalf("Homepage = %q, want newer homepage payload", profile.Homepage)
+	}
+}
+
 func manapiInfoPinForTest(id, path, body string, ts time.Time, metaID, globalMetaID, address string) map[string]any {
 	return map[string]any{
 		"id":             id,
@@ -116,13 +157,36 @@ func newUserInfoBackfillMANAPIServer(t *testing.T, requested map[string]int, pin
 		if r.URL.Query().Get("size") == "" {
 			t.Fatal("missing size query")
 		}
+		size, err := strconv.Atoi(r.URL.Query().Get("size"))
+		if err != nil || size <= 0 {
+			t.Fatalf("invalid size query %q", r.URL.Query().Get("size"))
+		}
 		requested[path]++
+		pins := pinsByPath[path]
+		start := 0
+		if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+			start, err = strconv.Atoi(cursor)
+			if err != nil || start < 0 {
+				t.Fatalf("invalid cursor query %q", cursor)
+			}
+		}
+		if start > len(pins) {
+			start = len(pins)
+		}
+		end := start + size
+		if end > len(pins) {
+			end = len(pins)
+		}
+		nextCursor := ""
+		if end < len(pins) {
+			nextCursor = strconv.Itoa(end)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"code": 1,
 			"data": map[string]any{
-				"list":       pinsByPath[path],
-				"nextCursor": "",
+				"list":       pins[start:end],
+				"nextCursor": nextCursor,
 			},
 		}); err != nil {
 			t.Fatalf("encode response: %v", err)

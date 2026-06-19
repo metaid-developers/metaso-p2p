@@ -78,6 +78,7 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	for _, path := range paths {
 		cursor := ""
 		seenCursors := make(map[string]struct{})
+		pinsToReplay := make([]*aggregator.PinInscription, 0, pageSize)
 		for {
 			seenCursors[cursor] = struct{}{}
 			page, err := client.ListPath(ctx, path, cursor, pageSize)
@@ -94,9 +95,7 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 					continue
 				}
 				allOlder = false
-				if _, err := a.HandleBlockPin(pin.toAggregatorPin()); err != nil {
-					return err
-				}
+				pinsToReplay = append(pinsToReplay, pin.toAggregatorPin())
 			}
 			if allOlder {
 				break
@@ -108,6 +107,11 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 				return fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
 			}
 			cursor = page.NextCursor
+		}
+		for i := len(pinsToReplay) - 1; i >= 0; i-- {
+			if _, err := a.HandleBlockPin(pinsToReplay[i]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
