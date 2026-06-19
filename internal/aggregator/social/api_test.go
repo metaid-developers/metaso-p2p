@@ -216,6 +216,77 @@ func TestSocialHandlersRejectInvalidParams(t *testing.T) {
 	}
 }
 
+func TestSocialHandlersRejectWrongListCursor(t *testing.T) {
+	router, agg := newSocialHandlerFixture(t)
+
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+		t.Fatalf("HandleBlockPin(source->target): %v", err)
+	}
+	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", "idq-source", "meta-source", "1Source", "idq-a", 1002)); err != nil {
+		t.Fatalf("HandleBlockPin(source->a): %v", err)
+	}
+	if _, err := agg.HandleBlockPin(followPin("follow-3:i0", "idq-b", "meta-b", "1B", "idq-target", 1003)); err != nil {
+		t.Fatalf("HandleBlockPin(b->target): %v", err)
+	}
+
+	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following?size=1")
+	if status != http.StatusOK {
+		t.Fatalf("following page1 HTTP status = %d, want 200; body=%v", status, body)
+	}
+	data := mustObject(t, body, "data")
+	cursor, ok := data["nextCursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("following page1 nextCursor = %v, want non-empty string; data=%v", data["nextCursor"], data)
+	}
+
+	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?cursor="+cursor)
+	if status != http.StatusOK {
+		t.Fatalf("followers with wrong-list cursor HTTP status = %d, want 200; body=%v", status, body)
+	}
+	if code := int(body["code"].(float64)); code != 40000 {
+		t.Fatalf("wrong-list cursor code = %d, want 40000; body=%v", code, body)
+	}
+	if body["message"] != "invalid parameter" {
+		t.Fatalf("wrong-list cursor message = %v, want invalid parameter; body=%v", body["message"], body)
+	}
+}
+
+func TestSocialHandlersRejectStaleCursor(t *testing.T) {
+	router, agg := newSocialHandlerFixture(t)
+
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+		t.Fatalf("HandleBlockPin(source->target): %v", err)
+	}
+	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", "idq-a", "meta-a", "1A", "idq-target", 1002)); err != nil {
+		t.Fatalf("HandleBlockPin(a->target): %v", err)
+	}
+
+	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?size=1")
+	if status != http.StatusOK {
+		t.Fatalf("followers page1 HTTP status = %d, want 200; body=%v", status, body)
+	}
+	data := mustObject(t, body, "data")
+	cursor, ok := data["nextCursor"].(string)
+	if !ok || cursor == "" {
+		t.Fatalf("followers page1 nextCursor = %v, want non-empty string; data=%v", data["nextCursor"], data)
+	}
+
+	if _, err := agg.HandleBlockPin(revokePin("revoke-2:i0", "follow-2:i0", 1003)); err != nil {
+		t.Fatalf("HandleBlockPin(revoke): %v", err)
+	}
+
+	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?cursor="+cursor)
+	if status != http.StatusOK {
+		t.Fatalf("followers with stale cursor HTTP status = %d, want 200; body=%v", status, body)
+	}
+	if code := int(body["code"].(float64)); code != 40000 {
+		t.Fatalf("stale cursor code = %d, want 40000; body=%v", code, body)
+	}
+	if body["message"] != "invalid parameter" {
+		t.Fatalf("stale cursor message = %v, want invalid parameter; body=%v", body["message"], body)
+	}
+}
+
 func newSocialHandlerFixture(t *testing.T) (*gin.Engine, *Aggregator) {
 	t.Helper()
 

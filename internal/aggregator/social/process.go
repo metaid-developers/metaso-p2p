@@ -156,16 +156,21 @@ func (a *Aggregator) listEdges(prefix []byte, params ListParams, parsePeer func(
 	if err != nil {
 		return nil, err
 	}
+	if len(cursorKey) > 0 && !bytes.HasPrefix(cursorKey, prefix) {
+		return nil, ErrInvalidParameter
+	}
 
 	items := make([]ListItem, 0, size)
 	nextCursor := ""
 	lastReturnedKey := []byte(nil)
 	skipUntilCursor := len(cursorKey) > 0
+	foundCursor := len(cursorKey) == 0
 
 	err = a.store.ScanPrefix(namespace, prefix, func(key, _ []byte) error {
 		if skipUntilCursor {
 			if bytes.Equal(key, cursorKey) {
 				skipUntilCursor = false
+				foundCursor = true
 			}
 			return nil
 		}
@@ -199,6 +204,9 @@ func (a *Aggregator) listEdges(prefix []byte, params ListParams, parsePeer func(
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !foundCursor {
+		return nil, ErrInvalidParameter
 	}
 	if len(items) > size {
 		items = items[:size]

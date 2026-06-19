@@ -417,6 +417,44 @@ func TestLookupRequestSubjectDistinguishesErrors(t *testing.T) {
 	}
 }
 
+func TestListFollowersRejectsStaleCursor(t *testing.T) {
+	agg, store := newTestSocialAggregator(t)
+	defer store.Close()
+
+	agg.SetProfileLookup(&fakeTargetLookup{
+		byGlobalMetaId: map[string]*TargetRef{
+			"idq-target": {MetaId: "meta-target", GlobalMetaId: "idq-target", Address: "1Target", Name: "Target", NameId: "name-target:i0", AvatarId: "avatar-target:i0"},
+			"idq-f1":     {MetaId: "meta-f1", GlobalMetaId: "idq-f1", Address: "1F1", Name: "Follower One", NameId: "name-f1:i0", AvatarId: "avatar-f1:i0"},
+			"idq-f2":     {MetaId: "meta-f2", GlobalMetaId: "idq-f2", Address: "1F2", Name: "Follower Two", NameId: "name-f2:i0", AvatarId: "avatar-f2:i0"},
+		},
+	})
+
+	for _, pin := range []*aggregator.PinInscription{
+		followPin("follow-f1:i0", "idq-f1", "meta-f1", "1F1", "idq-target", 1001),
+		followPin("follow-f2:i0", "idq-f2", "meta-f2", "1F2", "idq-target", 1002),
+	} {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Id, err)
+		}
+	}
+
+	page1, err := agg.ListFollowers(ListParams{GlobalMetaId: "idq-target", Size: 1})
+	if err != nil {
+		t.Fatalf("ListFollowers(page1): %v", err)
+	}
+	if page1.NextCursor == "" {
+		t.Fatal("ListFollowers(page1) nextCursor empty, want non-empty")
+	}
+
+	if _, err := agg.HandleBlockPin(revokePin("revoke-f2:i0", "follow-f2:i0", 1003)); err != nil {
+		t.Fatalf("HandleBlockPin(revoke): %v", err)
+	}
+
+	if _, err := agg.ListFollowers(ListParams{GlobalMetaId: "idq-target", Size: 1, Cursor: page1.NextCursor}); !errors.Is(err, ErrInvalidParameter) {
+		t.Fatalf("ListFollowers stale cursor err = %v, want ErrInvalidParameter", err)
+	}
+}
+
 func assertListOrder(t *testing.T, items []ListItem, want []string) {
 	t.Helper()
 	if len(items) != len(want) {
