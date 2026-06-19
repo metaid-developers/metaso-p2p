@@ -12,18 +12,18 @@ import (
 
 type compactListItemResponse struct {
 	GlobalMetaId string `json:"globalMetaId"`
-	Name         string `json:"name,omitempty"`
-	NameId       string `json:"nameId,omitempty"`
-	AvatarId     string `json:"avatarId,omitempty"`
+	Name         string `json:"name"`
+	NameId       string `json:"nameId"`
+	AvatarId     string `json:"avatarId"`
 }
 
 type profileListItemResponse struct {
 	GlobalMetaId string `json:"globalMetaId"`
-	Name         string `json:"name,omitempty"`
-	NameId       string `json:"nameId,omitempty"`
-	AvatarId     string `json:"avatarId,omitempty"`
-	Bio          string `json:"bio,omitempty"`
-	BioId        string `json:"bioId,omitempty"`
+	Name         string `json:"name"`
+	NameId       string `json:"nameId"`
+	AvatarId     string `json:"avatarId"`
+	Bio          string `json:"bio"`
+	BioId        string `json:"bioId"`
 	FollowedAt   int64  `json:"followedAt"`
 	FollowPinId  string `json:"followPinId"`
 }
@@ -43,11 +43,15 @@ type profileListResponse struct {
 type relationshipSourceResponse struct {
 	GlobalMetaId  string `json:"globalMetaId"`
 	FollowsTarget bool   `json:"followsTarget"`
+	FollowPinId   string `json:"followPinId"`
+	FollowedAt    int64  `json:"followedAt"`
 }
 
 type relationshipTargetResponse struct {
 	GlobalMetaId  string `json:"globalMetaId"`
 	FollowsSource bool   `json:"followsSource"`
+	FollowPinId   string `json:"followPinId"`
+	FollowedAt    int64  `json:"followedAt"`
 }
 
 type relationshipResponse struct {
@@ -112,10 +116,14 @@ func (a *Aggregator) handleRelationship(c *gin.Context) {
 		Source: relationshipSourceResponse{
 			GlobalMetaId:  result.Source.GlobalMetaId,
 			FollowsTarget: result.Source.FollowsTarget,
+			FollowPinId:   result.Source.FollowPinId,
+			FollowedAt:    result.Source.FollowedAt,
 		},
 		Target: relationshipTargetResponse{
 			GlobalMetaId:  result.Target.GlobalMetaId,
 			FollowsSource: result.Target.FollowsSource,
+			FollowPinId:   result.Target.FollowPinId,
+			FollowedAt:    result.Target.FollowedAt,
 		},
 		Mutual: result.Mutual,
 	})

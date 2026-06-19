@@ -129,11 +129,23 @@ func TestRelationshipBidirectionalResponseShape(t *testing.T) {
 	if source["followsTarget"] != true {
 		t.Fatalf("source.followsTarget = %v, want true; source=%v", source["followsTarget"], source)
 	}
+	if got := mustStringValue(t, source, "followPinId"); got != "follow-1:i0" {
+		t.Fatalf("source.followPinId = %q, want follow-1:i0; source=%v", got, source)
+	}
+	if got := mustInt64Value(t, source, "followedAt"); got != 1001 {
+		t.Fatalf("source.followedAt = %d, want 1001; source=%v", got, source)
+	}
 	if target["globalMetaId"] != "idq-target" {
 		t.Fatalf("target.globalMetaId = %v, want idq-target; target=%v", target["globalMetaId"], target)
 	}
 	if target["followsSource"] != true {
 		t.Fatalf("target.followsSource = %v, want true; target=%v", target["followsSource"], target)
+	}
+	if got := mustStringValue(t, target, "followPinId"); got != "follow-2:i0" {
+		t.Fatalf("target.followPinId = %q, want follow-2:i0; target=%v", got, target)
+	}
+	if got := mustInt64Value(t, target, "followedAt"); got != 1002 {
+		t.Fatalf("target.followedAt = %d, want 1002; target=%v", got, target)
 	}
 	if data["mutual"] != true {
 		t.Fatalf("mutual = %v, want true; data=%v", data["mutual"], data)
@@ -160,14 +172,89 @@ func TestRelationshipNoRelationStillReturnsFalseBooleans(t *testing.T) {
 	if source["followsTarget"] != false {
 		t.Fatalf("source.followsTarget = %v, want false; source=%v", source["followsTarget"], source)
 	}
+	if got := mustStringValue(t, source, "followPinId"); got != "" {
+		t.Fatalf("source.followPinId = %q, want empty; source=%v", got, source)
+	}
+	if got := mustInt64Value(t, source, "followedAt"); got != 0 {
+		t.Fatalf("source.followedAt = %d, want 0; source=%v", got, source)
+	}
 	if target["globalMetaId"] != "idq-b" {
 		t.Fatalf("target.globalMetaId = %v, want idq-b; target=%v", target["globalMetaId"], target)
 	}
 	if target["followsSource"] != false {
 		t.Fatalf("target.followsSource = %v, want false; target=%v", target["followsSource"], target)
 	}
+	if got := mustStringValue(t, target, "followPinId"); got != "" {
+		t.Fatalf("target.followPinId = %q, want empty; target=%v", got, target)
+	}
+	if got := mustInt64Value(t, target, "followedAt"); got != 0 {
+		t.Fatalf("target.followedAt = %d, want 0; target=%v", got, target)
+	}
 	if data["mutual"] != false {
 		t.Fatalf("mutual = %v, want false; data=%v", data["mutual"], data)
+	}
+}
+
+func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
+	router, agg := newSocialHandlerFixture(t)
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+		t.Fatalf("HandleBlockPin(create): %v", err)
+	}
+	agg.SetProfileLookup(&fakeTargetLookup{
+		byGlobalMetaId: map[string]*TargetRef{
+			"idq-source": {
+				MetaId:       "meta-source",
+				GlobalMetaId: "idq-source",
+				Address:      "1Source",
+				Name:         "Source",
+				NameId:       "name-source:i0",
+				AvatarId:     "avatar-source:i0",
+				Bio:          "source bio",
+				BioId:        "bio-source:i0",
+			},
+		},
+	})
+
+	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following")
+	if status != http.StatusOK {
+		t.Fatalf("compact HTTP status = %d, want 200; body=%v", status, body)
+	}
+	compactList := mustList(t, mustObject(t, body, "data"), "list")
+	if len(compactList) != 1 {
+		t.Fatalf("compact list length = %d, want 1; body=%v", len(compactList), body)
+	}
+	compactItem := mustObjectFromList(t, compactList, 0)
+	if compactItem["globalMetaId"] != "idq-target" {
+		t.Fatalf("compact globalMetaId = %v, want idq-target; item=%v", compactItem["globalMetaId"], compactItem)
+	}
+	for _, key := range []string{"name", "nameId", "avatarId"} {
+		if got := mustStringValue(t, compactItem, key); got != "" {
+			t.Fatalf("compact %s = %q, want empty; item=%v", key, got, compactItem)
+		}
+	}
+
+	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-source/following?view=profile")
+	if status != http.StatusOK {
+		t.Fatalf("profile HTTP status = %d, want 200; body=%v", status, body)
+	}
+	profileList := mustList(t, mustObject(t, body, "data"), "list")
+	if len(profileList) != 1 {
+		t.Fatalf("profile list length = %d, want 1; body=%v", len(profileList), body)
+	}
+	profileItem := mustObjectFromList(t, profileList, 0)
+	if profileItem["globalMetaId"] != "idq-target" {
+		t.Fatalf("profile globalMetaId = %v, want idq-target; item=%v", profileItem["globalMetaId"], profileItem)
+	}
+	for _, key := range []string{"name", "nameId", "avatarId", "bio", "bioId"} {
+		if got := mustStringValue(t, profileItem, key); got != "" {
+			t.Fatalf("profile %s = %q, want empty; item=%v", key, got, profileItem)
+		}
+	}
+	if got := mustStringValue(t, profileItem, "followPinId"); got != "follow-1:i0" {
+		t.Fatalf("profile followPinId = %q, want follow-1:i0; item=%v", got, profileItem)
+	}
+	if got := mustInt64Value(t, profileItem, "followedAt"); got != 1001 {
+		t.Fatalf("profile followedAt = %d, want 1001; item=%v", got, profileItem)
 	}
 }
 
@@ -427,4 +514,32 @@ func mustObjectFromList(t *testing.T, list []any, index int) map[string]any {
 		t.Fatalf("list[%d] = %T, want object; list=%v", index, list[index], list)
 	}
 	return item
+}
+
+func mustStringValue(t *testing.T, body map[string]any, key string) string {
+	t.Helper()
+
+	value, ok := body[key]
+	if !ok {
+		t.Fatalf("%s missing; body=%v", key, body)
+	}
+	str, ok := value.(string)
+	if !ok {
+		t.Fatalf("%s = %T, want string; body=%v", key, value, body)
+	}
+	return str
+}
+
+func mustInt64Value(t *testing.T, body map[string]any, key string) int64 {
+	t.Helper()
+
+	value, ok := body[key]
+	if !ok {
+		t.Fatalf("%s missing; body=%v", key, body)
+	}
+	number, ok := value.(float64)
+	if !ok {
+		t.Fatalf("%s = %T, want number; body=%v", key, value, body)
+	}
+	return int64(number)
 }
