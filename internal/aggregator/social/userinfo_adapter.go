@@ -42,5 +42,10 @@ func targetRefFromUserInfo(p *userinfo.UserProfile) *TargetRef {
 		MetaId:       p.MetaID,
 		GlobalMetaId: p.GlobalMetaID,
 		Address:      p.Address,
+		Name:         p.Name,
+		NameId:       p.NameId,
+		AvatarId:     p.AvatarId,
+		Bio:          p.Bio,
+		BioId:        p.BioId,
 	}
 }

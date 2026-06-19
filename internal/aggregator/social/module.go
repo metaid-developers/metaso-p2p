@@ -37,6 +37,9 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 }
 
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	if err := a.processPin(pin); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
