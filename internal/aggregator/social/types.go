@@ -117,3 +117,14 @@ func (a *Aggregator) lookupTargetRef(ref string) (*TargetRef, error) {
 
 	return nil, nil
 }
+
+func canonicalGlobalMetaIdRef(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", false
+	}
+	if strings.HasPrefix(strings.ToLower(ref), "idq") {
+		return ref, true
+	}
+	return "", false
+}

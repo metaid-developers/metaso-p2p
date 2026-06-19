@@ -36,13 +36,25 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription) error {
 	if err != nil || followerGlobalMetaId == "" {
 		return err
 	}
-	target, err := a.lookupTargetRef(decodeTargetRef(pin))
-	if err != nil || target == nil || strings.TrimSpace(target.GlobalMetaId) == "" {
+	targetRef := decodeTargetRef(pin)
+	target, err := a.lookupTargetRef(targetRef)
+	if err != nil {
 		return err
+	}
+	targetGlobalMetaId := ""
+	if target != nil {
+		targetGlobalMetaId = strings.TrimSpace(target.GlobalMetaId)
+	}
+	if targetGlobalMetaId == "" {
+		if fallback, ok := canonicalGlobalMetaIdRef(targetRef); ok {
+			targetGlobalMetaId = fallback
+		} else {
+			return nil
+		}
 	}
 	return a.saveActiveEdge(&FollowEdge{
 		FollowerGlobalMetaId: followerGlobalMetaId,
-		TargetGlobalMetaId:   strings.TrimSpace(target.GlobalMetaId),
+		TargetGlobalMetaId:   targetGlobalMetaId,
 		FollowPinId:          strings.TrimSpace(pin.Id),
 		FollowedAt:           pin.Timestamp,
 	})

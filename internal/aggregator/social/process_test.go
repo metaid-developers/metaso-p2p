@@ -251,6 +251,69 @@ func TestHandleBlockPinCreateAndRelationshipState(t *testing.T) {
 	}
 }
 
+func TestHandleBlockPinCreateFallsBackToCanonicalGlobalMetaIdTarget(t *testing.T) {
+	agg, store := newTestSocialAggregator(t)
+	defer store.Close()
+
+	agg.SetProfileLookup(&fakeTargetLookup{
+		byGlobalMetaId: map[string]*TargetRef{
+			"idq-source": {
+				MetaId:       "meta-source",
+				GlobalMetaId: "idq-source",
+				Address:      "1Source",
+				Name:         "Source",
+				NameId:       "name-source:i0",
+				AvatarId:     "avatar-source:i0",
+			},
+		},
+	})
+
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+		t.Fatalf("HandleBlockPin(create): %v", err)
+	}
+
+	following, err := agg.ListFollowing(ListParams{GlobalMetaId: "idq-source", Size: 10, View: ViewCompact})
+	if err != nil {
+		t.Fatalf("ListFollowing: %v", err)
+	}
+	if len(following.List) != 1 {
+		t.Fatalf("ListFollowing len = %d, want 1; list=%s", len(following.List), marshalItems(t, following.List))
+	}
+	if following.List[0].GlobalMetaId != "idq-target" {
+		t.Fatalf("ListFollowing[0].GlobalMetaId = %q, want idq-target; list=%s", following.List[0].GlobalMetaId, marshalItems(t, following.List))
+	}
+}
+
+func TestHandleBlockPinCreateDoesNotFallbackForUnresolvedMetaIdTarget(t *testing.T) {
+	agg, store := newTestSocialAggregator(t)
+	defer store.Close()
+
+	agg.SetProfileLookup(&fakeTargetLookup{
+		byGlobalMetaId: map[string]*TargetRef{
+			"idq-source": {
+				MetaId:       "meta-source",
+				GlobalMetaId: "idq-source",
+				Address:      "1Source",
+				Name:         "Source",
+				NameId:       "name-source:i0",
+				AvatarId:     "avatar-source:i0",
+			},
+		},
+	})
+
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "meta-target", 1001)); err != nil {
+		t.Fatalf("HandleBlockPin(create): %v", err)
+	}
+
+	following, err := agg.ListFollowing(ListParams{GlobalMetaId: "idq-source", Size: 10, View: ViewCompact})
+	if err != nil {
+		t.Fatalf("ListFollowing: %v", err)
+	}
+	if len(following.List) != 0 {
+		t.Fatalf("ListFollowing len = %d, want 0; list=%s", len(following.List), marshalItems(t, following.List))
+	}
+}
+
 func TestHandleBlockPinRevokeRemovesActiveRelation(t *testing.T) {
 	agg, store := newTestSocialAggregator(t)
 	defer store.Close()
