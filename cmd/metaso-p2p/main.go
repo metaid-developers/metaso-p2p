@@ -16,6 +16,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -69,6 +70,11 @@ func main() {
 		if err := aggRegistry.Register(userinfoAgg); err != nil {
 			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
 		}
+		socialAgg := &social.Aggregator{}
+		if err := aggRegistry.Register(socialAgg); err != nil {
+			log.Printf("WARNING: social aggregator init failed: %v", err)
+		}
+		socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
 		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
 			log.Printf("WARNING: groupchat aggregator init failed: %v", err)
 		}
