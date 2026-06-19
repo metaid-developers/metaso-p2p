@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/metaid-developers/metaso-p2p/internal/cache"
 )
 
 // listFixture seeds a fresh aggregator with a handful of services and
@@ -914,6 +916,51 @@ func TestListHomepageByProviderSkipsStaleProviderGlobalIndex(t *testing.T) {
 	}
 	if res.HasMore {
 		t.Fatal("expected HasMore=false when only stale indexed services exist")
+	}
+}
+
+func TestInitBackfillsMissingHomepageProviderGlobalIndexes(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "legacy-indexed-home:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "legacy-indexed-home", DisplayName: "Legacy Indexed Home",
+	})); err != nil {
+		t.Fatalf("seed legacy-indexed-home: %v", err)
+	}
+
+	for _, key := range [][]byte{
+		providerGlobalIndexKey("idq1-provA", 1000, "mvc", "legacy-indexed-home:i0"),
+		providerGlobalChainIndexKey("idq1-provA", "mvc", 1000, "legacy-indexed-home:i0"),
+		homepageProviderGlobalIndexStateKey(),
+	} {
+		if err := store.Delete(NamespaceService, key); err != nil {
+			t.Fatalf("delete %q: %v", string(key), err)
+		}
+	}
+
+	reloaded := &Aggregator{}
+	reloaded.SetProfileLookup(&fakeProfileLookup{
+		byMetaId: map[string]*ProfileSnapshot{
+			"provA": {MetaId: "provA", GlobalMetaId: "idq1-provA"},
+		},
+	})
+	if err := reloaded.Init(store, cache.New(store)); err != nil {
+		t.Fatalf("reloaded Init: %v", err)
+	}
+
+	if _, err := store.Get(NamespaceService, homepageProviderGlobalIndexStateKey()); err != nil {
+		t.Fatalf("state marker missing after Init backfill: %v", err)
+	}
+	if _, err := store.Get(NamespaceService,
+		providerGlobalIndexKey("idq1-provA", 1000, "mvc", "legacy-indexed-home:i0")); err != nil {
+		t.Fatalf("provider-global index missing after Init backfill: %v", err)
+	}
+	if _, err := store.Get(NamespaceService,
+		providerGlobalChainIndexKey("idq1-provA", "mvc", 1000, "legacy-indexed-home:i0")); err != nil {
+		t.Fatalf("provider-global-chain index missing after Init backfill: %v", err)
 	}
 }
 
