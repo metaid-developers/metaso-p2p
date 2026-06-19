@@ -162,6 +162,31 @@ func (p *pathPublishedContentLister) List(params publishedcontent.ListParams) (*
 	}}}, nil
 }
 
+type metaappCanonicalFastPathLister struct {
+	gotParams       []publishedcontent.ListParams
+	canonicalReady  bool
+	globalResult    *publishedcontent.ListResult
+	fallbackResults map[string]*publishedcontent.ListResult
+}
+
+func (l *metaappCanonicalFastPathLister) List(params publishedcontent.ListParams) (*publishedcontent.ListResult, error) {
+	l.gotParams = append(l.gotParams, params)
+	if params.PublisherGlobalMetaId != "" && l.globalResult != nil {
+		return l.globalResult, nil
+	}
+	if params.PublisherMetaId != "" {
+		return l.fallbackResults["metaid"], nil
+	}
+	if params.PublisherAddress != "" {
+		return l.fallbackResults["address"], nil
+	}
+	return &publishedcontent.ListResult{}, nil
+}
+
+func (l *metaappCanonicalFastPathLister) HomepageMetaAppsCanonicalGlobalReady() (bool, error) {
+	return l.canonicalReady, nil
+}
+
 func TestBuildUserInfoLookupUnavailable(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -927,6 +952,88 @@ func TestBuildV2SectionsExposePayloadUnderData(t *testing.T) {
 	if payload["title"] != "JSON MetaAPP" {
 		t.Fatalf("encoded data.payload.title = %#v, want JSON MetaAPP; raw=%s", payload["title"], raw)
 	}
+}
+
+func TestLoadPublishedContentByCanonicalIdentityMetaAppsFastPathAfterRepair(t *testing.T) {
+	canonical := CanonicalIdentity{
+		GlobalMetaId: "idqBot",
+		MetaId:       "metaBot",
+		Address:      "1BotAddress",
+	}
+	opts := DefaultOptions()
+
+	t.Run("uses global-only metaapps query when canonical repair is ready and global query is non-empty", func(t *testing.T) {
+		agg := &Aggregator{}
+		if err := agg.Init(nil, nil); err != nil {
+			t.Fatalf("Init returned error: %v", err)
+		}
+		lister := &metaappCanonicalFastPathLister{
+			canonicalReady: true,
+			globalResult: &publishedcontent.ListResult{Items: []publishedcontent.SectionItem{{
+				SourcePinId:           "metaapp-global:i0",
+				CurrentPinId:          "metaapp-global:i0",
+				ProtocolPath:          publishedcontent.PathMetaApp,
+				PublisherGlobalMetaId: "idqBot",
+				PayloadJSON:           map[string]any{"title": "Global MetaApp"},
+				PayloadExposed:        true,
+				UpdatedAt:             1710000200,
+			}}},
+		}
+		agg.SetPublishedContentLister(lister)
+
+		got, err := agg.loadPublishedContentByCanonicalIdentity(canonical, opts, publishedcontent.PathMetaApp)
+		if err != nil {
+			t.Fatalf("loadPublishedContentByCanonicalIdentity returned error: %v", err)
+		}
+		if len(got.Items) != 1 || got.Items[0].SourcePinId != "metaapp-global:i0" {
+			t.Fatalf("Items = %+v, want one global-indexed metaapp", got.Items)
+		}
+		if len(lister.gotParams) != 1 {
+			t.Fatalf("published content calls = %d, want global-only metaapps fast path", len(lister.gotParams))
+		}
+		if lister.gotParams[0].PublisherGlobalMetaId != "idqBot" {
+			t.Fatalf("global query PublisherGlobalMetaId = %q, want idqBot", lister.gotParams[0].PublisherGlobalMetaId)
+		}
+	})
+
+	t.Run("falls back to alias queries when canonical repair is ready but global query is empty", func(t *testing.T) {
+		agg := &Aggregator{}
+		if err := agg.Init(nil, nil); err != nil {
+			t.Fatalf("Init returned error: %v", err)
+		}
+		lister := &metaappCanonicalFastPathLister{
+			canonicalReady: true,
+			globalResult:   &publishedcontent.ListResult{},
+			fallbackResults: map[string]*publishedcontent.ListResult{
+				"metaid": {
+					Items: []publishedcontent.SectionItem{{
+						SourcePinId:     "metaapp-metaid:i0",
+						CurrentPinId:    "metaapp-metaid:i0",
+						ProtocolPath:    publishedcontent.PathMetaApp,
+						PublisherMetaId: "metaBot",
+						PayloadJSON:     map[string]any{"title": "MetaId MetaApp"},
+						PayloadExposed:  true,
+						UpdatedAt:       1710000201,
+					}},
+				},
+			},
+		}
+		agg.SetPublishedContentLister(lister)
+
+		got, err := agg.loadPublishedContentByCanonicalIdentity(canonical, opts, publishedcontent.PathMetaApp)
+		if err != nil {
+			t.Fatalf("loadPublishedContentByCanonicalIdentity returned error: %v", err)
+		}
+		if len(got.Items) != 1 || got.Items[0].SourcePinId != "metaapp-metaid:i0" {
+			t.Fatalf("Items = %+v, want metaid fallback item", got.Items)
+		}
+		if len(lister.gotParams) != 3 {
+			t.Fatalf("published content calls = %d, want global then alias fallbacks", len(lister.gotParams))
+		}
+		if lister.gotParams[0].PublisherGlobalMetaId != "idqBot" || lister.gotParams[1].PublisherMetaId != "metaBot" || lister.gotParams[2].PublisherAddress != "1BotAddress" {
+			t.Fatalf("got params = %+v, want global/metaid/address sequence", lister.gotParams)
+		}
+	})
 }
 
 func TestSectionWithItemsKeepsMoreDisabledWhenHasMore(t *testing.T) {
