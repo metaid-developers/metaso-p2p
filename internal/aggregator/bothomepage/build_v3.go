@@ -72,10 +72,12 @@ func (a *Aggregator) loadSectionsV3(canonical CanonicalIdentity, opts Options) (
 			warnings = append(warnings, warning)
 		}
 	}
-	section, warning := a.loadChatsSectionV3(canonical)
-	sections = append(sections, section)
-	if warning != "" {
-		warnings = append(warnings, warning)
+	if opts.IncludeChats {
+		section, warning := a.loadChatsSectionV3(canonical)
+		sections = append(sections, section)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
 	}
 	if opts.IncludeBuzzes {
 		section, warning := a.loadPublishedContentSectionV3(canonical, opts, "buzzes", publishedcontent.PathSimpleBuzz, "buzzes section source unavailable")

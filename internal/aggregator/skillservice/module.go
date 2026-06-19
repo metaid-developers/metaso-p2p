@@ -1,6 +1,7 @@
 package skillservice
 
 import (
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,7 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	profileLookup ProfileLookup // nil-safe; see ResolveProvider
 	assetResolver *AssetResolver
+	homepageIndex sync.Mutex
 }
 
 const (
@@ -47,7 +49,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	// Buffer 1 so we satisfy the Aggregator interface without ever
 	// actually sending; closed-channel semantics are not required.
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 1)
-	return nil
+	return a.ensureHomepageProviderGlobalIndexes()
 }
 
 // NotifyChannel is required by the Aggregator interface. The skill-service

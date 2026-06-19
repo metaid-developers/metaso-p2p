@@ -22,6 +22,104 @@ func setupTestAggregator(t *testing.T) (*Aggregator, *storage.PebbleStore) {
 	return agg, store
 }
 
+func TestInitBackfillsHomepageMetaAppGlobalIndexes(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeContentPin(contentPinOpts{
+		PinId:        "metaapp-backfill:i0",
+		Path:         PathMetaApp,
+		Operation:    OperationCreate,
+		ChainName:    "mvc",
+		GlobalMetaId: "gid-user",
+		MetaId:       "meta-user",
+		Address:      "addr-user",
+		Timestamp:    1710000300,
+		ContentType:  "application/json",
+		ContentBody:  []byte(`{"title":"Backfill MetaAPP"}`),
+	})); err != nil {
+		t.Fatalf("HandleBlockPin(metaapp): %v", err)
+	}
+
+	for _, key := range [][]byte{
+		byGlobalKey(PathMetaApp, "gid-user", 1710000300, "mvc", "metaapp-backfill:i0"),
+		homepageMetaAppsGlobalIdentityStateKey(),
+	} {
+		if err := store.Delete(Namespace, key); err != nil {
+			t.Fatalf("delete %q: %v", string(key), err)
+		}
+	}
+
+	reloaded := &Aggregator{}
+	if err := reloaded.Init(store, cache.New(store)); err != nil {
+		t.Fatalf("reloaded Init: %v", err)
+	}
+
+	if _, err := store.Get(Namespace, homepageMetaAppsGlobalIdentityStateKey()); err != nil {
+		t.Fatalf("state marker missing after Init backfill: %v", err)
+	}
+	if _, err := store.Get(Namespace,
+		byGlobalKey(PathMetaApp, "gid-user", 1710000300, "mvc", "metaapp-backfill:i0")); err != nil {
+		t.Fatalf("metaapp global index missing after Init backfill: %v", err)
+	}
+}
+
+func TestInitBackfillSkipsHiddenHomepageMetaApps(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	createPin := makeContentPin(contentPinOpts{
+		PinId:        "metaapp-hidden-create:i0",
+		Path:         PathMetaApp,
+		Operation:    OperationCreate,
+		ChainName:    "mvc",
+		GlobalMetaId: "gid-user",
+		MetaId:       "meta-user",
+		Address:      "addr-user",
+		Timestamp:    1710000400,
+		ContentType:  "application/json",
+		ContentBody:  []byte(`{"title":"Hidden MetaAPP"}`),
+	})
+	revokePin := makeContentPin(contentPinOpts{
+		PinId:        "metaapp-hidden-revoke:i0",
+		Path:         PathMetaApp + "@metaapp-hidden-create:i0",
+		Operation:    OperationRevoke,
+		ChainName:    "mvc",
+		GlobalMetaId: "gid-user",
+		MetaId:       "meta-user",
+		Address:      "addr-user",
+		Timestamp:    1710000500,
+	})
+	if _, err := agg.HandleBlockPin(createPin); err != nil {
+		t.Fatalf("HandleBlockPin(create hidden metaapp seed): %v", err)
+	}
+	if _, err := agg.HandleBlockPin(revokePin); err != nil {
+		t.Fatalf("HandleBlockPin(revoke hidden metaapp seed): %v", err)
+	}
+
+	hiddenIndexKey := byGlobalKey(PathMetaApp, "gid-user", 1710000500, "mvc", "metaapp-hidden-create:i0")
+	for _, key := range [][]byte{
+		hiddenIndexKey,
+		homepageMetaAppsGlobalIdentityStateKey(),
+	} {
+		if err := store.Delete(Namespace, key); err != nil {
+			t.Fatalf("delete %q: %v", string(key), err)
+		}
+	}
+
+	reloaded := &Aggregator{}
+	if err := reloaded.Init(store, cache.New(store)); err != nil {
+		t.Fatalf("reloaded Init: %v", err)
+	}
+
+	if _, err := store.Get(Namespace, homepageMetaAppsGlobalIdentityStateKey()); err != nil {
+		t.Fatalf("state marker missing after Init backfill: %v", err)
+	}
+	if _, err := store.Get(Namespace, hiddenIndexKey); err == nil {
+		t.Fatalf("hidden metaapp global index was unexpectedly backfilled")
+	}
+}
+
 type contentPinOpts struct {
 	PinId          string
 	Path           string

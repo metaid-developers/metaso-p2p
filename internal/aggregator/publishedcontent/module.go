@@ -1,6 +1,7 @@
 package publishedcontent
 
 import (
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ type Aggregator struct {
 	store    *storage.PebbleStore
 	cache    *cache.Cache[[]byte]
 	notifyCh chan *aggregator.NotifyEvent
+	indexMu  sync.Mutex
 }
 
 const (
@@ -27,7 +29,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(Namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 1)
-	return nil
+	return a.ensureHomepageMetaAppGlobalIndexes()
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
@@ -51,4 +53,8 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 func (a *Aggregator) RegisterRoutes(_ *gin.RouterGroup) {
 	// Task 3 only builds the internal aggregation surface. Task 7 wires public
 	// router exposure.
+}
+
+func (a *Aggregator) HomepageMetaAppsCanonicalGlobalReady() (bool, error) {
+	return a.homepageMetaAppsGlobalIdentityStateReady()
 }

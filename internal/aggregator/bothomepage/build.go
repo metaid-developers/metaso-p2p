@@ -38,6 +38,10 @@ type PublishedContentLister interface {
 	List(publishedcontent.ListParams) (*publishedcontent.ListResult, error)
 }
 
+type homepageMetaAppsCanonicalGlobalState interface {
+	HomepageMetaAppsCanonicalGlobalReady() (bool, error)
+}
+
 type ChatInteractionLister interface {
 	ListOutgoingHomepageInteractions(privatechat.HomepageInteractionListParams) (*privatechat.HomepageInteractionListResult, error)
 }
@@ -698,8 +702,28 @@ func (a *Aggregator) loadPublishedContentByCanonicalIdentity(canonical Canonical
 	items := make([]publishedcontent.SectionItem, 0, homepageSectionReadSize)
 	seen := make(map[string]struct{})
 	hasMore := false
+	start := 0
 
-	for _, params := range queries {
+	if protocolPath == publishedcontent.PathMetaApp && strings.TrimSpace(canonical.GlobalMetaId) != "" {
+		if state, ok := a.publishedContentLister.(homepageMetaAppsCanonicalGlobalState); ok && len(queries) > 0 {
+			ready, err := state.HomepageMetaAppsCanonicalGlobalReady()
+			if err != nil {
+				return nil, err
+			}
+			if ready {
+				result, err := a.publishedContentLister.List(queries[0])
+				if err != nil {
+					return nil, err
+				}
+				if result != nil && len(result.Items) > 0 {
+					return result, nil
+				}
+				start = 1
+			}
+		}
+	}
+
+	for _, params := range queries[start:] {
 		result, err := a.publishedContentLister.List(params)
 		if err != nil {
 			return nil, err

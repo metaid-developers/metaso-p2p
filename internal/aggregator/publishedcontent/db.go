@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	keyRecord      = "record:"
-	keyPinToSource = "pin_to_source:"
-	keyByGlobal    = "by_global:"
-	keyByMetaId    = "by_metaid:"
-	keyByAddress   = "by_address:"
+	keyRecord                              = "record:"
+	keyPinToSource                         = "pin_to_source:"
+	keyByGlobal                            = "by_global:"
+	keyByMetaId                            = "by_metaid:"
+	keyByAddress                           = "by_address:"
+	keyHomepageMetaAppsGlobalIdentityState = "homepage_metaapps_global_identity_state:v1"
 )
 
 func recordKey(chainName, protocolPath, sourcePinId string) []byte {
@@ -42,6 +43,10 @@ func identityIndexKey(prefix, protocolPath, identity string, sortKey int64, chai
 
 func identityIndexPrefix(prefix, protocolPath, identity string) []byte {
 	return []byte(prefix + protocolPath + ":" + identity + ":")
+}
+
+func homepageMetaAppsGlobalIdentityStateKey() []byte {
+	return []byte(keyHomepageMetaAppsGlobalIdentityState)
 }
 
 func invertedTimestamp(ts int64) string {

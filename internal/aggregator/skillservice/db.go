@@ -36,6 +36,7 @@ const (
 	keyServiceByProviderGlobal      = "service_by_provider_global:"
 	keyServiceByProviderGlobalChain = "service_by_provider_global_chain:"
 	keyServiceByUpdated             = "service_by_updated:"
+	keyHomepageProviderGlobalState  = "homepage_provider_global_index_state:v1"
 )
 
 // serviceKey builds the primary Pebble key for a service record.
@@ -85,6 +86,10 @@ func providerGlobalChainIndexKey(providerGlobalMetaId, chainName string, updated
 
 func providerGlobalChainIndexPrefix(providerGlobalMetaId, chainName string) []byte {
 	return []byte(keyServiceByProviderGlobalChain + providerGlobalMetaId + ":" + chainName + ":")
+}
+
+func homepageProviderGlobalIndexStateKey() []byte {
+	return []byte(keyHomepageProviderGlobalState)
 }
 
 // updatedIndexKey orders services by descending updatedAt within a chain.
