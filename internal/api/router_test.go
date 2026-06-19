@@ -91,6 +91,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	botHomepageAgg.SetServiceLister(skillAgg)
 	botHomepageAgg.SetHomepageServiceLister(skillAgg)
 	botHomepageAgg.SetPublishedContentLister(publishedAgg)
+	botHomepageAgg.SetChatInteractionLister(privateAgg)
 	botHomepageAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 	privateAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userAgg))
 
@@ -693,6 +694,96 @@ func TestRouterBotHomepageV2AndV3ExposeProviderVisibleServices(t *testing.T) {
 	}
 	if _, ok := data["payload"]; !ok {
 		t.Fatalf("v3 first service data.payload missing: %#v", data)
+	}
+}
+
+func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+
+	if _, err := fixture.privateAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "chat-idq-bot:i0",
+		Path:      "/protocols/simplemsg",
+		Operation: "create",
+		ContentBody: mustMarshalJSON(t, map[string]interface{}{
+			"from":        "meta-idq-bot",
+			"to":          "idq-peer",
+			"content":     "encrypted",
+			"contentType": "text/plain",
+			"encryption":  "ecies",
+		}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000201,
+		Number:        201,
+	}); err != nil {
+		t.Fatalf("seed privatechat simplemsg: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v3")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if body["code"] != float64(0) {
+		t.Fatalf("code = %#v body=%s", body["code"], w.Body.String())
+	}
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data = %T %#v, want object", body["data"], body["data"])
+	}
+	sections, ok := data["sections"].([]interface{})
+	if !ok {
+		t.Fatalf("sections = %T %#v, want array", data["sections"], data["sections"])
+	}
+
+	if len(sections) != 4 {
+		t.Fatalf("sections length = %d, want 4: %#v", len(sections), sections)
+	}
+	for i, wantID := range []string{"services", "metaapps", "chats", "buzzes"} {
+		section, ok := sections[i].(map[string]interface{})
+		if !ok {
+			t.Fatalf("sections[%d] = %T %#v, want object", i, sections[i], sections[i])
+		}
+		if section["id"] != wantID {
+			t.Fatalf("sections[%d].id = %#v, want %q; sections=%#v", i, section["id"], wantID, sections)
+		}
+	}
+
+	chats := sections[2].(map[string]interface{})
+	if chats["protocolPath"] != "/protocols/simplemsg" {
+		t.Fatalf("chats.protocolPath = %#v, want /protocols/simplemsg", chats["protocolPath"])
+	}
+	items, ok := chats["items"].([]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("chats.items = %T %#v, want one item", chats["items"], chats["items"])
+	}
+	item, ok := items[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("chats.items[0] = %T %#v, want object", items[0], items[0])
+	}
+	if item["pinId"] != "chat-idq-bot:i0" {
+		t.Fatalf("chat pinId = %#v, want chat-idq-bot:i0", item["pinId"])
+	}
+	if item["protocolPath"] != "/protocols/simplemsg" {
+		t.Fatalf("chat protocolPath = %#v, want /protocols/simplemsg", item["protocolPath"])
+	}
+	if item["timestamp"] != float64(1710000201) {
+		t.Fatalf("chat timestamp = %#v, want 1710000201", item["timestamp"])
+	}
+	itemData, ok := item["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("chat data = %T %#v, want object", item["data"], item["data"])
+	}
+	if itemData["interactWith"] != "idq-peer" {
+		t.Fatalf("chat data.interactWith = %#v, want idq-peer", itemData["interactWith"])
+	}
+	if payload, ok := itemData["payload"]; ok && payload != nil {
+		t.Fatalf("chat data.payload = %#v, want absent or nil", payload)
 	}
 }
 

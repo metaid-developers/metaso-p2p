@@ -107,6 +107,7 @@ func main() {
 		if publishedAgg != nil {
 			botHomepageAgg.SetPublishedContentLister(publishedAgg)
 		}
+		botHomepageAgg.SetChatInteractionLister(privatechatAgg)
 		botHomepageAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {

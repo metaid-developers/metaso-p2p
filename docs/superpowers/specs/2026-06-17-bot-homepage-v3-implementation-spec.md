@@ -190,8 +190,9 @@ v3 sections are fixed:
 | Section ID | Source |
 | --- | --- |
 | `services` | `/protocols/skill-service` |
-| `buzzes` | `/protocols/simplebuzz` |
 | `metaapps` | `/protocols/metaapp` |
+| `chats` | `/protocols/simplemsg` |
+| `buzzes` | `/protocols/simplebuzz` |
 
 Do not include `skills`.
 
@@ -222,9 +223,7 @@ Every section item uses:
   "pinId": "string",
   "protocolPath": "string",
   "timestamp": 0,
-  "data": {
-    "payload": {}
-  }
+  "data": {}
 }
 ```
 
@@ -233,8 +232,9 @@ Rules:
 - `pinId` is the current effective data PIN.
 - `timestamp` is the indexer timestamp used for homepage ordering/display.
 - For modify-capable protocols, use the current effective record timestamp.
-- `data.payload` is the parsed protocol payload. JSON becomes an object;
-  non-binary text becomes a string.
+- Non-chat section items expose `data.payload`, the parsed protocol payload.
+  JSON becomes an object; non-binary text becomes a string.
+- Chat section items expose only `data.interactWith`.
 - Do not include binary payload bytes.
 - Do not return `sourcePinId`, `currentPinId`, `createdAt`, `updatedAt`,
   `chainName`, publisher identity, `proof`, `service`, `payloadJson`,
@@ -251,12 +251,46 @@ The service item payload should be the service declaration payload fields, not
 the v2 service wrapper. Do not include provider profile hydration, rating
 objects, chain identity, or action verdict fields in v3.
 
-### Buzzes And MetaApps Source
+### MetaApps Source
 
-Use the existing `publishedcontent` read model for:
+Use the existing `publishedcontent` read model for `/protocols/metaapp`.
 
-- `/protocols/simplebuzz`
-- `/protocols/metaapp`
+Use its current effective item pin, effective sort timestamp, and parsed
+payload. Do not expose hidden/revoked items by default.
+
+### Chats Source
+
+Use `/protocols/simplemsg` records to populate the `chats` section. The current
+source is outgoing simplemsg records created by privatechat, but the v3 API
+must describe them as chat interactions rather than privatechat internals.
+
+Extraction rule:
+
+- Include only outgoing simplemsg records for the current Bot.
+- Parse the simplemsg payload as JSON.
+- Set `data.interactWith` from the payload JSON `to` field.
+- Skip records without a usable `to` value.
+
+The chat item must still use the normal v3 item envelope:
+
+```json
+{
+  "pinId": "string",
+  "protocolPath": "/protocols/simplemsg",
+  "timestamp": 0,
+  "data": {
+    "interactWith": "idq..."
+  }
+}
+```
+
+Do not expose message content, encryption metadata, the original simplemsg
+payload, txid fields, address fields, chain fields, or source fields inside
+chat item `data`.
+
+### Buzzes Source
+
+Use the existing `publishedcontent` read model for `/protocols/simplebuzz`.
 
 Use its current effective item pin, effective sort timestamp, and parsed
 payload. Do not expose hidden/revoked items by default.
@@ -272,8 +306,8 @@ v3 should keep only consumer-useful query knobs:
 | `includePresence` | `true` | Reuse v2 presence inclusion behavior. |
 | `includeSections` | `true` | Allows callers to request profile-only v3. |
 | `includeServices` | `true` | Omits services section when false. |
-| `includeBuzzes` | `true` | Omits buzzes section when false. |
 | `includeMetaApps` | `true` | Omits metaapps section when false. |
+| `includeBuzzes` | `true` | Omits buzzes section when false. |
 | `includeInactiveServices` | `false` | Matches existing service visibility behavior. |
 
 Do not document or depend on `chainName` for v3. v3 should weaken chain-specific
@@ -306,15 +340,21 @@ Add focused tests before implementation is considered complete:
 7. v3 includes `profile.chatPubkey` and `profile.pins.chatPubkey`.
 8. v3 excludes `chatSkills` and `background`.
 9. Presence shape and failure behavior match v2.
-10. Sections are exactly `services`, `buzzes`, and `metaapps` when all are
-    enabled.
+10. Sections are returned in the documented order when all are enabled:
+    `services`
+    `metaapps`
+    `chats`
+    `buzzes`
 11. Each section item only includes `pinId`, `protocolPath`, `timestamp`, and
     `data`.
-12. Services section uses the same visible services that v2 top-level services
+12. Chat item `data` includes only `interactWith` and excludes message content,
+    encryption metadata, original simplemsg payload, txid, address, chain, and
+    source fields.
+13. Services section uses the same visible services that v2 top-level services
     can see for the provider.
-13. Mempool `/info/persona`, `/info/llm`, `/info/homepage`, service, buzz, and
-    metaapp records are visible through v3 when the underlying read model marks
-    them current.
+14. Mempool `/info/persona`, `/info/llm`, `/info/homepage`, service, MetaApp,
+    chat, and buzz records are visible through v3 when the underlying read
+    model marks them current.
 
 Recommended verification commands:
 
@@ -336,4 +376,6 @@ Use broader `CGO_ENABLED=0 go test ./...` before merge or deploy.
 - `profile.persona.payload`, `profile.llm.payload`, and
   `profile.homepage.payload` are raw chain JSON objects when present.
 - Section items are minimal and self-describing.
+- Section order matches the public contract.
+- The `chats` section exposes only interaction counterpart identity.
 - The public contract doc and implementation tests agree on field names.
