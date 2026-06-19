@@ -150,6 +150,7 @@ func TestParseOptionsV3Toggles(t *testing.T) {
 		"includePresence":         {"false"},
 		"includeSections":         {"false"},
 		"includeServices":         {"false"},
+		"includeChats":            {"false"},
 		"includeBuzzes":           {"false"},
 		"includeMetaApps":         {"false"},
 		"includeInactiveServices": {"true"},
@@ -267,11 +268,21 @@ func TestParseOptionsRejectsInvalidValues(t *testing.T) {
 		{"includeInactiveServices": {"wat"}},
 		{"serviceSize": {"-1"}},
 		{"serviceSize": {"abc"}},
+		{"version": {"v3"}, "includeChats": {"maybe"}},
 	}
 	for _, values := range cases {
 		if _, err := ParseOptions(values); err == nil {
 			t.Fatalf("ParseOptions(%v) expected error", values)
 		}
+	}
+}
+
+func TestParseOptionsIgnoresIncludeChatsOutsideV3(t *testing.T) {
+	if _, err := ParseOptions(url.Values{"version": {"v2"}, "includeChats": {"maybe"}}); err != nil {
+		t.Fatalf("v2 includeChats should be ignored, got error: %v", err)
+	}
+	if _, err := ParseOptions(url.Values{"includeChats": {"maybe"}}); err != nil {
+		t.Fatalf("default/v1 includeChats should be ignored, got error: %v", err)
 	}
 }
 

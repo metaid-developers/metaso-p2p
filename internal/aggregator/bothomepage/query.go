@@ -18,6 +18,7 @@ type Options struct {
 	Version                 string
 	IncludeServices         bool
 	IncludeSections         bool
+	IncludeChats            bool
 	IncludeMetaApps         bool
 	IncludeSkills           bool
 	IncludeBuzzes           bool
@@ -33,6 +34,7 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		IncludeServices: true,
+		IncludeChats:    true,
 		IncludeMetaApps: true,
 		IncludeSkills:   true,
 		IncludeBuzzes:   true,
@@ -95,6 +97,7 @@ func parseV3Options(values url.Values) (Options, error) {
 		Version:         "v3",
 		IncludeServices: true,
 		IncludeSections: true,
+		IncludeChats:    true,
 		IncludeMetaApps: true,
 		IncludeBuzzes:   true,
 		ServiceSize:     homepageSectionLimit,
@@ -103,6 +106,9 @@ func parseV3Options(values url.Values) (Options, error) {
 
 	var err error
 	if opts.IncludeServices, err = parseBool(values, "includeServices", opts.IncludeServices); err != nil {
+		return Options{}, err
+	}
+	if opts.IncludeChats, err = parseBool(values, "includeChats", opts.IncludeChats); err != nil {
 		return Options{}, err
 	}
 	if opts.IncludeSections, err = parseBool(values, "includeSections", opts.IncludeSections); err != nil {

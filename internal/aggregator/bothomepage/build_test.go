@@ -33,6 +33,7 @@ func defaultV3Options() Options {
 	opts.IncludePresence = true
 	opts.IncludeSections = true
 	opts.IncludeServices = true
+	opts.IncludeChats = true
 	opts.IncludeBuzzes = true
 	opts.IncludeMetaApps = true
 	opts.IncludeSkills = false
@@ -2195,6 +2196,111 @@ func assertMapHasOnlyKeys(t *testing.T, got map[string]any, want []string) {
 			t.Fatalf("map missing key %q; keys=%v", key, mapKeys(got))
 		}
 	}
+}
+
+func TestBuildV3SectionTogglesAndMasterSwitch(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
+		GlobalMetaId: "idqCanonicalBot",
+		MetaId:       "metaBot",
+		Address:      "1BotAddress",
+		Name:         "Toggle Bot",
+	}})
+	agg.SetHomepageServiceLister(&recordingHomepageServiceLister{result: &skillservice.HomepageListResult{
+		List: []skillservice.ServiceListItem{{
+			CurrentPinId: "service-current:i0",
+			UpdatedAt:    1710000101,
+		}},
+	}})
+	agg.SetPublishedContentLister(&protocolRecordingPublishedContentLister{
+		results: map[string]*publishedcontent.ListResult{
+			publishedcontent.PathMetaApp: {
+				Items: []publishedcontent.SectionItem{{
+					CurrentPinId:   "metaapp-current:i0",
+					ProtocolPath:   publishedcontent.PathMetaApp,
+					PayloadJSON:    map[string]any{"title": "MetaApp"},
+					PayloadExposed: true,
+					UpdatedAt:      1710000102,
+				}},
+			},
+			publishedcontent.PathSimpleBuzz: {
+				Items: []publishedcontent.SectionItem{{
+					CurrentPinId:   "buzz-current:i0",
+					ProtocolPath:   publishedcontent.PathSimpleBuzz,
+					PayloadText:    "buzz",
+					PayloadExposed: true,
+					CreatedAt:      1710000103,
+				}},
+			},
+		},
+	})
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{{
+			PinId:        "chat-current:i0",
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    1710000104,
+			InteractWith: "idqPeerBot",
+		}},
+	}})
+
+	t.Run("includeSections false omits all sections", func(t *testing.T) {
+		opts, err := ParseOptions(url.Values{
+			"version":         {"v3"},
+			"includeSections": {"false"},
+		})
+		if err != nil {
+			t.Fatalf("ParseOptions returned error: %v", err)
+		}
+
+		got, err := agg.BuildV3("idqCanonicalBot", opts)
+		if err != nil {
+			t.Fatalf("BuildV3 returned error: %v", err)
+		}
+		if len(got.Sections) != 0 {
+			t.Fatalf("Sections = %+v, want none when includeSections=false", got.Sections)
+		}
+	})
+
+	t.Run("includeChats false omits chats while other enabled sections remain", func(t *testing.T) {
+		opts, err := ParseOptions(url.Values{
+			"version":         {"v3"},
+			"includeServices": {"false"},
+			"includeMetaApps": {"false"},
+			"includeBuzzes":   {"false"},
+			"includeChats":    {"true"},
+		})
+		if err != nil {
+			t.Fatalf("ParseOptions returned error: %v", err)
+		}
+
+		got, err := agg.BuildV3("idqCanonicalBot", opts)
+		if err != nil {
+			t.Fatalf("BuildV3 returned error: %v", err)
+		}
+		assertExactSectionIDsV3(t, got.Sections, []string{"chats"})
+
+		opts, err = ParseOptions(url.Values{
+			"version":         {"v3"},
+			"includeServices": {"false"},
+			"includeMetaApps": {"false"},
+			"includeBuzzes":   {"false"},
+			"includeChats":    {"false"},
+		})
+		if err != nil {
+			t.Fatalf("ParseOptions returned error: %v", err)
+		}
+
+		got, err = agg.BuildV3("idqCanonicalBot", opts)
+		if err != nil {
+			t.Fatalf("BuildV3 returned error: %v", err)
+		}
+		if len(got.Sections) != 0 {
+			t.Fatalf("Sections = %+v, want none when all v3 section flags are false", got.Sections)
+		}
+	})
 }
 
 func assertMinimalSectionItemV3JSON(t *testing.T, item SectionItemV3) {
