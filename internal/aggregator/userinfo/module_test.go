@@ -1191,6 +1191,74 @@ func TestHandleGlobalMetaIdInfo_RemoteFallbackRefreshesLegacyAvatar(t *testing.T
 	}
 }
 
+func TestHandleGlobalMetaIdInfo_RemoteFallbackPreservesExistingLocalHomepage(t *testing.T) {
+	const globalMetaID = "idq1homepagepreserve"
+	const providerMetaID = "3f8121c0c277f80c8edf7e36b9f64e2ac13b58bf39da7a6f32ec006365c14297"
+	const providerAddress = "1EX5NN6npyCp3X6Sv4Yahv6DrBNKRtq4Gw"
+	const homepagePayload = `{"uri":"metaapp://c06b7a2db6efa241560a2356e9966cf9758dae3ec9c795f614a652b113e30329i0","renderer":"metaapp","contentType":"application/vnd.metaapp"}`
+
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/info/globalmetaid/" + globalMetaID:
+			_, _ = w.Write([]byte(`{"code":1,"message":"success","data":{"metaid":"` + providerMetaID + `","globalMetaId":"` + globalMetaID + `","address":"` + providerAddress + `","name":"Eric","avatar":"/content/avatar:i0","avatarId":"avatar:i0","chatpubkey":"04remotechatkey","chatpubkeyId":"remote_key:i0"}}`))
+		default:
+			t.Fatalf("unexpected remote profile path: %s", r.URL.Path)
+		}
+	}))
+	defer remote.Close()
+
+	t.Setenv("METASO_P2P_PROFILE_REMOTE_BASE_URL", remote.URL)
+	t.Setenv("METASO_P2P_PROFILE_MODE", "local-first")
+	t.Setenv("METASO_P2P_PROFILE_ALLOW_REMOTE_FALLBACK", "true")
+
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	// Seed the canonical local profile directly without the reverse index to
+	// mirror a stale lookup path. The local-only homepage must survive remote
+	// completion instead of being overwritten by the narrower remote schema.
+	raw := mustMarshalProfile(t, &UserProfile{
+		MetaID:     providerMetaID,
+		Address:    providerAddress,
+		Homepage:   homepagePayload,
+		HomepageId: "homepage:i0",
+		ChainName:  "mvc",
+	})
+	if err := store.Set(namespace, profileKey(providerMetaID), raw); err != nil {
+		t.Fatalf("seed canonical local profile: %v", err)
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/globalmetaid/"+globalMetaID)
+	var resp struct {
+		Code int         `json:"code"`
+		Data UserProfile `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v body=%s", err, w.Body.String())
+	}
+	if resp.Code != 1 {
+		t.Fatalf("expected success code=1, got %d body=%s", resp.Code, w.Body.String())
+	}
+	if resp.Data.Homepage != homepagePayload || resp.Data.HomepageId != "homepage:i0" {
+		t.Fatalf("homepage should survive remote fallback: %+v", resp.Data)
+	}
+	if resp.Data.GlobalMetaID != globalMetaID {
+		t.Fatalf("globalMetaId should still be filled from remote fallback: %+v", resp.Data)
+	}
+
+	stored, err := agg.LookupByMetaId(providerMetaID)
+	if err != nil {
+		t.Fatalf("LookupByMetaId: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("LookupByMetaId returned nil profile")
+	}
+	if stored.Homepage != homepagePayload || stored.HomepageId != "homepage:i0" {
+		t.Fatalf("persisted profile lost homepage after remote fallback: %+v", stored)
+	}
+}
+
 // TestHandleMetaIdInfo_FullWireFormat asserts the whole on-the-wire response
 // exactly matches what idchat's metafileIndexerApi client expects after a
 // realistic init + name + chatpubkey indexing sequence.

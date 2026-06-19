@@ -121,10 +121,11 @@ func (a *Aggregator) completeProfile(ctx context.Context, local *UserProfile, qu
 	}
 
 	merged := mergeUserProfiles(local, remote)
-	if err := a.persistMergedProfile(aliasKey, merged); err != nil {
+	persisted, err := a.persistMergedProfile(aliasKey, merged)
+	if err != nil {
 		return nil, err
 	}
-	return merged, nil
+	return persisted, nil
 }
 
 func (a *Aggregator) shouldFetchRemote(local *UserProfile) bool {
@@ -192,23 +193,89 @@ func profileNeedsRemoteCompletion(profile *UserProfile) bool {
 		avatarNeedsRemoteCompletion(profile)
 }
 
-func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile) error {
+func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile) (*UserProfile, error) {
 	if profile == nil {
-		return nil
+		return nil, nil
+	}
+	profile, err := a.mergeWithStoredProfiles(profile)
+	if err != nil {
+		return nil, err
 	}
 	if err := a.saveProfile(profile); err != nil {
-		return err
+		return nil, err
 	}
 	if aliasKey = strings.TrimSpace(aliasKey); aliasKey != "" && aliasKey != profile.MetaID {
 		if err := a.saveProfileAtKey(aliasKey, profile); err != nil {
-			return err
+			return nil, err
 		}
 		a.cache.InvalidateByPrefix("profile:" + aliasKey)
 	}
 	if profile.MetaID != "" {
 		a.cache.InvalidateByPrefix("profile:" + profile.MetaID)
 	}
-	return nil
+	return profile, nil
+}
+
+func (a *Aggregator) mergeWithStoredProfiles(profile *UserProfile) (*UserProfile, error) {
+	if a == nil || profile == nil {
+		return profile, nil
+	}
+
+	merged := profile
+	seen := make(map[string]struct{}, 3)
+	loaders := []func() (*UserProfile, error){
+		func() (*UserProfile, error) {
+			metaid := strings.TrimSpace(profile.MetaID)
+			if metaid == "" {
+				return nil, nil
+			}
+			return a.getProfile(metaid)
+		},
+		func() (*UserProfile, error) {
+			address := strings.TrimSpace(profile.Address)
+			if address == "" {
+				return nil, nil
+			}
+			return a.findProfileByAddress(address)
+		},
+		func() (*UserProfile, error) {
+			globalMetaID := strings.TrimSpace(profile.GlobalMetaID)
+			if globalMetaID == "" {
+				return nil, nil
+			}
+			return a.findProfileByGlobalMetaId(globalMetaID)
+		},
+	}
+
+	for _, load := range loaders {
+		existing, err := load()
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			continue
+		}
+		key := storedProfileIdentityKey(existing)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = mergeUserProfiles(existing, merged)
+	}
+
+	return merged, nil
+}
+
+func storedProfileIdentityKey(profile *UserProfile) string {
+	if profile == nil {
+		return ""
+	}
+	for _, value := range []string{profile.MetaID, profile.GlobalMetaID, profile.Address} {
+		if value = strings.ToLower(strings.TrimSpace(value)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func mergeUserProfiles(local, remote *UserProfile) *UserProfile {
