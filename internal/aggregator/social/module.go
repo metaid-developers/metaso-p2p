@@ -50,5 +50,3 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	registerRoutes(a, router)
 }
-
-func registerRoutes(a *Aggregator, router *gin.RouterGroup) {}
