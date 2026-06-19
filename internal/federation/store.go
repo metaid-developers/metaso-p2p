@@ -162,9 +162,6 @@ func (s *Store) ActivePeers(now time.Time) []RegistryNode {
 
 	peers := make([]RegistryNode, 0, len(s.peers))
 	for _, peer := range s.peers {
-		if peerExpired(peer, now) {
-			continue
-		}
 		peers = append(peers, cloneRegistryNode(peer))
 	}
 	sort.Slice(peers, func(i, j int) bool {
@@ -250,8 +247,7 @@ func (s *Store) activeSnapshots(now time.Time) []presence.Snapshot {
 		if nodeID == s.localNodeID {
 			continue
 		}
-		peer, ok := s.peers[nodeID]
-		if !ok || peerExpired(peer, now) {
+		if _, ok := s.peers[nodeID]; !ok {
 			continue
 		}
 		if snapshotExpired(snapshot, now) {

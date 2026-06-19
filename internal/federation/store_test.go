@@ -114,6 +114,37 @@ func TestGlobalOnlineExcludesUnknownPeerSnapshots(t *testing.T) {
 	}
 }
 
+func TestGlobalOnlineIncludesFreshSnapshotsFromPeersWithExpiredRegistryLease(t *testing.T) {
+	now := time.UnixMilli(1710000100000)
+	store := newAggregateStore(now)
+	peer := testRegistryNode("node-stale-registry")
+	peer.ValidUntil = now.Add(-time.Hour).UnixMilli()
+	store.UpsertPeer(peer)
+	store.UpsertSnapshot(testPresenceSnapshot("node-stale-registry", now.Add(-time.Second), 90, []presence.OnlineEntry{
+		{MetaId: "meta-remote", Type: "app", ConnectedAt: 1710000000000, LastSeenAt: 1710000009000},
+	}))
+
+	got := store.GlobalOnline(nil, now)
+
+	if len(got) != 1 {
+		t.Fatalf("fresh snapshot from expired-registry peer should still be included, got %d entries", len(got))
+	}
+	if got[0].MetaId != "meta-remote" {
+		t.Fatalf("fresh expired-registry peer snapshot should still surface, got %#v", got[0])
+	}
+
+	stats := store.StatsAt(nil, now)
+	if stats.TotalConnections != 1 {
+		t.Fatalf("fresh snapshot from expired-registry peer should count toward totalConnections, got %d", stats.TotalConnections)
+	}
+	if stats.UniqueMetaIds != 1 {
+		t.Fatalf("fresh snapshot from expired-registry peer should count toward uniqueMetaIds, got %d", stats.UniqueMetaIds)
+	}
+	if stats.Nodes != 2 {
+		t.Fatalf("fresh snapshot from expired-registry peer should count as a remote node, got %d", stats.Nodes)
+	}
+}
+
 func TestGlobalOnlineExcludesLateSnapshotAfterRemovePeer(t *testing.T) {
 	now := time.UnixMilli(1710000100000)
 	store := newAggregateStore(now)

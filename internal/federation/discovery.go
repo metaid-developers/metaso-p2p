@@ -294,10 +294,6 @@ func (d *Discovery) candidateFromPin(pin RegistryPin, now time.Time) (registryDi
 		candidate.remove = true
 		return candidate, true
 	}
-	if peerExpired(node, now) {
-		candidate.remove = true
-		return candidate, true
-	}
 	return candidate, true
 }
 

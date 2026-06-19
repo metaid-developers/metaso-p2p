@@ -146,7 +146,7 @@ func (p *Puller) PullOnce(ctx context.Context) error {
 		if peer.NodeID == "" || peer.NodeID == p.selfNodeID {
 			continue
 		}
-		if peerNow := p.clock(); peerExpired(peer, peerNow) || !p.peerEligible(peer.NodeID, peerNow) {
+		if peerNow := p.clock(); !p.peerEligible(peer.NodeID, peerNow) {
 			continue
 		}
 		if err := p.pullPeer(ctx, peer); err != nil {

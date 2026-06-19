@@ -25,6 +25,9 @@ func TestPullerPullsPresenceURLForActivePeers(t *testing.T) {
 		case "/presence":
 			requests++
 			writePullerSnapshot(t, w, pullerSignedSnapshot(t, "node-a", now, 90, 1))
+		case "/expired":
+			requests++
+			writePullerSnapshot(t, w, pullerSignedSnapshot(t, "node-expired", now, 90, 1))
 		default:
 			t.Fatalf("unexpected pull path %q", r.URL.Path)
 		}
@@ -44,8 +47,8 @@ func TestPullerPullsPresenceURLForActivePeers(t *testing.T) {
 	if err := puller.PullOnce(context.Background()); err != nil {
 		t.Fatalf("PullOnce returned error: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("presence requests: want 1 got %d", requests)
+	if requests != 2 {
+		t.Fatalf("presence requests: want 2 got %d", requests)
 	}
 	snapshot, ok := store.Snapshot("node-a")
 	if !ok {
@@ -56,6 +59,38 @@ func TestPullerPullsPresenceURLForActivePeers(t *testing.T) {
 	}
 	if len(snapshot.Items) != 1 || snapshot.Items[0].MetaId != "meta-node-a" {
 		t.Fatalf("stored snapshot items mismatch: %#v", snapshot.Items)
+	}
+	if _, ok := store.Snapshot("node-expired"); !ok {
+		t.Fatal("expired registry lease peer snapshot should still be stored")
+	}
+}
+
+func TestPullerStillPullsPeersWithExpiredRegistryLease(t *testing.T) {
+	now := time.UnixMilli(1780000000000)
+	store := NewStore("node-self", WithStoreClock(func() time.Time { return now }))
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		writePullerSnapshot(t, w, pullerSignedSnapshot(t, "node-a", now, 90, 1))
+	}))
+	defer server.Close()
+
+	store.UpsertPeer(pullerRegistryNode("node-a", server.URL, now.Add(-time.Second)))
+	puller := newTestPuller(t, PullerOptions{
+		Store:      store,
+		HTTPClient: server.Client(),
+		Clock:      func() time.Time { return now },
+	})
+
+	if err := puller.PullOnce(context.Background()); err != nil {
+		t.Fatalf("PullOnce returned error: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("expired registry lease peer should still be pulled, got %d requests", requests)
+	}
+	if _, ok := store.Snapshot("node-a"); !ok {
+		t.Fatal("fresh snapshot from expired-registry peer should still be stored")
 	}
 }
 
@@ -453,11 +488,11 @@ func TestRemoteSnapshotStoreHelpersReturnClonesAndActivePeers(t *testing.T) {
 	originalSnapshot.Items[0].SourceNodeIds[0] = "mutated-original"
 
 	peers := store.ActivePeers(now)
-	if len(peers) != 3 {
-		t.Fatalf("active peers: want 3 got %d: %#v", len(peers), peers)
+	if len(peers) != 4 {
+		t.Fatalf("active peers: want 4 got %d: %#v", len(peers), peers)
 	}
-	if peers[0].NodeID != "node-a" || peers[1].NodeID != "node-b" || peers[2].NodeID != "node-self" {
-		t.Fatalf("active peers should be sorted by nodeId and include non-expired self, got %#v", peers)
+	if peers[0].NodeID != "node-a" || peers[1].NodeID != "node-b" || peers[2].NodeID != "node-expired" || peers[3].NodeID != "node-self" {
+		t.Fatalf("active peers should be sorted by nodeId and include peers regardless of registry lease age, got %#v", peers)
 	}
 	peers[0].Capabilities[0] = "mutated"
 	again := store.ActivePeers(now)

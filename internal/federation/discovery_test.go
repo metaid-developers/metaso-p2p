@@ -218,17 +218,28 @@ func TestDiscoveryFiltersPinsDeduplicatesNewestAndAppliesRemovals(t *testing.T) 
 	if err != nil {
 		t.Fatalf("DiscoverOnce returned error: %v", err)
 	}
-	if len(peers) != 1 {
-		t.Fatalf("peers: want 1 got %d: %#v", len(peers), peers)
+	if len(peers) != 2 {
+		t.Fatalf("peers: want 2 got %d: %#v", len(peers), peers)
 	}
-	if peers[0].NodeID != dupeID || peers[0].PresenceURL != newDupe.PresenceURL {
-		t.Fatalf("newest valid duplicate should win, got %#v", peers[0])
+	if peers[0].NodeID != dupeID && peers[1].NodeID != dupeID {
+		t.Fatalf("newest valid duplicate should still be discovered, got %#v", peers)
+	}
+	storedDupe, ok := store.Peer(dupeID)
+	if !ok {
+		t.Fatal("newest valid duplicate should still be stored")
+	}
+	if storedDupe.PresenceURL != newDupe.PresenceURL {
+		t.Fatalf("newest valid duplicate should win in store, got %#v", storedDupe)
 	}
 	if _, ok := store.Peer(revoked.NodeID); ok {
 		t.Fatal("revoked peer should be removed from store")
 	}
-	if _, ok := store.Peer(expiredPeer.NodeID); ok {
-		t.Fatal("expired peer should be removed from store")
+	storedExpired, ok := store.Peer(expiredPeer.NodeID)
+	if !ok {
+		t.Fatal("expired registry lease should not remove peer from store")
+	}
+	if storedExpired.NodeID != expiredPeer.NodeID {
+		t.Fatalf("expired registry lease peer should remain addressable, got %#v", storedExpired)
 	}
 	if _, ok := store.Peer(selfID); ok {
 		t.Fatal("self node should not be inserted into peer store")
@@ -362,6 +373,7 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 		operation     string
 		malformedPeer func(RegistryNode) RegistryNode
 		validPeer     func(RegistryNode) RegistryNode
+		wantRemoved   bool
 	}{
 		{
 			name:      "revoke invalid public key",
@@ -373,6 +385,7 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 			validPeer: func(peer RegistryNode) RegistryNode {
 				return peer
 			},
+			wantRemoved: true,
 		},
 		{
 			name:      "expired missing capability",
@@ -386,6 +399,7 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 				peer.ValidUntil = now.Add(-time.Second).UnixMilli()
 				return peer
 			},
+			wantRemoved: false,
 		},
 	}
 
@@ -435,8 +449,12 @@ func TestDiscoveryDoesNotRemovePeerFromMalformedRemovalPin(t *testing.T) {
 			if err != nil {
 				t.Fatalf("valid removal DiscoverOnce returned error: %v", err)
 			}
-			if _, ok := store.Peer(victim.NodeID); ok {
+			_, ok := store.Peer(victim.NodeID)
+			if tt.wantRemoved && ok {
 				t.Fatal("valid removal pin should remove existing peer")
+			}
+			if !tt.wantRemoved && !ok {
+				t.Fatal("expired registry lease should no longer remove existing peer")
 			}
 		})
 	}
