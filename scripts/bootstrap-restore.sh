@@ -70,7 +70,9 @@ validate_manifest_and_list_namespaces() {
 
   "$PYTHON_BIN" - "$manifest_file" >"$raw_namespaces_file" <<'PY'
 import json
+import re
 import sys
+from datetime import datetime
 
 path = sys.argv[1]
 
@@ -104,7 +106,7 @@ if type(schema_version) is not int:
 if schema_version != 1:
     raise SystemExit(f"unsupported manifest schemaVersion: {schema_version}")
 
-for field in ("metasoVersion", "builtAt", "network", "sourceNode"):
+for field in ("metasoVersion", "network", "sourceNode"):
     value = manifest[field]
     if not isinstance(value, str) or value == "":
         raise SystemExit(f"manifest field {field} must be a non-empty string")
@@ -112,6 +114,18 @@ for field in ("metasoVersion", "builtAt", "network", "sourceNode"):
 git_commit = manifest["gitCommit"]
 if not isinstance(git_commit, str):
     raise SystemExit("manifest field gitCommit must be a string")
+if git_commit != "" and re.fullmatch(r"[0-9a-fA-F]{40}", git_commit) is None:
+    raise SystemExit("manifest field gitCommit must be empty or a 40-character hex SHA")
+
+built_at = manifest["builtAt"]
+if not isinstance(built_at, str) or built_at == "":
+    raise SystemExit("manifest field builtAt must be a non-empty string")
+if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", built_at) is None:
+    raise SystemExit("manifest field builtAt must be a UTC RFC3339 timestamp like 2026-06-20T12:34:56Z")
+try:
+    datetime.strptime(built_at, "%Y-%m-%dT%H:%M:%SZ")
+except ValueError as exc:
+    raise SystemExit("manifest field builtAt must be a UTC RFC3339 timestamp like 2026-06-20T12:34:56Z") from exc
 
 data_dir_format = manifest["dataDirFormat"]
 if not isinstance(data_dir_format, str):

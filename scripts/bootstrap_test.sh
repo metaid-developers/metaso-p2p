@@ -164,6 +164,26 @@ with open(checksums_path, "w", encoding="utf-8") as handle:
 PY
 }
 
+set_manifest_field() {
+  local manifest_file="$1"
+  local field="$2"
+  local raw_json_value="$3"
+  "$PYTHON_BIN" - "$manifest_file" "$field" "$raw_json_value" <<'PY'
+import json
+import sys
+
+path, field, raw_value = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+data[field] = json.loads(raw_value)
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
 create_fixture_data() {
   local data_dir="$1"
   mkdir -p \
@@ -397,6 +417,48 @@ PY
   done
 
   pass "restore rejects manifests missing required contract fields"
+}
+
+test_restore_rejects_semantically_invalid_manifest_values() {
+  local case_dir="$TMP_ROOT/invalid-manifest-values"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_template="$case_dir/unpack-template"
+  local repack_dir="$case_dir/repack"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_template"
+
+  local case_name=""
+  local field=""
+  local raw_value=""
+  local expected_error=""
+  while IFS='|' read -r case_name field raw_value expected_error; do
+    local variant_dir="$case_dir/$case_name"
+    local target_dir="$variant_dir/target"
+    mkdir -p "$variant_dir"
+    cp -R "$unpack_template/." "$variant_dir/"
+    set_manifest_field "$variant_dir/manifest.json" "$field" "$raw_value"
+    update_manifest_checksum "$variant_dir/manifest.json" "$variant_dir/checksums.txt"
+
+    local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-invalid-${case_name}.tar.gz"
+    repack_archive "$variant_dir" "$bad_archive"
+
+    run_expect_fail "invalid_manifest_${case_name}" \
+      "$RESTORE_SCRIPT" \
+      --archive "$bad_archive" \
+      --target-dir "$target_dir"
+    assert_contains "$TMP_ROOT/invalid_manifest_${case_name}.stderr" "$expected_error"
+    [[ ! -e "$target_dir" ]] || fail "restore should fail before creating target for invalid manifest case $case_name"
+  done <<'EOF'
+invalid-builtat|builtAt|"2026-06-20 12:34:56Z"|manifest field builtAt must be a UTC RFC3339 timestamp
+invalid-gitcommit|gitCommit|"deadbeef"|manifest field gitCommit must be empty or a 40-character hex SHA
+EOF
+
+  pass "restore rejects semantically invalid manifest field values"
 }
 
 test_restore_accepts_compact_valid_manifest_json() {
@@ -636,6 +698,7 @@ main() {
   test_restore_rejects_checksum_mismatch
   test_restore_rejects_tampered_manifest_without_checksum_entry
   test_restore_rejects_missing_required_manifest_fields
+  test_restore_rejects_semantically_invalid_manifest_values
   test_restore_accepts_compact_valid_manifest_json
   test_restore_rejects_unlisted_payload_files
   test_restore_rejects_extra_archive_root_entries

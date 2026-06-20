@@ -52,8 +52,8 @@ current restore contract requires:
 
 - `schemaVersion`: integer, currently must be `1`
 - `metasoVersion`: non-empty string
-- `gitCommit`: string, may be empty
-- `builtAt`: non-empty string
+- `gitCommit`: string, must be empty or a full 40-character hex SHA (`[0-9a-fA-F]{40}`)
+- `builtAt`: non-empty UTC RFC3339 timestamp in pack format `YYYY-MM-DDTHH:MM:SSZ` (for example `2026-06-20T12:34:56Z`)
 - `network`: non-empty string
 - `sourceNode`: non-empty string
 - `dataDirFormat`: string, currently must be `pebble-per-namespace`
