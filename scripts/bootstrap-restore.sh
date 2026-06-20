@@ -48,39 +48,175 @@ dir_non_empty() {
 
 list_manifest_namespaces() {
   local manifest_file="$1"
-  local python_bin=""
+  local raw_namespaces_file="$TMP_ROOT/manifest-namespaces-raw.txt"
+  local namespaces_file="$TMP_ROOT/manifest-namespaces.txt"
+  local namespace=""
 
-  if [[ -x /usr/bin/python3 ]]; then
-    python_bin=/usr/bin/python3
-  elif have_cmd python3; then
-    python_bin=$(command -v python3)
-  else
-    die "missing python3"
-  fi
+  awk '
+    function fail(msg) {
+      print msg > "/dev/stderr"
+      status = 1
+      exit 1
+    }
 
-  "$python_bin" - "$manifest_file" <<'PY'
-import json
-import sys
+    function hex_value(ch) {
+      if (ch >= "0" && ch <= "9") {
+        return ch + 0
+      }
+      ch = tolower(ch)
+      if (ch >= "a" && ch <= "f") {
+        return index("abcdef", ch) + 9
+      }
+      return -1
+    }
 
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as handle:
-    data = json.load(handle)
+    function hex_to_dec(hex,    i, value, digit, ch) {
+      value = 0
+      for (i = 1; i <= length(hex); i++) {
+        ch = substr(hex, i, 1)
+        digit = hex_value(ch)
+        if (digit < 0) {
+          return -1
+        }
+        value = (value * 16) + digit
+      }
+      return value
+    }
 
-namespaces = data.get("includedNamespaces")
-if not isinstance(namespaces, list) or not namespaces:
-    raise SystemExit("includedNamespaces must be a non-empty list")
+    function decode_json_string(text,    i, ch, esc, hex, code, out) {
+      out = ""
+      text = substr(text, 2, length(text) - 2)
+      for (i = 1; i <= length(text); i++) {
+        ch = substr(text, i, 1)
+        if (ch == "\"") {
+          fail("includedNamespaces entries must be non-empty strings")
+        }
+        if (ch != "\\") {
+          out = out ch
+          continue
+        }
+        i++
+        if (i > length(text)) {
+          fail("includedNamespaces entries must be non-empty strings")
+        }
+        esc = substr(text, i, 1)
+        if (esc == "\"" || esc == "\\" || esc == "/") {
+          out = out esc
+        } else if (esc == "b") {
+          out = out sprintf("%c", 8)
+        } else if (esc == "f") {
+          out = out sprintf("%c", 12)
+        } else if (esc == "n") {
+          out = out sprintf("%c", 10)
+        } else if (esc == "r") {
+          out = out sprintf("%c", 13)
+        } else if (esc == "t") {
+          out = out sprintf("%c", 9)
+        } else if (esc == "u") {
+          hex = substr(text, i + 1, 4)
+          if (length(hex) != 4) {
+            fail("invalid unicode escape in includedNamespaces entry")
+          }
+          code = hex_to_dec(hex)
+          if (code < 0) {
+            fail("invalid unicode escape in includedNamespaces entry")
+          }
+          out = out sprintf("%c", code)
+          i += 4
+        } else {
+          fail("invalid escape in includedNamespaces entry")
+        }
+      }
+      return out
+    }
 
-seen = set()
-for namespace in namespaces:
-    if not isinstance(namespace, str) or not namespace:
-        raise SystemExit("includedNamespaces entries must be non-empty strings")
-    if "/" in namespace or namespace in {".", ".."}:
-        raise SystemExit(f"invalid namespace entry: {namespace!r}")
-    if namespace in seen:
-        raise SystemExit(f"duplicate namespace entry: {namespace!r}")
-    seen.add(namespace)
-    print(namespace)
-PY
+    BEGIN {
+      expecting_array = 0
+      in_array = 0
+      found = 0
+      closed = 0
+      count = 0
+      status = 0
+    }
+
+    {
+      line = $0
+      if (closed) {
+        next
+      }
+
+      if (!in_array) {
+        if (line ~ /^[[:space:]]*"includedNamespaces"[[:space:]]*:[[:space:]]*\[[[:space:]]*$/) {
+          in_array = 1
+          found = 1
+          next
+        }
+        if (line ~ /^[[:space:]]*"includedNamespaces"[[:space:]]*:[[:space:]]*$/) {
+          expecting_array = 1
+          next
+        }
+        if (expecting_array) {
+          if (line !~ /^[[:space:]]*\[[[:space:]]*$/) {
+            fail("includedNamespaces must be a non-empty list")
+          }
+          in_array = 1
+          found = 1
+          expecting_array = 0
+        }
+        next
+      }
+
+      if (line ~ /^[[:space:]]*\][[:space:]]*,?[[:space:]]*$/) {
+        if (count == 0) {
+          fail("includedNamespaces must be a non-empty list")
+        }
+        in_array = 0
+        closed = 1
+        next
+      }
+
+      raw = line
+      sub(/^[[:space:]]*/, "", raw)
+      sub(/[[:space:]]*$/, "", raw)
+      if (substr(raw, length(raw), 1) == ",") {
+        raw = substr(raw, 1, length(raw) - 1)
+        sub(/[[:space:]]*$/, "", raw)
+      }
+      if (length(raw) < 2 || substr(raw, 1, 1) != "\"" || substr(raw, length(raw), 1) != "\"") {
+        fail("includedNamespaces entries must be non-empty strings")
+      }
+
+      print decode_json_string(raw)
+      count++
+    }
+
+    END {
+      if (status) {
+        exit status
+      }
+      if (expecting_array) {
+        fail("includedNamespaces must be a non-empty list")
+      }
+      if (!found) {
+        fail("includedNamespaces must be a non-empty list")
+      }
+      if (in_array || !closed) {
+        fail("includedNamespaces array missing closing bracket")
+      }
+    }
+  ' "$manifest_file" >"$raw_namespaces_file"
+
+  : >"$namespaces_file"
+  while IFS= read -r namespace || [[ -n "$namespace" ]]; do
+    [[ -n "$namespace" ]] || die "includedNamespaces entries must be non-empty strings"
+    [[ "$namespace" != */* ]] || die "invalid namespace entry: $namespace"
+    [[ "$namespace" != "." && "$namespace" != ".." ]] || die "invalid namespace entry: $namespace"
+    grep -Fqx "$namespace" "$namespaces_file" && die "duplicate namespace entry: $namespace"
+    printf '%s\n' "$namespace" >>"$namespaces_file"
+  done <"$raw_namespaces_file"
+
+  [[ -s "$namespaces_file" ]] || die "includedNamespaces must be a non-empty list"
+  cat "$namespaces_file"
 }
 
 require_tree_without_symlinks() {
