@@ -548,6 +548,9 @@ invalid-builtat|builtAt|"2026-06-20 12:34:56Z"|manifest field builtAt must be a 
 invalid-gitcommit|gitCommit|"deadbeef"|manifest field gitCommit must be empty or a 40-character hex SHA
 unsupported-schemaversion|schemaVersion|2|unsupported manifest schemaVersion: 2
 unsupported-datadirformat|dataDirFormat|"flat-directory"|unsupported manifest dataDirFormat: flat-directory
+empty-metasoversion|metasoVersion|""|manifest field metasoVersion must be a non-empty string
+empty-builtat|builtAt|""|manifest field builtAt must be a non-empty string
+empty-network|network|""|manifest field network must be a non-empty string
 empty-sourcenode|sourceNode|""|manifest field sourceNode must be a non-empty string
 malformed-namespace-entry|includedNamespaces|["social", "bad/entry"]|invalid namespace entry: bad/entry
 EOF
@@ -562,6 +565,7 @@ test_restore_accepts_compact_valid_manifest_json() {
   local unpack_dir="$case_dir/unpack"
   local repack_dir="$case_dir/repack"
   local target_dir="$case_dir/target"
+  local restore_stdout="$case_dir/restore.stdout"
   create_fixture_data "$data_dir"
   mkdir -p "$output_dir" "$repack_dir"
 
@@ -586,10 +590,19 @@ PY
 
   "$RESTORE_SCRIPT" \
     --archive "$compact_archive" \
-    --target-dir "$target_dir"
+    --target-dir "$target_dir" >"$restore_stdout"
 
   assert_file_exists "$target_dir/indexer_meta/000001.sst"
   assert_file_exists "$target_dir/social/MANIFEST-000001"
+  assert_contains "$restore_stdout" 'manifest: {"network":"mainnet"'
+  assert_contains "$restore_stdout" '"builtAt":"'
+  assert_contains "$restore_stdout" '"metasoVersion":"'
+  assert_contains "$restore_stdout" '"gitCommit":"'
+  assert_contains "$restore_stdout" "restored: $target_dir"
+  assert_not_contains "$restore_stdout" 'backup:'
+  assert_manifest_summary_value "$restore_stdout" network '"mainnet"'
+  assert_manifest_summary_value "$restore_stdout" sourceNode '"source-a"'
+  assert_manifest_summary_value "$restore_stdout" includedNamespaces '["indexer_meta", "social"]'
   pass "restore accepts compact valid manifest.json"
 }
 
