@@ -46,6 +46,43 @@ dir_non_empty() {
   find "$dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
 }
 
+list_manifest_namespaces() {
+  local manifest_file="$1"
+  local python_bin=""
+
+  if [[ -x /usr/bin/python3 ]]; then
+    python_bin=/usr/bin/python3
+  elif have_cmd python3; then
+    python_bin=$(command -v python3)
+  else
+    die "missing python3"
+  fi
+
+  "$python_bin" - "$manifest_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+namespaces = data.get("includedNamespaces")
+if not isinstance(namespaces, list) or not namespaces:
+    raise SystemExit("includedNamespaces must be a non-empty list")
+
+seen = set()
+for namespace in namespaces:
+    if not isinstance(namespace, str) or not namespace:
+        raise SystemExit("includedNamespaces entries must be non-empty strings")
+    if "/" in namespace or namespace in {".", ".."}:
+        raise SystemExit(f"invalid namespace entry: {namespace!r}")
+    if namespace in seen:
+        raise SystemExit(f"duplicate namespace entry: {namespace!r}")
+    seen.add(namespace)
+    print(namespace)
+PY
+}
+
 require_tree_without_symlinks() {
   local root="$1"
   local label="$2"
@@ -58,11 +95,26 @@ require_tree_without_symlinks() {
 }
 
 verify_checksums() {
-  local checksums_file="$1"
-  local root_dir="$2"
-  local line=""
+  local manifest_file="$1"
+  local checksums_file="$2"
+  local root_dir="$3"
+  local expected_namespaces_file="$TMP_ROOT/expected-namespaces.txt"
   local expected_payloads_file="$TMP_ROOT/expected-payloads.txt"
+  local expected_dirs_file="$TMP_ROOT/expected-directories.txt"
+  local line=""
+  local rel_dir=""
+  local payload_path=""
+  local actual_dir=""
+  local expected_dir=""
+
+  list_manifest_namespaces "$manifest_file" >"$expected_namespaces_file"
   : >"$expected_payloads_file"
+  printf 'namespaces\n' >"$expected_dirs_file"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    printf 'namespaces/%s\n' "$line" >>"$expected_dirs_file"
+  done <"$expected_namespaces_file"
+
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
     local expected="${line%%  *}"
@@ -74,16 +126,39 @@ verify_checksums() {
     actual=$(sha256_file "$path")
     [[ "$actual" == "$expected" ]] || die "checksum mismatch for $rel_path"
     if [[ "$rel_path" == namespaces/* ]]; then
+      local rel_namespace_path="${rel_path#namespaces/}"
+      local top_namespace="${rel_namespace_path%%/*}"
+      grep -Fqx "$top_namespace" "$expected_namespaces_file" || \
+        die "payload namespace not declared in manifest.json: $top_namespace"
       printf '%s\n' "$rel_path" >>"$expected_payloads_file"
+      rel_dir=$(dirname "$rel_path")
+      while [[ "$rel_dir" != "." ]]; do
+        printf '%s\n' "$rel_dir" >>"$expected_dirs_file"
+        [[ "$rel_dir" == "namespaces" ]] && break
+        rel_dir=$(dirname "$rel_dir")
+      done
     fi
   done <"$checksums_file"
 
-  local payload_path=""
+  sort -u "$expected_payloads_file" -o "$expected_payloads_file"
+  sort -u "$expected_dirs_file" -o "$expected_dirs_file"
+
   while IFS= read -r payload_path; do
     local rel_payload_path="${payload_path#$root_dir/}"
     grep -Fqx "$rel_payload_path" "$expected_payloads_file" || \
       die "payload file not listed in checksums.txt: $rel_payload_path"
   done < <(find "$root_dir/namespaces" -type f | sort)
+
+  while IFS= read -r actual_dir; do
+    local rel_actual_dir="${actual_dir#$root_dir/}"
+    grep -Fqx "$rel_actual_dir" "$expected_dirs_file" || \
+      die "unexpected directory in archive payload: $rel_actual_dir"
+  done < <(find "$root_dir/namespaces" -type d | sort)
+
+  while IFS= read -r expected_dir || [[ -n "$expected_dir" ]]; do
+    [[ -d "$root_dir/$expected_dir" ]] || \
+      die "expected directory missing from archive payload: $expected_dir"
+  done <"$expected_dirs_file"
 }
 
 main() {
@@ -120,6 +195,9 @@ main() {
   [[ -n "$archive" ]] || die "missing required argument: --archive"
   [[ -n "$target_dir" ]] || die "missing required argument: --target-dir"
   [[ -f "$archive" ]] || die "archive not found: $archive"
+  if [[ -L "$target_dir" ]]; then
+    die "target path must be a real directory path, not a symlink: $target_dir"
+  fi
   if [[ -e "$target_dir" && ! -d "$target_dir" ]]; then
     die "target path is not a directory: $target_dir"
   fi
@@ -134,7 +212,7 @@ main() {
   [[ -d "$unpack_dir/namespaces" ]] || die "archive missing namespaces/"
 
   require_tree_without_symlinks "$unpack_dir" "archive payload"
-  verify_checksums "$unpack_dir/checksums.txt" "$unpack_dir"
+  verify_checksums "$unpack_dir/manifest.json" "$unpack_dir/checksums.txt" "$unpack_dir"
 
   local backup_dir=""
   if dir_non_empty "$target_dir"; then

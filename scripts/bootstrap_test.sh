@@ -341,6 +341,33 @@ test_restore_force_backs_up_and_replaces_target() {
   pass "restore --force backs up and replaces target"
 }
 
+test_restore_rejects_target_dir_symlink() {
+  local case_dir="$TMP_ROOT/target-symlink"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local real_target_dir="$case_dir/real-target"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$real_target_dir/existing_namespace"
+  printf 'old\n' >"$real_target_dir/existing_namespace/value.txt"
+  ln -s "$real_target_dir" "$target_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+
+  run_expect_fail target_symlink \
+    "$RESTORE_SCRIPT" \
+    --archive "$archive" \
+    --target-dir "$target_dir" \
+    --force
+  assert_contains "$TMP_ROOT/target_symlink.stderr" "symlink"
+  [[ -L "$target_dir" ]] || fail "target symlink should remain in place"
+  assert_file_exists "$real_target_dir/existing_namespace/value.txt"
+  assert_glob_count "$case_dir" 'target.backup-*' 0
+  [[ ! -e "$real_target_dir/indexer_meta" ]] || fail "restore should not follow target symlink"
+  pass "restore rejects symlink target directories before replacement"
+}
+
 test_restore_rejects_symlinks_in_archive() {
   local case_dir="$TMP_ROOT/restore-symlink"
   local data_dir="$case_dir/data"
@@ -367,6 +394,37 @@ test_restore_rejects_symlinks_in_archive() {
   pass "restore rejects symlinks from unpacked archives"
 }
 
+test_restore_rejects_extra_empty_namespace_directory() {
+  local case_dir="$TMP_ROOT/extra-empty-namespace"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_dir="$case_dir/unpack"
+  local repack_dir="$case_dir/repack"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir" "$target_dir/existing_namespace"
+  printf 'old\n' >"$target_dir/existing_namespace/value.txt"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_dir"
+  mkdir -p "$unpack_dir/namespaces/rogue_empty_namespace"
+
+  local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-extra-empty-namespace.tar.gz"
+  tar -czf "$bad_archive" -C "$unpack_dir" .
+
+  run_expect_fail extra_empty_namespace \
+    "$RESTORE_SCRIPT" \
+    --archive "$bad_archive" \
+    --target-dir "$target_dir" \
+    --force
+  assert_contains "$TMP_ROOT/extra_empty_namespace.stderr" "unexpected directory"
+  assert_file_exists "$target_dir/existing_namespace/value.txt"
+  assert_glob_count "$case_dir" 'target.backup-*' 0
+  [[ ! -e "$target_dir/indexer_meta" ]] || fail "restore should fail before copying into target"
+  pass "restore rejects extra empty namespace directories before backup"
+}
+
 main() {
   TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/metaso-bootstrap-test.XXXXXX")
   require_scripts_present
@@ -379,7 +437,9 @@ main() {
   test_restore_rejects_unlisted_payload_files
   test_restore_rejects_non_empty_target_without_force
   test_restore_force_backs_up_and_replaces_target
+  test_restore_rejects_target_dir_symlink
   test_restore_rejects_symlinks_in_archive
+  test_restore_rejects_extra_empty_namespace_directory
 
   echo "All bootstrap script tests passed."
 }

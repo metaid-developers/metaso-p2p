@@ -20,6 +20,7 @@ same node's Pebble directory and you do not need packaging or manifest checks.
 
 - The source node must be offline before you package its `dataDir`.
 - Restore is replace-style, not merge-style.
+- `--target-dir` must be a real directory path, not a symlink.
 - Source and target should run the same `metaso-p2p` commit, or at least a
   known-compatible build.
 - Source and target must be for the same network semantics.
@@ -107,7 +108,8 @@ What restore does:
 
 1. unpacks the archive to a temporary directory;
 2. requires `manifest.json`, `checksums.txt`, and `namespaces/`;
-3. verifies checksums before copying any data;
+3. verifies checksums and rejects undeclared or extra payload directories
+   before touching the target path;
 4. refuses a non-empty target directory unless `--force` is set;
 5. copies the packaged namespace directories into the target `dataDir`.
 
