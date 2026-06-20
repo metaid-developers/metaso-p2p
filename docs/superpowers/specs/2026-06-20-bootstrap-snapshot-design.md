@@ -72,8 +72,9 @@ namespaces/
 - simple to inspect manually;
 - easy to produce from shell scripts in the current repo.
 
-Future work may add `tar.zst`, but this round should keep the dependency
-surface minimal.
+Future work may add `tar.zst`, but this round deliberately keeps pack-side
+artifact creation in standard shell tooling while accepting a restore-side
+runtime dependency on `python3` for semantic manifest validation.
 
 ## Manifest Contract
 
@@ -90,6 +91,19 @@ surface minimal.
 - `includedNamespaces`: ordered list of copied namespace directory names.
 
 The manifest is descriptive metadata, not a schema migration mechanism.
+
+Normal successful pack/restore output should also surface a stable
+`manifest: {...}` summary line containing:
+
+- `network`
+- `sourceNode`
+- `builtAt`
+- `metasoVersion`
+- `gitCommit`
+- `includedNamespaces`
+
+That keeps compatibility-relevant metadata visible in the operator workflow
+without requiring manual archive inspection.
 
 ## Namespace Selection
 
@@ -118,11 +132,14 @@ The restore script must:
 
 1. unpack the archive to a temporary working directory;
 2. require `manifest.json`, `checksums.txt`, and `namespaces/`;
-3. verify checksums before copying data into the target;
-4. refuse to overwrite a non-empty target directory unless `--force` is set;
-5. when `--force` is set, move the existing target directory to a timestamped
+3. require `python3` and use it to validate the manifest semantically after
+   verifying the manifest checksum entry;
+4. verify payload checksums before copying data into the target;
+5. print the validated manifest summary in normal script output;
+6. refuse to overwrite a non-empty target directory unless `--force` is set;
+7. when `--force` is set, move the existing target directory to a timestamped
    backup sibling before installing the snapshot;
-6. copy namespace directories exactly as packaged into the target `dataDir`.
+8. copy namespace directories exactly as packaged into the target `dataDir`.
 
 This is a replace-style restore, not a merge.
 
@@ -155,7 +172,12 @@ This round needs automated script-level coverage for:
 
 - package creation with default namespace filtering;
 - manifest generation;
+- normal pack/restore manifest summary output;
 - checksum verification during restore;
+- semantic manifest rejection for unsupported `schemaVersion`;
+- semantic manifest rejection for unsupported `dataDirFormat`;
+- semantic manifest rejection for empty required non-empty metadata;
+- semantic manifest rejection for malformed `includedNamespaces` entries;
 - non-empty target refusal without `--force`;
 - `--force` backup-and-replace restore behavior.
 

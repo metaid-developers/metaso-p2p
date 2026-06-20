@@ -158,11 +158,11 @@ not need a packaged artifact.
 
 Use bootstrap snapshots when the goal is to seed a new node from an already
 indexed source node, or to hand off a standard restore artifact between hosts.
-Restore validates `manifest.json` semantically with `python3` after verifying
-its checksum entry. The current manifest contract requires `schemaVersion=1`,
-`dataDirFormat=pebble-per-namespace`, and a non-empty `includedNamespaces`
-list, alongside the other required string metadata fields documented in
-[`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
+Restore deliberately depends on `python3` to validate `manifest.json`
+semantically after verifying its checksum entry. The current manifest contract
+requires `schemaVersion=1`, `dataDirFormat=pebble-per-namespace`, and a
+non-empty `includedNamespaces` list, alongside the other required string
+metadata fields documented in [`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
 
 Pack on the stopped source node:
 
@@ -181,6 +181,16 @@ scripts/bootstrap-restore.sh \
   --archive ./artifacts/metaso-p2p-bootstrap-mainnet-<timestamp>.tar.gz \
   --target-dir ./data/pebble
 ```
+
+Normal pack/restore output surfaces the validated manifest summary in one
+stable line:
+
+```text
+manifest: {"network":"mainnet","sourceNode":"prod-node-a","builtAt":"2026-06-20T12:34:56Z","metasoVersion":"53712db","gitCommit":"53712db05d943de30f7e05293552e99039d36432","includedNamespaces":["indexer_meta","social"]}
+```
+
+Pack then prints `archive: ...`; restore prints `restored: ...` and, when
+`--force` replaces a non-empty target, `backup: ...`.
 
 If the target directory already contains data that should be replaced, use
 `--force`. That moves the old directory to a sibling backup path before the new

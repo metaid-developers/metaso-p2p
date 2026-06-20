@@ -137,6 +137,33 @@ build_manifest() {
   } >"$output_path"
 }
 
+build_manifest_summary_json() {
+  local network="$1"
+  local source_node="$2"
+  local built_at="$3"
+  local metaso_version="$4"
+  local git_commit="$5"
+  shift 5
+  local namespaces=("$@")
+  local i=""
+
+  printf '{"network":"%s","sourceNode":"%s","builtAt":"%s","metasoVersion":"%s","gitCommit":"%s","includedNamespaces":[' \
+    "$(json_escape "$network")" \
+    "$(json_escape "$source_node")" \
+    "$(json_escape "$built_at")" \
+    "$(json_escape "$metaso_version")" \
+    "$(json_escape "$git_commit")"
+
+  for i in "${!namespaces[@]}"; do
+    if [[ "$i" -gt 0 ]]; then
+      printf ','
+    fi
+    printf '"%s"' "$(json_escape "${namespaces[$i]}")"
+  done
+
+  printf ']}'
+}
+
 main() {
   local data_dir=""
   local output_dir=""
@@ -250,8 +277,17 @@ main() {
   timestamp=$(date -u +%Y%m%dT%H%M%SZ)
   local archive_path="$output_dir/metaso-p2p-bootstrap-$network-$timestamp.tar.gz"
   tar -czf "$archive_path" -C "$stage_dir" manifest.json checksums.txt namespaces
+  local summary_json=""
+  summary_json=$(build_manifest_summary_json \
+    "$network" \
+    "$source_node" \
+    "$built_at" \
+    "$metaso_version" \
+    "$git_commit" \
+    "${namespaces[@]}")
 
-  printf '%s\n' "$archive_path"
+  printf 'manifest: %s\n' "$summary_json"
+  printf 'archive: %s\n' "$archive_path"
 }
 
 main "$@"

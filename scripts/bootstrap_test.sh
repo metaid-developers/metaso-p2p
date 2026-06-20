@@ -55,6 +55,44 @@ assert_glob_count() {
   [[ "$actual" == "$expected" ]] || fail "expected $expected matches for $dir/$glob, got $actual"
 }
 
+extract_prefixed_value() {
+  local file="$1"
+  local prefix="$2"
+  awk -v prefix="$prefix: " '
+    index($0, prefix) == 1 {
+      print substr($0, length(prefix) + 1)
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$file"
+}
+
+assert_manifest_summary_value() {
+  local file="$1"
+  local key="$2"
+  local raw_expected="$3"
+  local summary_json=""
+
+  summary_json=$(extract_prefixed_value "$file" manifest) || \
+    fail "expected manifest summary line in $file"
+  "$PYTHON_BIN" - "$summary_json" "$key" "$raw_expected" <<'PY'
+import json
+import sys
+
+summary_json, key, raw_expected = sys.argv[1:4]
+summary = json.loads(summary_json)
+expected = json.loads(raw_expected)
+actual = summary.get(key)
+if actual != expected:
+    raise SystemExit(f"expected manifest summary {key}={expected!r}, got {actual!r}")
+PY
+}
+
 assert_json_string_value() {
   local file="$1"
   local key="$2"
@@ -198,26 +236,32 @@ create_fixture_data() {
 pack_fixture() {
   local data_dir="$1"
   local output_dir="$2"
-  shift 2
+  local stdout_file="$3"
+  shift 3
   "$PACK_SCRIPT" \
     --data-dir "$data_dir" \
     --output-dir "$output_dir" \
-    "$@" >/dev/null
+    "$@" >"$stdout_file"
 
   assert_glob_count "$output_dir" 'metaso-p2p-bootstrap-mainnet-*.tar.gz' 1
-  find "$output_dir" -maxdepth 1 -type f -name 'metaso-p2p-bootstrap-mainnet-*.tar.gz' | head -n 1
+  local archive_path=""
+  archive_path=$(extract_prefixed_value "$stdout_file" archive) || \
+    fail "expected archive line in $stdout_file"
+  [[ -f "$archive_path" ]] || fail "expected archive file from output: $archive_path"
+  printf '%s\n' "$archive_path"
 }
 
 test_pack_excludes_cache_and_writes_manifest() {
   local case_dir="$TMP_ROOT/pack-default"
   local data_dir="$case_dir/data"
   local output_dir="$case_dir/out"
+  local stdout_file="$case_dir/pack.stdout"
   local unpack_dir="$case_dir/unpack"
   create_fixture_data "$data_dir"
   mkdir -p "$output_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$stdout_file" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
 
   assert_file_exists "$unpack_dir/manifest.json"
@@ -239,6 +283,13 @@ test_pack_excludes_cache_and_writes_manifest() {
   assert_contains "$unpack_dir/manifest.json" '"indexer_meta"'
   assert_contains "$unpack_dir/manifest.json" '"social"'
   assert_not_contains "$unpack_dir/manifest.json" '"cache_social"'
+  assert_contains "$stdout_file" 'manifest: {"network":"mainnet"'
+  assert_contains "$stdout_file" '"builtAt":"'
+  assert_contains "$stdout_file" '"metasoVersion":"'
+  assert_contains "$stdout_file" '"gitCommit":"'
+  assert_manifest_summary_value "$stdout_file" network '"mainnet"'
+  assert_manifest_summary_value "$stdout_file" sourceNode '"source-a"'
+  assert_manifest_summary_value "$stdout_file" includedNamespaces '["indexer_meta", "social"]'
 
   pass "default pack excludes cache_* and writes manifest.json"
 }
@@ -247,18 +298,22 @@ test_pack_manifest_escapes_control_chars() {
   local case_dir="$TMP_ROOT/manifest-control-chars"
   local data_dir="$case_dir/data"
   local output_dir="$case_dir/out"
+  local stdout_file="$case_dir/pack.stdout"
   local unpack_dir="$case_dir/unpack"
   local source_node=$'source-line-1\nsource\tline-2'
   create_fixture_data "$data_dir"
   mkdir -p "$output_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node "$source_node")
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$stdout_file" --network mainnet --source-node "$source_node")
   extract_archive "$archive" "$unpack_dir"
 
   assert_contains "$unpack_dir/manifest.json" '\n'
   assert_contains "$unpack_dir/manifest.json" '\t'
   assert_json_string_value "$unpack_dir/manifest.json" sourceNode "$source_node"
+  assert_contains "$stdout_file" '\n'
+  assert_contains "$stdout_file" '\t'
+  assert_manifest_summary_value "$stdout_file" sourceNode '"source-line-1\nsource\tline-2"'
   pass "manifest escapes control characters in free-form metadata"
 }
 
@@ -266,16 +321,18 @@ test_pack_include_cache_adds_cache_namespaces() {
   local case_dir="$TMP_ROOT/include-cache"
   local data_dir="$case_dir/data"
   local output_dir="$case_dir/out"
+  local stdout_file="$case_dir/pack.stdout"
   local unpack_dir="$case_dir/unpack"
   create_fixture_data "$data_dir"
   mkdir -p "$output_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a --include-cache)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$stdout_file" --network mainnet --source-node source-a --include-cache)
   extract_archive "$archive" "$unpack_dir"
 
   assert_file_exists "$unpack_dir/namespaces/cache_social/000123.log"
   assert_json_array_contains "$unpack_dir/manifest.json" includedNamespaces cache_social
+  assert_manifest_summary_value "$stdout_file" includedNamespaces '["cache_social", "indexer_meta", "social"]'
   pass "pack --include-cache includes cache namespaces in payload and manifest"
 }
 
@@ -309,7 +366,7 @@ test_restore_rejects_checksum_mismatch() {
   mkdir -p "$output_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   printf 'tampered\n' >>"$unpack_dir/namespaces/social/MANIFEST-000001"
   mkdir -p "$repack_dir"
@@ -336,7 +393,7 @@ test_restore_rejects_tampered_manifest_without_checksum_entry() {
   printf 'old\n' >"$target_dir/existing_namespace/value.txt"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   "$PYTHON_BIN" - "$unpack_dir/manifest.json" <<'PY'
 import json
@@ -381,7 +438,7 @@ test_restore_rejects_missing_required_manifest_fields() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_template"
 
   for field in schemaVersion metasoVersion gitCommit builtAt network sourceNode dataDirFormat includedNamespaces; do
@@ -429,7 +486,7 @@ test_restore_rejects_semantically_invalid_manifest_values() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_template"
 
   local case_name=""
@@ -456,6 +513,10 @@ test_restore_rejects_semantically_invalid_manifest_values() {
   done <<'EOF'
 invalid-builtat|builtAt|"2026-06-20 12:34:56Z"|manifest field builtAt must be a UTC RFC3339 timestamp
 invalid-gitcommit|gitCommit|"deadbeef"|manifest field gitCommit must be empty or a 40-character hex SHA
+unsupported-schemaversion|schemaVersion|2|unsupported manifest schemaVersion: 2
+unsupported-datadirformat|dataDirFormat|"flat-directory"|unsupported manifest dataDirFormat: flat-directory
+empty-sourcenode|sourceNode|""|manifest field sourceNode must be a non-empty string
+malformed-namespace-entry|includedNamespaces|["social", "bad/entry"]|invalid namespace entry: bad/entry
 EOF
 
   pass "restore rejects semantically invalid manifest field values"
@@ -472,7 +533,7 @@ test_restore_accepts_compact_valid_manifest_json() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   "$PYTHON_BIN" - "$unpack_dir/manifest.json" <<'PY'
 import json
@@ -510,7 +571,7 @@ test_restore_rejects_unlisted_payload_files() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   printf 'intruder\n' >"$unpack_dir/namespaces/social/EXTRA-UNLISTED.txt"
 
@@ -537,7 +598,7 @@ test_restore_rejects_extra_archive_root_entries() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   printf 'rogue\n' >"$unpack_dir/EXTRA.txt"
 
@@ -563,7 +624,7 @@ test_restore_rejects_non_empty_target_without_force() {
   printf 'old\n' >"$target_dir/existing.txt"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
 
   run_expect_fail non_empty_target \
     "$RESTORE_SCRIPT" \
@@ -578,21 +639,29 @@ test_restore_force_backs_up_and_replaces_target() {
   local data_dir="$case_dir/data"
   local output_dir="$case_dir/out"
   local target_dir="$case_dir/target"
+  local restore_stdout="$case_dir/restore.stdout"
   create_fixture_data "$data_dir"
   mkdir -p "$output_dir" "$target_dir/old_namespace"
   printf 'obsolete\n' >"$target_dir/old_namespace/value.txt"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
 
   "$RESTORE_SCRIPT" \
     --archive "$archive" \
     --target-dir "$target_dir" \
-    --force
+    --force >"$restore_stdout"
 
   assert_file_exists "$target_dir/indexer_meta/000001.sst"
   assert_file_exists "$target_dir/social/MANIFEST-000001"
   [[ ! -e "$target_dir/old_namespace" ]] || fail "target should be replaced during forced restore"
+  assert_contains "$restore_stdout" 'manifest: {"network":"mainnet"'
+  assert_contains "$restore_stdout" '"builtAt":"'
+  assert_contains "$restore_stdout" '"metasoVersion":"'
+  assert_contains "$restore_stdout" '"gitCommit":"'
+  assert_manifest_summary_value "$restore_stdout" network '"mainnet"'
+  assert_manifest_summary_value "$restore_stdout" sourceNode '"source-a"'
+  assert_manifest_summary_value "$restore_stdout" includedNamespaces '["indexer_meta", "social"]'
 
   local backup_parent
   backup_parent=$(dirname "$target_dir")
@@ -615,7 +684,7 @@ test_restore_rejects_target_dir_symlink() {
   ln -s "$real_target_dir" "$target_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
 
   run_expect_fail target_symlink \
     "$RESTORE_SCRIPT" \
@@ -641,7 +710,7 @@ test_restore_rejects_symlinks_in_archive() {
   mkdir -p "$output_dir" "$repack_dir"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   ln -s /tmp/metaso-bootstrap-restore-target "$unpack_dir/namespaces/social/host-link"
 
@@ -668,7 +737,7 @@ test_restore_rejects_extra_empty_namespace_directory() {
   printf 'old\n' >"$target_dir/existing_namespace/value.txt"
 
   local archive
-  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
   extract_archive "$archive" "$unpack_dir"
   mkdir -p "$unpack_dir/namespaces/rogue_empty_namespace"
 

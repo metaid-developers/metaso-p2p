@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the implementation operator-side and file-based. Ship two bash scripts under `scripts/` that package namespace directories from an offline Pebble `dataDir` into a `tar.gz` archive with `manifest.json` and `checksums.txt`, then restore that archive into a target `dataDir` with checksum verification and guarded overwrite semantics. Document the artifact as a first-class deployment input in `docs/`.
 
-**Tech Stack:** Bash, GNU/BSD userland tools (`tar`, `find`, `cp`, `mv`, `shasum`), existing Pebble namespace layout, markdown docs.
+**Tech Stack:** Bash, GNU/BSD userland tools (`tar`, `find`, `cp`, `mv`, `shasum`), `python3` for restore-side semantic manifest validation, existing Pebble namespace layout, markdown docs.
 
 ---
 
@@ -14,6 +14,15 @@
 
 This file is the approved execution guide for the bootstrap snapshot feature in
 the `codex/social-follow-apis` worktree.
+
+Final acceptance for this plan also treats two details as part of the operator
+contract:
+
+- restore hosts must provide `python3` because semantic manifest validation is
+  deliberate runtime behavior, not an incidental local convenience;
+- successful pack/restore runs must surface a stable `manifest: {...}` summary
+  line containing `network`, `sourceNode`, `builtAt`, `metasoVersion`,
+  `gitCommit`, and `includedNamespaces`.
 
 ## File Structure
 
@@ -47,10 +56,13 @@ the `codex/social-follow-apis` worktree.
   - `--data-dir`, `--output-dir`, `--network`, `--source-node`,
     `--include-cache`;
   - archive name `metaso-p2p-bootstrap-<network>-<timestamp>.tar.gz`;
-  - `manifest.json`, `checksums.txt`, and `namespaces/` layout.
+  - `manifest.json`, `checksums.txt`, and `namespaces/` layout;
+  - stable `manifest: {...}` and `archive: ...` success output.
 - [ ] Implement `bootstrap-restore.sh` with:
   - `--archive`, `--target-dir`, `--force`;
   - checksum verification before restore;
+  - semantic manifest validation with `python3`;
+  - stable `manifest: {...}` success output before target mutation;
   - fail-on-non-empty-target unless `--force`;
   - timestamped backup of the previous target directory when forced.
 - [ ] Re-run `bash scripts/bootstrap_test.sh` and confirm all cases pass.
@@ -94,6 +106,12 @@ git commit -m "docs: add bootstrap snapshot workflow"
 ```bash
 bash scripts/bootstrap_test.sh
 ```
+
+- [ ] Confirm script coverage includes semantic manifest rejection for:
+  - unsupported `schemaVersion`;
+  - unsupported `dataDirFormat`;
+  - empty-string values for required non-empty metadata;
+  - malformed `includedNamespaces` entries.
 
 - [ ] Run the repo go tests most likely to catch unrelated breakage:
 

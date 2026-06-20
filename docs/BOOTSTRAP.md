@@ -59,6 +59,27 @@ current restore contract requires:
 - `dataDirFormat`: string, currently must be `pebble-per-namespace`
 - `includedNamespaces`: non-empty list of namespace strings
 
+Normal successful script output also surfaces a stable manifest summary line so
+operators can see compatibility-relevant fields without unpacking the archive:
+
+```text
+manifest: {"network":"mainnet","sourceNode":"prod-node-a","builtAt":"2026-06-20T12:34:56Z","metasoVersion":"53712db","gitCommit":"53712db05d943de30f7e05293552e99039d36432","includedNamespaces":["indexer_meta","social"]}
+```
+
+`scripts/bootstrap-pack.sh` then prints:
+
+```text
+archive: /absolute/or/relative/path/to/metaso-p2p-bootstrap-<network>-<timestamp>.tar.gz
+```
+
+`scripts/bootstrap-restore.sh` prints the same `manifest:` line after checksum
+and semantic validation, then prints:
+
+```text
+backup: <target-dir>.backup-<timestamp>   # only when --force replaces a non-empty target
+restored: <target-dir>
+```
+
 By default `scripts/bootstrap-pack.sh` includes all top-level namespace
 directories under the source `dataDir` except `cache_*`. Add `--include-cache`
 only when you intentionally want cache namespaces inside the artifact.
@@ -88,7 +109,8 @@ scripts/bootstrap-pack.sh \
   --include-cache
 ```
 
-The script prints the archive path on success.
+The script prints one stable `manifest: {...}` summary line followed by
+`archive: ...` on success.
 
 Optional quick inspection:
 
@@ -112,12 +134,14 @@ What restore does:
 2. requires `manifest.json`, `checksums.txt`, and `namespaces/`;
 3. rejects unexpected archive-root entries, archive symlinks, and symlink
    targets before touching the target path;
-4. verifies the `manifest.json` checksum entry, then validates the manifest
-   contract semantically with `python3`;
+4. requires `python3`, verifies the `manifest.json` checksum entry, then
+   validates the manifest contract semantically;
 5. verifies checksums and rejects undeclared or extra payload directories
    before touching the target path;
-6. refuses a non-empty target directory unless `--force` is set;
-7. copies the packaged namespace directories into the target `dataDir`.
+6. prints the validated `manifest: {...}` summary so the operator can confirm
+   network, source node, build time, version, commit, and included namespaces;
+7. refuses a non-empty target directory unless `--force` is set;
+8. copies the packaged namespace directories into the target `dataDir`.
 
 To replace an existing non-empty target directory:
 
@@ -135,8 +159,9 @@ backup path before restore:
 <target-dir>.backup-<timestamp>
 ```
 
-The script prints `backup: ...` when it creates that backup, followed by
-`restored: ...` for the installed target path.
+The script prints the validated `manifest: {...}` summary first, then
+`backup: ...` when it creates that backup, followed by `restored: ...` for the
+installed target path.
 
 ## Bootstrap Restore Vs Plain Backup Copy
 

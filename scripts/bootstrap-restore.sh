@@ -4,6 +4,7 @@ set -euo pipefail
 
 PYTHON_BIN=""
 TMP_ROOT=""
+MANIFEST_SUMMARY_FILE=""
 
 cleanup() {
   if [[ -n "${TMP_ROOT}" && -d "${TMP_ROOT}" ]]; then
@@ -66,15 +67,19 @@ validate_manifest_and_list_namespaces() {
   local manifest_file="$1"
   local raw_namespaces_file="$TMP_ROOT/manifest-namespaces-raw.txt"
   local namespaces_file="$TMP_ROOT/manifest-namespaces.txt"
+  local summary_file="$TMP_ROOT/manifest-summary.json"
   local namespace=""
 
-  "$PYTHON_BIN" - "$manifest_file" >"$raw_namespaces_file" <<'PY'
+  MANIFEST_SUMMARY_FILE="$summary_file"
+
+  "$PYTHON_BIN" - "$manifest_file" "$summary_file" >"$raw_namespaces_file" <<'PY'
 import json
 import re
 import sys
 from datetime import datetime
 
 path = sys.argv[1]
+summary_path = sys.argv[2]
 
 try:
     with open(path, "r", encoding="utf-8") as handle:
@@ -140,6 +145,21 @@ if not isinstance(included_namespaces, list) or len(included_namespaces) == 0:
 for namespace in included_namespaces:
     if not isinstance(namespace, str) or namespace == "":
         raise SystemExit("manifest field includedNamespaces entries must be non-empty strings")
+
+summary = {
+    "network": manifest["network"],
+    "sourceNode": manifest["sourceNode"],
+    "builtAt": manifest["builtAt"],
+    "metasoVersion": manifest["metasoVersion"],
+    "gitCommit": manifest["gitCommit"],
+    "includedNamespaces": included_namespaces,
+}
+
+with open(summary_path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, separators=(",", ":"))
+    handle.write("\n")
+
+for namespace in included_namespaces:
     print(namespace)
 PY
 
@@ -154,6 +174,14 @@ PY
 
   [[ -s "$namespaces_file" ]] || die "includedNamespaces must be a non-empty list"
   cat "$namespaces_file"
+}
+
+print_manifest_summary() {
+  [[ -n "$MANIFEST_SUMMARY_FILE" && -f "$MANIFEST_SUMMARY_FILE" ]] || \
+    die "manifest summary is unavailable after validation"
+  local summary_json=""
+  summary_json=$(tr -d '\n' <"$MANIFEST_SUMMARY_FILE")
+  printf 'manifest: %s\n' "$summary_json"
 }
 
 require_archive_root_layout() {
@@ -323,6 +351,7 @@ main() {
   require_archive_root_layout "$unpack_dir"
   require_python3
   verify_checksums "$unpack_dir/manifest.json" "$unpack_dir/checksums.txt" "$unpack_dir"
+  print_manifest_summary
 
   local backup_dir=""
   if dir_non_empty "$target_dir"; then
