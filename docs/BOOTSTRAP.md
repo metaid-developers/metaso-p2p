@@ -20,6 +20,7 @@ same node's Pebble directory and you do not need packaging or manifest checks.
 
 - The source node must be offline before you package its `dataDir`.
 - Restore is replace-style, not merge-style.
+- The host running `scripts/bootstrap-restore.sh` must have `python3` available.
 - `--target-dir` must be a real directory path, not a symlink.
 - Source and target should run the same `metaso-p2p` commit, or at least a
   known-compatible build.
@@ -46,16 +47,17 @@ namespaces/
   ...
 ```
 
-`manifest.json` describes the snapshot with these fields:
+`manifest.json` is parsed semantically with `python3` during restore. The
+current restore contract requires:
 
-- `schemaVersion`
-- `metasoVersion`
-- `gitCommit`
-- `builtAt`
-- `network`
-- `sourceNode`
-- `dataDirFormat`
-- `includedNamespaces`
+- `schemaVersion`: integer, currently must be `1`
+- `metasoVersion`: non-empty string
+- `gitCommit`: string, may be empty
+- `builtAt`: non-empty string
+- `network`: non-empty string
+- `sourceNode`: non-empty string
+- `dataDirFormat`: string, currently must be `pebble-per-namespace`
+- `includedNamespaces`: non-empty list of namespace strings
 
 By default `scripts/bootstrap-pack.sh` includes all top-level namespace
 directories under the source `dataDir` except `cache_*`. Add `--include-cache`
@@ -108,10 +110,14 @@ What restore does:
 
 1. unpacks the archive to a temporary directory;
 2. requires `manifest.json`, `checksums.txt`, and `namespaces/`;
-3. verifies checksums and rejects undeclared or extra payload directories
+3. rejects unexpected archive-root entries, archive symlinks, and symlink
+   targets before touching the target path;
+4. verifies the `manifest.json` checksum entry, then validates the manifest
+   contract semantically with `python3`;
+5. verifies checksums and rejects undeclared or extra payload directories
    before touching the target path;
-4. refuses a non-empty target directory unless `--force` is set;
-5. copies the packaged namespace directories into the target `dataDir`.
+6. refuses a non-empty target directory unless `--force` is set;
+7. copies the packaged namespace directories into the target `dataDir`.
 
 To replace an existing non-empty target directory:
 

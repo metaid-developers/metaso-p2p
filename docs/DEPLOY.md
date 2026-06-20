@@ -3,6 +3,7 @@
 ## Prerequisites
 
 - **Go 1.26+** (for source builds) or **Docker** (for containerized deployment)
+- **python3** on any host that will run `scripts/bootstrap-restore.sh`
 - **No external database** — metaso-p2p uses PebbleDB (embedded), no MongoDB/MySQL/Redis needed
 - Port **8080** available (configurable via `METASO_P2P_HTTP_ADDR`)
 
@@ -157,6 +158,11 @@ not need a packaged artifact.
 
 Use bootstrap snapshots when the goal is to seed a new node from an already
 indexed source node, or to hand off a standard restore artifact between hosts.
+Restore validates `manifest.json` semantically with `python3` after verifying
+its checksum entry. The current manifest contract requires `schemaVersion=1`,
+`dataDirFormat=pebble-per-namespace`, and a non-empty `includedNamespaces`
+list, alongside the other required string metadata fields documented in
+[`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
 
 Pack on the stopped source node:
 

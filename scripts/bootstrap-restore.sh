@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+PYTHON_BIN=""
 TMP_ROOT=""
 
 cleanup() {
@@ -27,6 +28,21 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+require_python3() {
+  if [[ -n "$PYTHON_BIN" ]]; then
+    return
+  fi
+  if [[ -x /usr/bin/python3 ]]; then
+    PYTHON_BIN=/usr/bin/python3
+    return
+  fi
+  if have_cmd python3; then
+    PYTHON_BIN=$(command -v python3)
+    return
+  fi
+  die "missing python3 (required for manifest.json validation)"
+}
+
 sha256_file() {
   local path="$1"
   if have_cmd shasum; then
@@ -46,165 +62,72 @@ dir_non_empty() {
   find "$dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
 }
 
-list_manifest_namespaces() {
+validate_manifest_and_list_namespaces() {
   local manifest_file="$1"
   local raw_namespaces_file="$TMP_ROOT/manifest-namespaces-raw.txt"
   local namespaces_file="$TMP_ROOT/manifest-namespaces.txt"
   local namespace=""
 
-  awk '
-    function fail(msg) {
-      print msg > "/dev/stderr"
-      status = 1
-      exit 1
-    }
+  "$PYTHON_BIN" - "$manifest_file" >"$raw_namespaces_file" <<'PY'
+import json
+import sys
 
-    function hex_value(ch) {
-      if (ch >= "0" && ch <= "9") {
-        return ch + 0
-      }
-      ch = tolower(ch)
-      if (ch >= "a" && ch <= "f") {
-        return index("abcdef", ch) + 9
-      }
-      return -1
-    }
+path = sys.argv[1]
 
-    function hex_to_dec(hex,    i, value, digit, ch) {
-      value = 0
-      for (i = 1; i <= length(hex); i++) {
-        ch = substr(hex, i, 1)
-        digit = hex_value(ch)
-        if (digit < 0) {
-          return -1
-        }
-        value = (value * 16) + digit
-      }
-      return value
-    }
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"invalid manifest.json: {exc.msg}")
 
-    function decode_json_string(text,    i, ch, esc, hex, code, out) {
-      out = ""
-      text = substr(text, 2, length(text) - 2)
-      for (i = 1; i <= length(text); i++) {
-        ch = substr(text, i, 1)
-        if (ch == "\"") {
-          fail("includedNamespaces entries must be non-empty strings")
-        }
-        if (ch != "\\") {
-          out = out ch
-          continue
-        }
-        i++
-        if (i > length(text)) {
-          fail("includedNamespaces entries must be non-empty strings")
-        }
-        esc = substr(text, i, 1)
-        if (esc == "\"" || esc == "\\" || esc == "/") {
-          out = out esc
-        } else if (esc == "b") {
-          out = out sprintf("%c", 8)
-        } else if (esc == "f") {
-          out = out sprintf("%c", 12)
-        } else if (esc == "n") {
-          out = out sprintf("%c", 10)
-        } else if (esc == "r") {
-          out = out sprintf("%c", 13)
-        } else if (esc == "t") {
-          out = out sprintf("%c", 9)
-        } else if (esc == "u") {
-          hex = substr(text, i + 1, 4)
-          if (length(hex) != 4) {
-            fail("invalid unicode escape in includedNamespaces entry")
-          }
-          code = hex_to_dec(hex)
-          if (code < 0) {
-            fail("invalid unicode escape in includedNamespaces entry")
-          }
-          out = out sprintf("%c", code)
-          i += 4
-        } else {
-          fail("invalid escape in includedNamespaces entry")
-        }
-      }
-      return out
-    }
+if not isinstance(manifest, dict):
+    raise SystemExit("manifest.json must be a JSON object")
 
-    BEGIN {
-      expecting_array = 0
-      in_array = 0
-      found = 0
-      closed = 0
-      count = 0
-      status = 0
-    }
+required_fields = (
+    "schemaVersion",
+    "metasoVersion",
+    "gitCommit",
+    "builtAt",
+    "network",
+    "sourceNode",
+    "dataDirFormat",
+    "includedNamespaces",
+)
 
-    {
-      line = $0
-      if (closed) {
-        next
-      }
+for field in required_fields:
+    if field not in manifest:
+        raise SystemExit(f"missing required manifest field: {field}")
 
-      if (!in_array) {
-        if (line ~ /^[[:space:]]*"includedNamespaces"[[:space:]]*:[[:space:]]*\[[[:space:]]*$/) {
-          in_array = 1
-          found = 1
-          next
-        }
-        if (line ~ /^[[:space:]]*"includedNamespaces"[[:space:]]*:[[:space:]]*$/) {
-          expecting_array = 1
-          next
-        }
-        if (expecting_array) {
-          if (line !~ /^[[:space:]]*\[[[:space:]]*$/) {
-            fail("includedNamespaces must be a non-empty list")
-          }
-          in_array = 1
-          found = 1
-          expecting_array = 0
-        }
-        next
-      }
+schema_version = manifest["schemaVersion"]
+if type(schema_version) is not int:
+    raise SystemExit("manifest field schemaVersion must be an integer")
+if schema_version != 1:
+    raise SystemExit(f"unsupported manifest schemaVersion: {schema_version}")
 
-      if (line ~ /^[[:space:]]*\][[:space:]]*,?[[:space:]]*$/) {
-        if (count == 0) {
-          fail("includedNamespaces must be a non-empty list")
-        }
-        in_array = 0
-        closed = 1
-        next
-      }
+for field in ("metasoVersion", "builtAt", "network", "sourceNode"):
+    value = manifest[field]
+    if not isinstance(value, str) or value == "":
+        raise SystemExit(f"manifest field {field} must be a non-empty string")
 
-      raw = line
-      sub(/^[[:space:]]*/, "", raw)
-      sub(/[[:space:]]*$/, "", raw)
-      if (substr(raw, length(raw), 1) == ",") {
-        raw = substr(raw, 1, length(raw) - 1)
-        sub(/[[:space:]]*$/, "", raw)
-      }
-      if (length(raw) < 2 || substr(raw, 1, 1) != "\"" || substr(raw, length(raw), 1) != "\"") {
-        fail("includedNamespaces entries must be non-empty strings")
-      }
+git_commit = manifest["gitCommit"]
+if not isinstance(git_commit, str):
+    raise SystemExit("manifest field gitCommit must be a string")
 
-      print decode_json_string(raw)
-      count++
-    }
+data_dir_format = manifest["dataDirFormat"]
+if not isinstance(data_dir_format, str):
+    raise SystemExit("manifest field dataDirFormat must be a string")
+if data_dir_format != "pebble-per-namespace":
+    raise SystemExit(f"unsupported manifest dataDirFormat: {data_dir_format}")
 
-    END {
-      if (status) {
-        exit status
-      }
-      if (expecting_array) {
-        fail("includedNamespaces must be a non-empty list")
-      }
-      if (!found) {
-        fail("includedNamespaces must be a non-empty list")
-      }
-      if (in_array || !closed) {
-        fail("includedNamespaces array missing closing bracket")
-      }
-    }
-  ' "$manifest_file" >"$raw_namespaces_file"
+included_namespaces = manifest["includedNamespaces"]
+if not isinstance(included_namespaces, list) or len(included_namespaces) == 0:
+    raise SystemExit("manifest field includedNamespaces must be a non-empty list")
+
+for namespace in included_namespaces:
+    if not isinstance(namespace, str) or namespace == "":
+        raise SystemExit("manifest field includedNamespaces entries must be non-empty strings")
+    print(namespace)
+PY
 
   : >"$namespaces_file"
   while IFS= read -r namespace || [[ -n "$namespace" ]]; do
@@ -217,6 +140,23 @@ list_manifest_namespaces() {
 
   [[ -s "$namespaces_file" ]] || die "includedNamespaces must be a non-empty list"
   cat "$namespaces_file"
+}
+
+require_archive_root_layout() {
+  local root="$1"
+  local entry=""
+  local name=""
+
+  while IFS= read -r entry; do
+    name=$(basename "$entry")
+    case "$name" in
+      manifest.json|checksums.txt|namespaces)
+        ;;
+      *)
+        die "unexpected archive root entry: $name"
+        ;;
+    esac
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -print | sort)
 }
 
 require_tree_without_symlinks() {
@@ -261,7 +201,7 @@ verify_checksums() {
   [[ "$(sha256_file "$manifest_file")" == "$manifest_checksum" ]] || \
     die "checksum mismatch for manifest.json"
 
-  list_manifest_namespaces "$manifest_file" >"$expected_namespaces_file"
+  validate_manifest_and_list_namespaces "$manifest_file" >"$expected_namespaces_file"
   : >"$expected_payloads_file"
   printf 'namespaces\n' >"$expected_dirs_file"
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -366,6 +306,8 @@ main() {
   [[ -d "$unpack_dir/namespaces" ]] || die "archive missing namespaces/"
 
   require_tree_without_symlinks "$unpack_dir" "archive payload"
+  require_archive_root_layout "$unpack_dir"
+  require_python3
   verify_checksums "$unpack_dir/manifest.json" "$unpack_dir/checksums.txt" "$unpack_dir"
 
   local backup_dir=""

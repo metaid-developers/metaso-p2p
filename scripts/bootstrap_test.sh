@@ -124,6 +124,46 @@ extract_archive() {
   tar -xzf "$archive" -C "$destination"
 }
 
+repack_archive() {
+  local source_dir="$1"
+  local archive="$2"
+  tar -czf "$archive" -C "$source_dir" .
+}
+
+update_manifest_checksum() {
+  local manifest_file="$1"
+  local checksums_file="$2"
+  "$PYTHON_BIN" - "$manifest_file" "$checksums_file" <<'PY'
+import hashlib
+import sys
+
+manifest_path, checksums_path = sys.argv[1:3]
+digest = hashlib.sha256()
+with open(manifest_path, "rb") as handle:
+    digest.update(handle.read())
+
+updated = False
+output_lines = []
+with open(checksums_path, "r", encoding="utf-8") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+        if line.endswith("  manifest.json"):
+            output_lines.append(f"{digest.hexdigest()}  manifest.json")
+            updated = True
+        else:
+            output_lines.append(line)
+
+if not updated:
+    raise SystemExit("manifest.json missing from checksums.txt")
+
+with open(checksums_path, "w", encoding="utf-8") as handle:
+    for line in output_lines:
+        handle.write(f"{line}\n")
+PY
+}
+
 create_fixture_data() {
   local data_dir="$1"
   mkdir -p \
@@ -310,6 +350,93 @@ PY
   pass "restore rejects tampered manifest without checksum entry before target changes"
 }
 
+test_restore_rejects_missing_required_manifest_fields() {
+  local case_dir="$TMP_ROOT/missing-required-fields"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_template="$case_dir/unpack-template"
+  local repack_dir="$case_dir/repack"
+  local field=""
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_template"
+
+  for field in schemaVersion metasoVersion gitCommit builtAt network sourceNode dataDirFormat includedNamespaces; do
+    local variant_dir="$case_dir/$field"
+    local target_dir="$variant_dir/target"
+    mkdir -p "$variant_dir"
+    cp -R "$unpack_template/." "$variant_dir/"
+    "$PYTHON_BIN" - "$variant_dir/manifest.json" "$field" <<'PY'
+import json
+import sys
+
+path, field = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+del data[field]
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+    update_manifest_checksum "$variant_dir/manifest.json" "$variant_dir/checksums.txt"
+
+    local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-missing-${field}.tar.gz"
+    repack_archive "$variant_dir" "$bad_archive"
+
+    run_expect_fail "missing_field_${field}" \
+      "$RESTORE_SCRIPT" \
+      --archive "$bad_archive" \
+      --target-dir "$target_dir"
+    assert_contains "$TMP_ROOT/missing_field_${field}.stderr" "missing required manifest field: $field"
+    [[ ! -e "$target_dir" ]] || fail "restore should fail before creating target for missing field $field"
+  done
+
+  pass "restore rejects manifests missing required contract fields"
+}
+
+test_restore_accepts_compact_valid_manifest_json() {
+  local case_dir="$TMP_ROOT/compact-manifest"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_dir="$case_dir/unpack"
+  local repack_dir="$case_dir/repack"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_dir"
+  "$PYTHON_BIN" - "$unpack_dir/manifest.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, separators=(",", ":"))
+PY
+  update_manifest_checksum "$unpack_dir/manifest.json" "$unpack_dir/checksums.txt"
+
+  local compact_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-compact-manifest.tar.gz"
+  repack_archive "$unpack_dir" "$compact_archive"
+
+  "$RESTORE_SCRIPT" \
+    --archive "$compact_archive" \
+    --target-dir "$target_dir"
+
+  assert_file_exists "$target_dir/indexer_meta/000001.sst"
+  assert_file_exists "$target_dir/social/MANIFEST-000001"
+  pass "restore accepts compact valid manifest.json"
+}
+
 test_restore_rejects_unlisted_payload_files() {
   local case_dir="$TMP_ROOT/unlisted-payload"
   local data_dir="$case_dir/data"
@@ -335,6 +462,33 @@ test_restore_rejects_unlisted_payload_files() {
   assert_contains "$TMP_ROOT/unlisted_payload.stderr" "not listed in checksums.txt"
   [[ ! -e "$target_dir" ]] || fail "target directory should not be created on payload completeness failure"
   pass "restore rejects unlisted payload files before copying"
+}
+
+test_restore_rejects_extra_archive_root_entries() {
+  local case_dir="$TMP_ROOT/extra-root-entry"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_dir="$case_dir/unpack"
+  local repack_dir="$case_dir/repack"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_dir"
+  printf 'rogue\n' >"$unpack_dir/EXTRA.txt"
+
+  local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-extra-root-entry.tar.gz"
+  repack_archive "$unpack_dir" "$bad_archive"
+
+  run_expect_fail extra_root_entry \
+    "$RESTORE_SCRIPT" \
+    --archive "$bad_archive" \
+    --target-dir "$target_dir"
+  assert_contains "$TMP_ROOT/extra_root_entry.stderr" "unexpected archive root entry"
+  [[ ! -e "$target_dir" ]] || fail "target directory should not be created on archive root validation failure"
+  pass "restore rejects unexpected archive root entries before copying"
 }
 
 test_restore_rejects_non_empty_target_without_force() {
@@ -481,7 +635,10 @@ main() {
   test_pack_rejects_selected_namespace_symlinks
   test_restore_rejects_checksum_mismatch
   test_restore_rejects_tampered_manifest_without_checksum_entry
+  test_restore_rejects_missing_required_manifest_fields
+  test_restore_accepts_compact_valid_manifest_json
   test_restore_rejects_unlisted_payload_files
+  test_restore_rejects_extra_archive_root_entries
   test_restore_rejects_non_empty_target_without_force
   test_restore_force_backs_up_and_replaces_target
   test_restore_rejects_target_dir_symlink
