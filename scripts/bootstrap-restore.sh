@@ -242,6 +242,24 @@ verify_checksums() {
   local payload_path=""
   local actual_dir=""
   local expected_dir=""
+  local manifest_checksum=""
+  local manifest_entry_count=0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    local expected="${line%%  *}"
+    local rel_path="${line#*  }"
+    [[ "$expected" != "$line" ]] || die "invalid checksum entry: $line"
+    if [[ "$rel_path" == "manifest.json" ]]; then
+      manifest_entry_count=$((manifest_entry_count + 1))
+      [[ "$manifest_entry_count" -eq 1 ]] || die "duplicate checksum entry for manifest.json"
+      manifest_checksum="$expected"
+    fi
+  done <"$checksums_file"
+
+  [[ -n "$manifest_checksum" ]] || die "manifest.json missing from checksums.txt"
+  [[ "$(sha256_file "$manifest_file")" == "$manifest_checksum" ]] || \
+    die "checksum mismatch for manifest.json"
 
   list_manifest_namespaces "$manifest_file" >"$expected_namespaces_file"
   : >"$expected_payloads_file"

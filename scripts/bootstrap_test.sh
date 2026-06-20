@@ -264,6 +264,52 @@ test_restore_rejects_checksum_mismatch() {
   pass "restore verifies checksums before copying"
 }
 
+test_restore_rejects_tampered_manifest_without_checksum_entry() {
+  local case_dir="$TMP_ROOT/manifest-missing-checksum"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_dir="$case_dir/unpack"
+  local repack_dir="$case_dir/repack"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir" "$target_dir/existing_namespace"
+  printf 'old\n' >"$target_dir/existing_namespace/value.txt"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_dir"
+  "$PYTHON_BIN" - "$unpack_dir/manifest.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+data["sourceNode"] = "tampered-source"
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+  grep -Fv '  manifest.json' "$unpack_dir/checksums.txt" >"$repack_dir/checksums.txt"
+  mv "$repack_dir/checksums.txt" "$unpack_dir/checksums.txt"
+
+  local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-tampered-manifest.tar.gz"
+  tar -czf "$bad_archive" -C "$unpack_dir" .
+
+  run_expect_fail tampered_manifest_missing_checksum \
+    "$RESTORE_SCRIPT" \
+    --archive "$bad_archive" \
+    --target-dir "$target_dir" \
+    --force
+  assert_contains "$TMP_ROOT/tampered_manifest_missing_checksum.stderr" "manifest.json"
+  assert_file_exists "$target_dir/existing_namespace/value.txt"
+  assert_glob_count "$case_dir" 'target.backup-*' 0
+  [[ ! -e "$target_dir/indexer_meta" ]] || fail "restore should fail before touching target"
+  pass "restore rejects tampered manifest without checksum entry before target changes"
+}
+
 test_restore_rejects_unlisted_payload_files() {
   local case_dir="$TMP_ROOT/unlisted-payload"
   local data_dir="$case_dir/data"
@@ -434,6 +480,7 @@ main() {
   test_pack_include_cache_adds_cache_namespaces
   test_pack_rejects_selected_namespace_symlinks
   test_restore_rejects_checksum_mismatch
+  test_restore_rejects_tampered_manifest_without_checksum_entry
   test_restore_rejects_unlisted_payload_files
   test_restore_rejects_non_empty_target_without_force
   test_restore_force_backs_up_and_replaces_target
