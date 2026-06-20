@@ -57,10 +57,14 @@ type PrivateGroupPath struct {
 }
 
 const (
-	pchatKeyConst                    = "pchat:"
-	homepageSenderIndexKeyConst      = "hpchat:from:"
-	homepageSenderIndexStateKeyConst = "hpchat:index-state:"
-	homepageSenderIndexVersion       = "v1"
+	pchatKeyConst                     = "pchat:"
+	homepageSenderIndexKeyConst       = "hpchat:from:"
+	homepageSenderIndexStateKeyConst  = "hpchat:index-state:"
+	homepageSenderIndexVersion        = "v1"
+	homepageMaterializedChatsKeyConst = "hpchat:mat:"
+	homepageMaterializedStateKeyConst = "hpchat:mat-state:"
+	homepageMaterializedStateVersion  = "v1"
+	homepageMaterializedChatsLimit    = 64
 )
 
 // sortMetas returns the lower and higher metaId alphabetically.
@@ -92,6 +96,9 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 	if msg == nil {
 		return nil
 	}
+	a.homepageIndex.Lock()
+	defer a.homepageIndex.Unlock()
+
 	if msg.Index < 0 {
 		msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
 	}
@@ -112,6 +119,9 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 		return err
 	}
 	if err := writeHomepageSenderIndexEntries(batch, msg, raw); err != nil {
+		return err
+	}
+	if err := writeHomepageMaterializedEntries(a.store, batch, msg); err != nil {
 		return err
 	}
 
@@ -296,6 +306,18 @@ func homepageSenderIndexStateKey() []byte {
 	return []byte(homepageSenderIndexStateKeyConst + homepageSenderIndexVersion)
 }
 
+func homepageMaterializedChatsPrefix() []byte {
+	return []byte(homepageMaterializedChatsKeyConst)
+}
+
+func homepageMaterializedChatsKey(alias string) []byte {
+	return []byte(homepageMaterializedChatsKeyConst + aliasKey(alias))
+}
+
+func homepageMaterializedStateKey() []byte {
+	return []byte(homepageMaterializedStateKeyConst + homepageMaterializedStateVersion)
+}
+
 func descendingTimestamp(timestamp int64) int64 {
 	if timestamp < 0 {
 		timestamp = 0
@@ -348,6 +370,100 @@ func writeHomepageSenderIndexEntries(batch *pebble.Batch, msg *PrivateMessage, r
 			return err
 		}
 	}
+	return nil
+}
+
+func homepageInteractionFromMessage(msg *PrivateMessage) (HomepageInteraction, bool) {
+	if msg == nil || msg.PinId == "" || strings.TrimSpace(msg.To) == "" || !isHomepageSimpleMsgProtocol(msg.Protocol) {
+		return HomepageInteraction{}, false
+	}
+	return HomepageInteraction{
+		PinId:        msg.PinId,
+		ProtocolPath: HomepageSimpleMsgProtocolPath,
+		Timestamp:    msg.Timestamp,
+		InteractWith: msg.To,
+	}, true
+}
+
+func mergeHomepageMaterializedInteraction(items []HomepageInteraction, item HomepageInteraction, limit int) []HomepageInteraction {
+	if item.PinId == "" {
+		return items
+	}
+
+	replaced := false
+	for i := range items {
+		if items[i].PinId != item.PinId {
+			continue
+		}
+		if item.Timestamp < items[i].Timestamp {
+			items[i] = item
+		}
+		replaced = true
+		break
+	}
+	if !replaced {
+		items = append(items, item)
+	}
+
+	sortHomepageInteractions(items)
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func loadHomepageMaterializedChats(store interface {
+	Get(namespace string, key []byte) ([]byte, error)
+}, alias string) ([]HomepageInteraction, error) {
+	if store == nil {
+		return nil, nil
+	}
+
+	raw, err := store.Get(namespace, homepageMaterializedChatsKey(alias))
+	if err != nil {
+		if err == pebble.ErrNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var items []HomepageInteraction
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func writeHomepageMaterializedEntries(store interface {
+	Get(namespace string, key []byte) ([]byte, error)
+}, batch *pebble.Batch, msg *PrivateMessage) error {
+	if store == nil || batch == nil || msg == nil {
+		return nil
+	}
+
+	item, ok := homepageInteractionFromMessage(msg)
+	if !ok {
+		return nil
+	}
+
+	for _, alias := range homepageSenderIndexAliases(msg) {
+		items, err := loadHomepageMaterializedChats(store, alias)
+		if err != nil {
+			return err
+		}
+		items = mergeHomepageMaterializedInteraction(items, item, homepageMaterializedChatsLimit)
+		raw, err := json.Marshal(items)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(homepageMaterializedChatsKey(alias), raw, pebble.Sync); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
