@@ -3,10 +3,12 @@ package privatechat
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -96,12 +98,46 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 	if msg == nil {
 		return nil
 	}
-	a.homepageIndex.Lock()
-	defer a.homepageIndex.Unlock()
+
+	a.homepageIndex.RLock()
+	ready, err := a.homepageMaterializedStateDone()
+	if err != nil {
+		a.homepageIndex.RUnlock()
+		return err
+	}
+	if !ready {
+		a.homepageIndex.RUnlock()
+		a.homepageIndex.Lock()
+		defer a.homepageIndex.Unlock()
+		if msg.Index < 0 {
+			msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
+		}
+		return a.savePrivateMessageUnlocked(msg)
+	}
+	defer a.homepageIndex.RUnlock()
+
+	conversationLockKey := privateMessageConversationLockKey(msg)
+	if conversationLockKey != "" {
+		lock := a.privateMessageMutex(conversationLockKey)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	aliasLocks := a.homepageMaterializedMutexes(homepageSenderIndexAliases(msg))
+	lockSyncMutexes(aliasLocks)
+	defer unlockSyncMutexes(aliasLocks)
 
 	if msg.Index < 0 {
 		msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
 	}
+
+	return a.savePrivateMessageUnlocked(msg)
+}
+
+func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage) error {
+	if a == nil || msg == nil {
+		return nil
+	}
+
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -121,7 +157,7 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 	if err := writeHomepageSenderIndexEntries(batch, msg, raw); err != nil {
 		return err
 	}
-	if err := writeHomepageMaterializedEntries(a.store, batch, msg); err != nil {
+	if err := writeHomepageMaterializedEntriesUnlocked(a.store, batch, msg, a.invalidateHomepageMaterializedState); err != nil {
 		return err
 	}
 
@@ -432,14 +468,14 @@ func loadHomepageMaterializedChats(store interface {
 
 	var items []HomepageInteraction
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", errHomepageMaterializedCorrupt, alias)
 	}
 	return items, nil
 }
 
-func writeHomepageMaterializedEntries(store interface {
+func writeHomepageMaterializedEntriesUnlocked(store interface {
 	Get(namespace string, key []byte) ([]byte, error)
-}, batch *pebble.Batch, msg *PrivateMessage) error {
+}, batch *pebble.Batch, msg *PrivateMessage, invalidator func() error) error {
 	if store == nil || batch == nil || msg == nil {
 		return nil
 	}
@@ -452,6 +488,12 @@ func writeHomepageMaterializedEntries(store interface {
 	for _, alias := range homepageSenderIndexAliases(msg) {
 		items, err := loadHomepageMaterializedChats(store, alias)
 		if err != nil {
+			if errors.Is(err, errHomepageMaterializedCorrupt) {
+				if invalidator != nil {
+					_ = invalidator()
+				}
+				return nil
+			}
 			return err
 		}
 		items = mergeHomepageMaterializedInteraction(items, item, homepageMaterializedChatsLimit)
@@ -465,6 +507,63 @@ func writeHomepageMaterializedEntries(store interface {
 	}
 
 	return nil
+}
+
+func privateMessageConversationLockKey(msg *PrivateMessage) string {
+	if msg == nil {
+		return ""
+	}
+	from := strings.TrimSpace(msg.From)
+	to := strings.TrimSpace(msg.To)
+	if from == "" || to == "" {
+		return ""
+	}
+	lo, hi := sortMetas(from, to)
+	return lo + "|" + hi
+}
+
+func (a *Aggregator) privateMessageMutex(key string) *sync.Mutex {
+	return syncMapMutex(&a.privateMessageLocks, key)
+}
+
+func (a *Aggregator) homepageMaterializedMutexes(aliases []string) []*sync.Mutex {
+	if len(aliases) == 0 {
+		return nil
+	}
+	sort.Strings(aliases)
+	locks := make([]*sync.Mutex, 0, len(aliases))
+	for _, alias := range aliases {
+		locks = append(locks, syncMapMutex(&a.homepageMaterializedLock, alias))
+	}
+	return locks
+}
+
+func syncMapMutex(lockMap *sync.Map, key string) *sync.Mutex {
+	if lockMap == nil || key == "" {
+		return &sync.Mutex{}
+	}
+	if existing, ok := lockMap.Load(key); ok {
+		return existing.(*sync.Mutex)
+	}
+	lock := &sync.Mutex{}
+	actual, _ := lockMap.LoadOrStore(key, lock)
+	return actual.(*sync.Mutex)
+}
+
+func lockSyncMutexes(locks []*sync.Mutex) {
+	for _, lock := range locks {
+		if lock != nil {
+			lock.Lock()
+		}
+	}
+}
+
+func unlockSyncMutexes(locks []*sync.Mutex) {
+	for i := len(locks) - 1; i >= 0; i-- {
+		if locks[i] != nil {
+			locks[i].Unlock()
+		}
+	}
 }
 
 // GetPrivateChatHomes returns a list of conversation partners with last message preview.

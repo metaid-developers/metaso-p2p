@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -403,6 +405,75 @@ func TestListOutgoingHomepageInteractionsFallsBackForLargePageRequests(t *testin
 	}
 }
 
+func TestListOutgoingHomepageInteractionsFallsBackWhenMaterializedChatsCorrupted(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	msg := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "corrupt-fallback-real",
+		PinId:            "corrupt-fallback-real:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        123,
+		Index:            -1,
+	}
+	if err := agg.SavePrivateMessage(msg); err != nil {
+		t.Fatalf("SavePrivateMessage: %v", err)
+	}
+
+	for _, alias := range []string{"global_bot", "bot_meta", "1botlegacyaddress"} {
+		if err := store.Set(namespace, homepageMaterializedChatsKeyForTest(alias), []byte("{")); err != nil {
+			t.Fatalf("store.Set corrupt materialized list for %s: %v", alias, err)
+		}
+	}
+
+	got, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{
+		GlobalMetaId: "global_bot",
+		MetaId:       "bot_meta",
+		Address:      "1BotLegacyAddress",
+	})
+	if err != nil {
+		t.Fatalf("ListOutgoingHomepageInteractions: %v", err)
+	}
+
+	if got.HasMore {
+		t.Fatal("HasMore = true, want false")
+	}
+	if !reflect.DeepEqual(got.Items, []HomepageInteraction{
+		{
+			PinId:        "corrupt-fallback-real:i0",
+			ProtocolPath: HomepageSimpleMsgProtocolPath,
+			Timestamp:    123,
+			InteractWith: "peer_meta",
+		},
+	}) {
+		t.Fatalf("Items = %#v", got.Items)
+	}
+
+	if _, err := store.Get(namespace, homepageMaterializedStateKeyForTest()); err == nil {
+		t.Fatal("homepage materialized state key still exists after corruption fallback")
+	}
+
+	rebuilt, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{
+		GlobalMetaId: "global_bot",
+		MetaId:       "bot_meta",
+		Address:      "1BotLegacyAddress",
+	})
+	if err != nil {
+		t.Fatalf("ListOutgoingHomepageInteractions after rebuild: %v", err)
+	}
+	if !reflect.DeepEqual(rebuilt.Items, got.Items) {
+		t.Fatalf("rebuilt Items = %#v, want %#v", rebuilt.Items, got.Items)
+	}
+	if _, err := store.Get(namespace, homepageMaterializedStateKeyForTest()); err != nil {
+		t.Fatalf("homepage materialized state key missing after rebuild: %v", err)
+	}
+}
+
 func TestListOutgoingHomepageInteractionsBackfillsHomepageSenderIndexes(t *testing.T) {
 	store := storage.NewPebbleStore(t.TempDir())
 	defer store.Close()
@@ -495,6 +566,222 @@ func TestInitBackfillsHomepageMaterializedChats(t *testing.T) {
 	}
 	if _, err := store.Get(namespace, homepageMaterializedStateKeyForTest()); err != nil {
 		t.Fatalf("homepage materialized state key missing: %v", err)
+	}
+}
+
+func TestSavePrivateMessageDoesNotWaitForHomepageReadLockAfterInit(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	msg := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "lock-scope",
+		PinId:            "lock-scope:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        999,
+		Index:            -1,
+	}
+
+	agg.homepageIndex.RLock()
+	locked := true
+	defer func() {
+		if locked {
+			agg.homepageIndex.RUnlock()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- agg.SavePrivateMessage(msg)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SavePrivateMessage: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		agg.homepageIndex.RUnlock()
+		locked = false
+		if err := <-done; err != nil {
+			t.Fatalf("SavePrivateMessage after releasing read lock: %v", err)
+		}
+		t.Fatal("SavePrivateMessage blocked on homepageIndex read lock")
+	}
+}
+
+func TestSavePrivateMessageWaitsForConversationLockWhenAssigningIndex(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	msg := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "conversation-lock",
+		PinId:            "conversation-lock:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        1000,
+		Index:            -1,
+	}
+
+	lock := &sync.Mutex{}
+	lock.Lock()
+	agg.privateMessageLocks.Store(privateMessageConversationLockKey(msg), lock)
+	locked := true
+	defer func() {
+		if locked {
+			lock.Unlock()
+		}
+		agg.privateMessageLocks.Delete(privateMessageConversationLockKey(msg))
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- agg.SavePrivateMessage(msg)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SavePrivateMessage: %v", err)
+		}
+		t.Fatal("SavePrivateMessage did not wait for conversation lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	lock.Unlock()
+	locked = false
+	if err := <-done; err != nil {
+		t.Fatalf("SavePrivateMessage after releasing conversation lock: %v", err)
+	}
+}
+
+func TestSavePrivateMessageWaitsForSharedHomepageAliasLock(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	msg := &PrivateMessage{
+		FromGlobalMetaId: "",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "shared-alias-lock",
+		PinId:            "shared-alias-lock:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        1001,
+		Index:            -1,
+	}
+
+	shared := &sync.Mutex{}
+	shared.Lock()
+	agg.homepageMaterializedLock.Store(aliasKey("bot_meta"), shared)
+	locked := true
+	defer func() {
+		if locked {
+			shared.Unlock()
+		}
+		agg.homepageMaterializedLock.Delete(aliasKey("bot_meta"))
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- agg.SavePrivateMessage(msg)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SavePrivateMessage: %v", err)
+		}
+		t.Fatal("SavePrivateMessage did not wait for shared alias lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	shared.Unlock()
+	locked = false
+	if err := <-done; err != nil {
+		t.Fatalf("SavePrivateMessage after releasing shared alias lock: %v", err)
+	}
+}
+
+func TestSavePrivateMessageFallsBackWhenMaterializedChatsCorrupted(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	first := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer_a",
+		To:               "peer_a",
+		TxId:             "corrupt-write-first",
+		PinId:            "corrupt-write-first:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        100,
+		Index:            -1,
+	}
+	if err := agg.SavePrivateMessage(first); err != nil {
+		t.Fatalf("SavePrivateMessage(first): %v", err)
+	}
+
+	for _, alias := range []string{"global_bot", "bot_meta", "1botlegacyaddress"} {
+		if err := store.Set(namespace, homepageMaterializedChatsKeyForTest(alias), []byte("{")); err != nil {
+			t.Fatalf("store.Set corrupt materialized list for %s: %v", alias, err)
+		}
+	}
+
+	second := &PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer_b",
+		To:               "peer_b",
+		TxId:             "corrupt-write-second",
+		PinId:            "corrupt-write-second:i0",
+		Protocol:         HomepageSimpleMsgProtocolPath,
+		Timestamp:        200,
+		Index:            -1,
+	}
+	if err := agg.SavePrivateMessage(second); err != nil {
+		t.Fatalf("SavePrivateMessage(second): %v", err)
+	}
+
+	if _, err := store.Get(namespace, homepageMaterializedStateKeyForTest()); err == nil {
+		t.Fatal("homepage materialized state key still exists after corrupt write fallback")
+	}
+
+	got, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{
+		GlobalMetaId: "global_bot",
+		MetaId:       "bot_meta",
+		Address:      "1BotLegacyAddress",
+		Size:         5,
+	})
+	if err != nil {
+		t.Fatalf("ListOutgoingHomepageInteractions: %v", err)
+	}
+	if !reflect.DeepEqual(got.Items, []HomepageInteraction{
+		{
+			PinId:        "corrupt-write-second:i0",
+			ProtocolPath: HomepageSimpleMsgProtocolPath,
+			Timestamp:    200,
+			InteractWith: "peer_b",
+		},
+		{
+			PinId:        "corrupt-write-first:i0",
+			ProtocolPath: HomepageSimpleMsgProtocolPath,
+			Timestamp:    100,
+			InteractWith: "peer_a",
+		},
+	}) {
+		t.Fatalf("Items = %#v", got.Items)
 	}
 }
 

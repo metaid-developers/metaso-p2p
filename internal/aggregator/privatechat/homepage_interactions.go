@@ -9,7 +9,10 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
-const HomepageSimpleMsgProtocolPath = "/protocols/simplemsg"
+const (
+	HomepageSimpleMsgProtocolPath            = "/protocols/simplemsg"
+	homepageMaterializedBackfillFlushAliases = 256
+)
 
 type HomepageInteractionListParams struct {
 	GlobalMetaId string
@@ -95,6 +98,10 @@ func (a *Aggregator) listHomepageInteractionsFromMaterialized(aliases map[string
 	for alias := range aliases {
 		items, err := loadHomepageMaterializedChats(a.store, alias)
 		if err != nil {
+			if errors.Is(err, errHomepageMaterializedCorrupt) {
+				_ = a.invalidateHomepageMaterializedState()
+				return nil, false, nil
+			}
 			return nil, false, err
 		}
 		if len(items) == 0 {
@@ -185,7 +192,10 @@ func (a *Aggregator) collectHomepageInteractionsFromIndex(aliases map[string]boo
 	return matches, exhausted, nil
 }
 
-var errStopHomepageIndexScan = errors.New("stop homepage sender index scan")
+var (
+	errStopHomepageIndexScan       = errors.New("stop homepage sender index scan")
+	errHomepageMaterializedCorrupt = errors.New("homepage materialized chats corrupt")
+)
 
 func sortHomepageInteractions(items []HomepageInteraction) {
 	sort.SliceStable(items, func(i, j int) bool {
@@ -241,7 +251,7 @@ func (a *Aggregator) ensureHomepageIndexes() error {
 	defer batch.Close()
 
 	if !materializedDone {
-		if err := a.deleteHomepageMaterializedEntries(batch); err != nil {
+		if err := a.deleteHomepageMaterializedEntries(); err != nil {
 			return err
 		}
 	}
@@ -259,6 +269,12 @@ func (a *Aggregator) ensureHomepageIndexes() error {
 		}
 		if !materializedDone {
 			a.mergeHomepageMaterializedAliases(materializedByAlias, &msg)
+			if len(materializedByAlias) >= homepageMaterializedBackfillFlushAliases {
+				if err := a.writeHomepageMaterializedSnapshot(materializedByAlias); err != nil {
+					return err
+				}
+				clear(materializedByAlias)
+			}
 		}
 		return nil
 	})
@@ -267,10 +283,10 @@ func (a *Aggregator) ensureHomepageIndexes() error {
 	}
 
 	if !materializedDone {
-		if err := a.writeHomepageMaterializedSnapshot(batch, materializedByAlias); err != nil {
+		if err := a.writeHomepageMaterializedSnapshot(materializedByAlias); err != nil {
 			return err
 		}
-		if err := batch.Set(homepageMaterializedStateKey(), []byte("done"), pebble.Sync); err != nil {
+		if err := a.store.Set(namespace, homepageMaterializedStateKey(), []byte("done")); err != nil {
 			return err
 		}
 	}
@@ -292,10 +308,22 @@ func (a *Aggregator) homepageIndexStateDone(key []byte) (bool, error) {
 	return false, nil
 }
 
-func (a *Aggregator) deleteHomepageMaterializedEntries(batch *pebble.Batch) error {
-	return a.store.ScanPrefix(namespace, homepageMaterializedChatsPrefix(), func(key, value []byte) error {
-		return batch.Delete(key, pebble.Sync)
-	})
+func (a *Aggregator) homepageMaterializedStateDone() (bool, error) {
+	return a.homepageIndexStateDone(homepageMaterializedStateKey())
+}
+
+func (a *Aggregator) invalidateHomepageMaterializedState() error {
+	if a == nil || a.store == nil {
+		return nil
+	}
+	return a.store.Delete(namespace, homepageMaterializedStateKey())
+}
+
+func (a *Aggregator) deleteHomepageMaterializedEntries() error {
+	if a == nil || a.store == nil {
+		return nil
+	}
+	return a.store.DeleteByPrefix(namespace, homepageMaterializedChatsPrefix())
 }
 
 func (a *Aggregator) mergeHomepageMaterializedAliases(materializedByAlias map[string][]HomepageInteraction, msg *PrivateMessage) {
@@ -308,14 +336,21 @@ func (a *Aggregator) mergeHomepageMaterializedAliases(materializedByAlias map[st
 	}
 }
 
-func (a *Aggregator) writeHomepageMaterializedSnapshot(batch *pebble.Batch, materializedByAlias map[string][]HomepageInteraction) error {
+func (a *Aggregator) writeHomepageMaterializedSnapshot(materializedByAlias map[string][]HomepageInteraction) error {
 	for alias, items := range materializedByAlias {
-		sortHomepageInteractions(items)
-		raw, err := json.Marshal(items)
+		merged, err := loadHomepageMaterializedChats(a.store, alias)
+		if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+			return err
+		}
+		for _, item := range items {
+			merged = mergeHomepageMaterializedInteraction(merged, item, homepageMaterializedChatsLimit)
+		}
+		sortHomepageInteractions(merged)
+		raw, err := json.Marshal(merged)
 		if err != nil {
 			return err
 		}
-		if err := batch.Set(homepageMaterializedChatsKey(alias), raw, pebble.Sync); err != nil {
+		if err := a.store.Set(namespace, homepageMaterializedChatsKey(alias), raw); err != nil {
 			return err
 		}
 	}
