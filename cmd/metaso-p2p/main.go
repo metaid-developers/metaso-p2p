@@ -60,6 +60,7 @@ func main() {
 	var aggRegistry *aggregator.Registry
 	var userinfoAgg *userinfo.Aggregator
 	var botHomepageAgg *bothomepage.Aggregator
+	var socialAgg *social.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -70,11 +71,13 @@ func main() {
 		if err := aggRegistry.Register(userinfoAgg); err != nil {
 			log.Printf("WARNING: userinfo aggregator init failed: %v", err)
 		}
-		socialAgg := &social.Aggregator{}
-		if err := aggRegistry.Register(socialAgg); err != nil {
+		socialCandidate := &social.Aggregator{}
+		if err := aggRegistry.Register(socialCandidate); err != nil {
 			log.Printf("WARNING: social aggregator init failed: %v", err)
+		} else {
+			socialAgg = socialCandidate
+			socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
 		}
-		socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
 		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
 			log.Printf("WARNING: groupchat aggregator init failed: %v", err)
 		}
@@ -117,34 +120,43 @@ func main() {
 		botHomepageAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {
-				since := time.Now().Add(-cfg.BotHomepageV2Backfill.Lookback)
-				if publishedAgg != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
-					err := publishedAgg.Backfill(publishedcontent.BackfillOptions{
-						Context:  ctx,
-						Client:   publishedcontent.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
-						Since:    since,
-						PageSize: cfg.BotHomepageV2Backfill.PageSize,
-					})
-					cancel()
-					if err != nil {
-						log.Printf("WARNING: bot homepage v2 publishedcontent backfill failed: %v", err)
+				if cfg.BotHomepageV2Backfill.Enabled {
+					since := time.Now().Add(-cfg.BotHomepageV2Backfill.Lookback)
+					if publishedAgg != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
+						err := publishedAgg.Backfill(publishedcontent.BackfillOptions{
+							Context:  ctx,
+							Client:   publishedcontent.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
+							Since:    since,
+							PageSize: cfg.BotHomepageV2Backfill.PageSize,
+						})
+						cancel()
+						if err != nil {
+							log.Printf("WARNING: bot homepage v2 publishedcontent backfill failed: %v", err)
+						}
 					}
-				}
-				if userinfoAgg != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
-					err := userinfoAgg.Backfill(userinfo.BackfillOptions{
-						Context:  ctx,
-						Client:   userinfo.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
-						Since:    since,
-						PageSize: cfg.BotHomepageV2Backfill.PageSize,
-					})
-					cancel()
-					if err != nil {
-						log.Printf("WARNING: bot homepage v2 userinfo backfill failed: %v", err)
+					if userinfoAgg != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), cfg.BotHomepageV2Backfill.Timeout)
+						err := userinfoAgg.Backfill(userinfo.BackfillOptions{
+							Context:  ctx,
+							Client:   userinfo.NewBackfillClient(cfg.BotHomepageV2Backfill.MANAPIBaseURL, http.DefaultClient),
+							Since:    since,
+							PageSize: cfg.BotHomepageV2Backfill.PageSize,
+						})
+						cancel()
+						if err != nil {
+							log.Printf("WARNING: bot homepage v2 userinfo backfill failed: %v", err)
+						}
 					}
 				}
 			}()
+		}
+		if cfg.SocialBackfill.Enabled {
+			if socialAgg == nil {
+				log.Printf("WARNING: social follow backfill requested but aggregator is unavailable")
+			} else if err := runSocialBackfillIfEnabled(socialAgg, cfg.SocialBackfill); err != nil {
+				log.Printf("WARNING: social follow backfill failed: %v", err)
+			}
 		}
 		startPublishedContentReplayIfEnabled(publishedAgg, cfg)
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
