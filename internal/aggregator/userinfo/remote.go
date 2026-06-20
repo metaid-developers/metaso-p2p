@@ -114,6 +114,9 @@ func (a *Aggregator) completeProfile(ctx context.Context, local *UserProfile, qu
 	remote, err := a.fetchRemoteProfile(ctx, queries)
 	if err != nil {
 		log.Printf("[userinfo] remote profile fallback failed: %v", err)
+		if local == nil {
+			return nil, err
+		}
 		return local, nil
 	}
 	if remote == nil {

@@ -1,7 +1,9 @@
 package userinfo
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +16,33 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
+
+type stubRemoteProfileLookup struct {
+	lookupByMetaId       func(context.Context, string) (*UserProfile, error)
+	lookupByAddress      func(context.Context, string) (*UserProfile, error)
+	lookupByGlobalMetaId func(context.Context, string) (*UserProfile, error)
+}
+
+func (s stubRemoteProfileLookup) LookupByMetaId(ctx context.Context, metaid string) (*UserProfile, error) {
+	if s.lookupByMetaId == nil {
+		return nil, nil
+	}
+	return s.lookupByMetaId(ctx, metaid)
+}
+
+func (s stubRemoteProfileLookup) LookupByAddress(ctx context.Context, address string) (*UserProfile, error) {
+	if s.lookupByAddress == nil {
+		return nil, nil
+	}
+	return s.lookupByAddress(ctx, address)
+}
+
+func (s stubRemoteProfileLookup) LookupByGlobalMetaId(ctx context.Context, globalMetaId string) (*UserProfile, error) {
+	if s.lookupByGlobalMetaId == nil {
+		return nil, nil
+	}
+	return s.lookupByGlobalMetaId(ctx, globalMetaId)
+}
 
 // setupTestAggregator creates a test-ready userinfo aggregator with a real Pebble store and cache.
 func setupTestAggregator(t *testing.T) (*Aggregator, *storage.PebbleStore, *gin.Engine) {
@@ -436,6 +465,62 @@ func TestLookupByGlobalMetaId_UsesReverseIndex(t *testing.T) {
 	}
 	if profile == nil || profile.MetaID != "meta_reverse" {
 		t.Fatalf("reverse lookup returned %#v", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_ReturnsErrorWhenRemoteLookupFailsWithoutLocalProfile(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	remoteErr := errors.New("remote lookup unavailable")
+	agg.profileMode = "remote-only"
+	agg.remoteLookup = stubRemoteProfileLookup{
+		lookupByGlobalMetaId: func(context.Context, string) (*UserProfile, error) {
+			return nil, remoteErr
+		},
+	}
+
+	profile, err := agg.LookupByGlobalMetaId("idq1remoteonly")
+	if !errors.Is(err, remoteErr) {
+		t.Fatalf("LookupByGlobalMetaId error = %v, want %v", err, remoteErr)
+	}
+	if profile != nil {
+		t.Fatalf("LookupByGlobalMetaId profile = %#v, want nil", profile)
+	}
+}
+
+func TestLookupByGlobalMetaId_ReturnsLocalProfileWhenRemoteLookupFails(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	local := &UserProfile{
+		MetaID:       "meta_local_remote_error",
+		GlobalMetaID: "idq1localremoteerror",
+		Address:      "address_local_remote_error",
+		Name:         "Local Remote Error",
+	}
+	if err := agg.saveProfile(local); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	remoteErr := errors.New("remote lookup unavailable")
+	agg.profileMode = "local-first"
+	agg.allowRemoteFallback = true
+	agg.remoteLookup = stubRemoteProfileLookup{
+		lookupByGlobalMetaId: func(context.Context, string) (*UserProfile, error) {
+			return nil, remoteErr
+		},
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(local.GlobalMetaID)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId error = %v, want nil", err)
+	}
+	if profile == nil {
+		t.Fatal("LookupByGlobalMetaId returned nil profile")
+	}
+	if profile.MetaID != local.MetaID || profile.GlobalMetaID != local.GlobalMetaID || profile.Address != local.Address || profile.Name != local.Name {
+		t.Fatalf("LookupByGlobalMetaId profile = %#v, want %#v", profile, local)
 	}
 }
 

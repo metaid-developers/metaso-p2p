@@ -19,6 +19,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -45,6 +46,7 @@ type fullRouterFixture struct {
 	groupAgg       *groupchat.Aggregator
 	privateAgg     *privatechat.Aggregator
 	botHomepageAgg *bothomepage.Aggregator
+	socialAgg      *social.Aggregator
 	skillAgg       *skillservice.Aggregator
 	publishedAgg   *publishedcontent.Aggregator
 }
@@ -72,6 +74,10 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(privateAgg); err != nil {
 		t.Fatalf("register privatechat: %v", err)
 	}
+	socialAgg := &social.Aggregator{}
+	if err := reg.Register(socialAgg); err != nil {
+		t.Fatalf("register social: %v", err)
+	}
 	skillAgg := &skillservice.Aggregator{}
 	if err := reg.Register(skillAgg); err != nil {
 		t.Fatalf("register skillservice: %v", err)
@@ -85,6 +91,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		t.Fatalf("register bothomepage: %v", err)
 	}
 
+	socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userAgg))
 	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
 	skillAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 	botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userAgg))
@@ -104,6 +111,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		groupAgg:       groupAgg,
 		privateAgg:     privateAgg,
 		botHomepageAgg: botHomepageAgg,
+		socialAgg:      socialAgg,
 		skillAgg:       skillAgg,
 		publishedAgg:   publishedAgg,
 	}
@@ -784,6 +792,55 @@ func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
 	}
 	if payload, ok := itemData["payload"]; ok && payload != nil {
 		t.Fatalf("chat data.payload = %#v, want absent or nil", payload)
+	}
+}
+
+func TestRouterSocialFollowEndpoints(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-source")
+	seedBotProfile(t, fixture, "idq-target")
+
+	if _, err := fixture.socialAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            "follow-1:i0",
+		Path:          "/follow",
+		Operation:     "create",
+		ContentBody:   []byte("idq-target"),
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-source",
+		MetaId:        "meta-idq-source",
+		CreateMetaId:  "meta-idq-source",
+		Address:       "addr-idq-source",
+		CreateAddress: "addr-idq-source",
+		Timestamp:     1710000301,
+		Number:        301,
+	}); err != nil {
+		t.Fatalf("seed social follow: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/api/social/globalmetaid/idq-source/following?view=profile&size=20")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if body["code"] != float64(0) {
+		t.Fatalf("code = %#v body=%s", body["code"], w.Body.String())
+	}
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data = %T %#v, want object", body["data"], body["data"])
+	}
+	list, ok := data["list"].([]interface{})
+	if !ok || len(list) != 1 {
+		t.Fatalf("list = %T %#v, want one item", data["list"], data["list"])
+	}
+	item, ok := list[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("list[0] = %T %#v, want object", list[0], list[0])
+	}
+	if item["globalMetaId"] != "idq-target" {
+		t.Fatalf("globalMetaId = %#v, want idq-target", item["globalMetaId"])
+	}
+	if item["followPinId"] != "follow-1:i0" {
+		t.Fatalf("followPinId = %#v, want follow-1:i0", item["followPinId"])
 	}
 }
 
