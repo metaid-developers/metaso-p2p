@@ -163,6 +163,8 @@ semantically after verifying its checksum entry. The current manifest contract
 requires `schemaVersion=1`, `dataDirFormat=pebble-per-namespace`, and a
 non-empty `includedNamespaces` list, alongside the other required string
 metadata fields documented in [`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
+Pack additionally constrains `--network` to a filename-safe label matching
+`[A-Za-z0-9._-]+` because that label becomes part of the archive filename.
 
 Pack on the stopped source node:
 
@@ -194,7 +196,9 @@ Pack then prints `archive: ...`; restore prints `restored: ...` and, when
 
 If the target directory already contains data that should be replaced, use
 `--force`. That moves the old directory to a sibling backup path before the new
-snapshot is installed.
+snapshot is installed. If that backup sibling path already exists, restore
+fails before moving the target so the reported `backup: ...` path always names
+the actual moved-aside directory root.
 
 Prefer bootstrap restore over plain backup copy when the source and target are
 different nodes and you want a repeatable artifact boundary with

@@ -233,6 +233,21 @@ create_fixture_data() {
   printf 'cache:300\n' >"$data_dir/cache_social/000123.log"
 }
 
+create_fake_date_bin() {
+  local bin_dir="$1"
+  local fixed_timestamp="$2"
+  mkdir -p "$bin_dir"
+  cat >"$bin_dir/date" <<EOF
+#!/usr/bin/env bash
+if [[ "\$#" -eq 2 && "\$1" == "-u" && "\$2" == "+%Y%m%dT%H%M%SZ" ]]; then
+  printf '%s\n' '$fixed_timestamp'
+  exit 0
+fi
+exec /bin/date "\$@"
+EOF
+  chmod +x "$bin_dir/date"
+}
+
 pack_fixture() {
   local data_dir="$1"
   local output_dir="$2"
@@ -353,6 +368,24 @@ test_pack_rejects_selected_namespace_symlinks() {
   assert_contains "$TMP_ROOT/pack_symlink.stderr" "symlink"
   assert_glob_count "$output_dir" 'metaso-p2p-bootstrap-mainnet-*.tar.gz' 0
   pass "pack rejects symlinks inside selected namespaces"
+}
+
+test_pack_rejects_filename_unsafe_network_label() {
+  local case_dir="$TMP_ROOT/pack-unsafe-network"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir"
+
+  run_expect_fail pack_unsafe_network \
+    "$PACK_SCRIPT" \
+    --data-dir "$data_dir" \
+    --output-dir "$output_dir" \
+    --network 'main net' \
+    --source-node source-a
+  assert_contains "$TMP_ROOT/pack_unsafe_network.stderr" "network label must match [A-Za-z0-9._-]+"
+  assert_glob_count "$output_dir" 'metaso-p2p-bootstrap-*' 0
+  pass "pack rejects filename-unsafe network labels"
 }
 
 test_restore_rejects_checksum_mismatch() {
@@ -672,6 +705,37 @@ test_restore_force_backs_up_and_replaces_target() {
   pass "restore --force backs up and replaces target"
 }
 
+test_restore_force_rejects_backup_path_collision() {
+  local case_dir="$TMP_ROOT/force-backup-collision"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local target_dir="$case_dir/target"
+  local fake_bin_dir="$case_dir/fake-bin"
+  local fixed_timestamp="20260620T123456Z"
+  local colliding_backup_dir="$case_dir/target.backup-$fixed_timestamp"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$target_dir/old_namespace" "$colliding_backup_dir/existing_collision"
+  printf 'obsolete\n' >"$target_dir/old_namespace/value.txt"
+  printf 'keep\n' >"$colliding_backup_dir/existing_collision/value.txt"
+  create_fake_date_bin "$fake_bin_dir" "$fixed_timestamp"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" "$case_dir/pack.stdout" --network mainnet --source-node source-a)
+
+  run_expect_fail force_backup_collision \
+    env PATH="$fake_bin_dir:$PATH" \
+    "$RESTORE_SCRIPT" \
+    --archive "$archive" \
+    --target-dir "$target_dir" \
+    --force
+  assert_contains "$TMP_ROOT/force_backup_collision.stderr" "backup path already exists"
+  assert_file_exists "$target_dir/old_namespace/value.txt"
+  assert_file_exists "$colliding_backup_dir/existing_collision/value.txt"
+  [[ ! -e "$colliding_backup_dir/target" ]] || fail "forced restore must not nest target inside an existing backup sibling"
+  [[ ! -e "$target_dir/indexer_meta" ]] || fail "restore should fail before copying replacement data on backup collision"
+  pass "restore --force rejects backup sibling collisions"
+}
+
 test_restore_rejects_target_dir_symlink() {
   local case_dir="$TMP_ROOT/target-symlink"
   local data_dir="$case_dir/data"
@@ -764,6 +828,7 @@ main() {
   test_pack_manifest_escapes_control_chars
   test_pack_include_cache_adds_cache_namespaces
   test_pack_rejects_selected_namespace_symlinks
+  test_pack_rejects_filename_unsafe_network_label
   test_restore_rejects_checksum_mismatch
   test_restore_rejects_tampered_manifest_without_checksum_entry
   test_restore_rejects_missing_required_manifest_fields
@@ -773,6 +838,7 @@ main() {
   test_restore_rejects_extra_archive_root_entries
   test_restore_rejects_non_empty_target_without_force
   test_restore_force_backs_up_and_replaces_target
+  test_restore_force_rejects_backup_path_collision
   test_restore_rejects_target_dir_symlink
   test_restore_rejects_symlinks_in_archive
   test_restore_rejects_extra_empty_namespace_directory

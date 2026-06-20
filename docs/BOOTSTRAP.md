@@ -22,11 +22,14 @@ same node's Pebble directory and you do not need packaging or manifest checks.
 - Restore is replace-style, not merge-style.
 - The host running `scripts/bootstrap-restore.sh` must have `python3` available.
 - `--target-dir` must be a real directory path, not a symlink.
+- `--network` must be a filename-safe label matching `[A-Za-z0-9._-]+`
+  because pack embeds it directly in the archive filename.
 - Source and target should run the same `metaso-p2p` commit, or at least a
   known-compatible build.
 - Source and target must be for the same network semantics.
 - `--force` is only for replacing an existing non-empty target `dataDir`. It
-  moves that directory aside before installing the snapshot.
+  moves that directory aside before installing the snapshot, and restore fails
+  if that timestamped backup sibling path already exists.
 
 ## Artifact Contract
 
@@ -54,7 +57,7 @@ current restore contract requires:
 - `metasoVersion`: non-empty string
 - `gitCommit`: string, must be empty or a full 40-character hex SHA (`[0-9a-fA-F]{40}`)
 - `builtAt`: non-empty UTC RFC3339 timestamp in pack format `YYYY-MM-DDTHH:MM:SSZ` (for example `2026-06-20T12:34:56Z`)
-- `network`: non-empty string
+- `network`: non-empty string; pack only accepts filename-safe labels matching `[A-Za-z0-9._-]+`
 - `sourceNode`: non-empty string
 - `dataDirFormat`: string, currently must be `pebble-per-namespace`
 - `includedNamespaces`: non-empty list of namespace strings
@@ -158,6 +161,10 @@ backup path before restore:
 ```text
 <target-dir>.backup-<timestamp>
 ```
+
+If that exact sibling path already exists, restore fails before moving the
+target directory. It never nests the old target inside an existing backup
+directory.
 
 The script prints the validated `manifest: {...}` summary first, then
 `backup: ...` when it creates that backup, followed by `restored: ...` for the

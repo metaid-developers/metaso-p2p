@@ -22,7 +22,11 @@ contract:
   deliberate runtime behavior, not an incidental local convenience;
 - successful pack/restore runs must surface a stable `manifest: {...}` summary
   line containing `network`, `sourceNode`, `builtAt`, `metasoVersion`,
-  `gitCommit`, and `includedNamespaces`.
+  `gitCommit`, and `includedNamespaces`;
+- pack must reject `--network` values outside `[A-Za-z0-9._-]+` before archive
+  creation because that label is part of the output filename;
+- forced restore must reject backup sibling path collisions so the printed
+  `backup: ...` path always names the actual moved-aside directory root.
 
 ## File Structure
 
@@ -48,13 +52,17 @@ contract:
   - default exclusion of `cache_*`;
   - `manifest.json` creation;
   - restore checksum verification;
+  - filename-unsafe `--network` rejection;
   - refusal to restore into a non-empty target without `--force`;
-  - backup-and-replace behavior with `--force`.
+  - backup-and-replace behavior with `--force`;
+  - forced-restore rejection when the timestamped backup sibling already
+    exists.
 - [ ] Run `bash scripts/bootstrap_test.sh` and confirm the initial failure is due
       to missing scripts/behavior.
 - [ ] Implement `bootstrap-pack.sh` with:
   - `--data-dir`, `--output-dir`, `--network`, `--source-node`,
     `--include-cache`;
+  - pack-side validation that `--network` matches `[A-Za-z0-9._-]+`;
   - archive name `metaso-p2p-bootstrap-<network>-<timestamp>.tar.gz`;
   - `manifest.json`, `checksums.txt`, and `namespaces/` layout;
   - stable `manifest: {...}` and `archive: ...` success output.
@@ -64,7 +72,9 @@ contract:
   - semantic manifest validation with `python3`;
   - stable `manifest: {...}` success output before target mutation;
   - fail-on-non-empty-target unless `--force`;
-  - timestamped backup of the previous target directory when forced.
+  - timestamped backup of the previous target directory when forced;
+  - explicit rejection when that timestamped backup sibling path already
+    exists.
 - [ ] Re-run `bash scripts/bootstrap_test.sh` and confirm all cases pass.
 - [ ] Commit:
 

@@ -363,6 +363,9 @@ main() {
     local base_name
     base_name=$(basename "$target_dir")
     backup_dir="$parent_dir/$base_name.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+    if [[ -e "$backup_dir" || -L "$backup_dir" ]]; then
+      die "backup path already exists: $backup_dir"
+    fi
     mv "$target_dir" "$backup_dir"
   fi
 

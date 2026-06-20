@@ -84,7 +84,8 @@ runtime dependency on `python3` for semantic manifest validation.
 - `metasoVersion`: string, from git commit or `dev` when unavailable;
 - `gitCommit`: full commit sha when available, empty string otherwise;
 - `builtAt`: UTC RFC3339 timestamp;
-- `network`: operator-supplied network label, such as `mainnet`;
+- `network`: operator-supplied filename-safe label matching
+  `[A-Za-z0-9._-]+`, such as `mainnet`;
 - `sourceNode`: free-form operator label for the node that produced the
   snapshot;
 - `dataDirFormat`: fixed string `pebble-per-namespace`;
@@ -138,7 +139,8 @@ The restore script must:
 5. print the validated manifest summary in normal script output;
 6. refuse to overwrite a non-empty target directory unless `--force` is set;
 7. when `--force` is set, move the existing target directory to a timestamped
-   backup sibling before installing the snapshot;
+   backup sibling before installing the snapshot, but fail if that sibling path
+   already exists so the reported backup path is the actual moved-aside root;
 8. copy namespace directories exactly as packaged into the target `dataDir`.
 
 This is a replace-style restore, not a merge.
@@ -178,8 +180,11 @@ This round needs automated script-level coverage for:
 - semantic manifest rejection for unsupported `dataDirFormat`;
 - semantic manifest rejection for empty required non-empty metadata;
 - semantic manifest rejection for malformed `includedNamespaces` entries;
+- pack-side rejection for filename-unsafe `--network` labels;
 - non-empty target refusal without `--force`;
-- `--force` backup-and-replace restore behavior.
+- `--force` backup-and-replace restore behavior;
+- forced-restore rejection when the timestamped backup sibling path already
+  exists.
 
 Shell-based tests are acceptable if they are deterministic and runnable from
 this repo on the current machine.

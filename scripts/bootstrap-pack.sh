@@ -103,6 +103,13 @@ require_arg() {
   [[ -n "$value" ]] || die "missing required argument: $name"
 }
 
+require_filename_safe_label() {
+  local label_name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]] || \
+    die "$label_name label must match [A-Za-z0-9._-]+: $value"
+}
+
 build_manifest() {
   local output_path="$1"
   shift
@@ -211,6 +218,7 @@ main() {
   require_arg --output-dir "$output_dir"
   require_arg --network "$network"
   require_arg --source-node "$source_node"
+  require_filename_safe_label "network" "$network"
   [[ -d "$data_dir" ]] || die "data directory not found: $data_dir"
   mkdir -p "$output_dir"
 
