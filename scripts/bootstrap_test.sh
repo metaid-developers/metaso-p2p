@@ -264,6 +264,33 @@ test_restore_rejects_checksum_mismatch() {
   pass "restore verifies checksums before copying"
 }
 
+test_restore_rejects_unlisted_payload_files() {
+  local case_dir="$TMP_ROOT/unlisted-payload"
+  local data_dir="$case_dir/data"
+  local output_dir="$case_dir/out"
+  local unpack_dir="$case_dir/unpack"
+  local repack_dir="$case_dir/repack"
+  local target_dir="$case_dir/target"
+  create_fixture_data "$data_dir"
+  mkdir -p "$output_dir" "$repack_dir"
+
+  local archive
+  archive=$(pack_fixture "$data_dir" "$output_dir" --network mainnet --source-node source-a)
+  extract_archive "$archive" "$unpack_dir"
+  printf 'intruder\n' >"$unpack_dir/namespaces/social/EXTRA-UNLISTED.txt"
+
+  local bad_archive="$repack_dir/metaso-p2p-bootstrap-mainnet-unlisted.tar.gz"
+  tar -czf "$bad_archive" -C "$unpack_dir" .
+
+  run_expect_fail unlisted_payload \
+    "$RESTORE_SCRIPT" \
+    --archive "$bad_archive" \
+    --target-dir "$target_dir"
+  assert_contains "$TMP_ROOT/unlisted_payload.stderr" "not listed in checksums.txt"
+  [[ ! -e "$target_dir" ]] || fail "target directory should not be created on payload completeness failure"
+  pass "restore rejects unlisted payload files before copying"
+}
+
 test_restore_rejects_non_empty_target_without_force() {
   local case_dir="$TMP_ROOT/non-empty"
   local data_dir="$case_dir/data"
@@ -349,6 +376,7 @@ main() {
   test_pack_include_cache_adds_cache_namespaces
   test_pack_rejects_selected_namespace_symlinks
   test_restore_rejects_checksum_mismatch
+  test_restore_rejects_unlisted_payload_files
   test_restore_rejects_non_empty_target_without_force
   test_restore_force_backs_up_and_replaces_target
   test_restore_rejects_symlinks_in_archive

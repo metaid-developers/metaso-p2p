@@ -85,7 +85,7 @@ scripts/bootstrap-pack.sh \
   --include-cache
 ```
 
-The script prints the full archive path on success.
+The script prints the archive path on success.
 
 Optional quick inspection:
 

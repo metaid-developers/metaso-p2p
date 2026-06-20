@@ -61,6 +61,8 @@ verify_checksums() {
   local checksums_file="$1"
   local root_dir="$2"
   local line=""
+  local expected_payloads_file="$TMP_ROOT/expected-payloads.txt"
+  : >"$expected_payloads_file"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
     local expected="${line%%  *}"
@@ -71,7 +73,17 @@ verify_checksums() {
     local actual
     actual=$(sha256_file "$path")
     [[ "$actual" == "$expected" ]] || die "checksum mismatch for $rel_path"
+    if [[ "$rel_path" == namespaces/* ]]; then
+      printf '%s\n' "$rel_path" >>"$expected_payloads_file"
+    fi
   done <"$checksums_file"
+
+  local payload_path=""
+  while IFS= read -r payload_path; do
+    local rel_payload_path="${payload_path#$root_dir/}"
+    grep -Fqx "$rel_payload_path" "$expected_payloads_file" || \
+      die "payload file not listed in checksums.txt: $rel_payload_path"
+  done < <(find "$root_dir/namespaces" -type f | sort)
 }
 
 main() {
