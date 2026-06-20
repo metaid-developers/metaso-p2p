@@ -42,9 +42,59 @@ sha256_file() {
 }
 
 json_escape() {
-  printf '%s' "$1" | sed \
-    -e 's/\\/\\\\/g' \
-    -e 's/"/\\"/g'
+  local input="$1"
+  local escaped=""
+  local i=""
+  local char=""
+  local escaped_char=""
+
+  for ((i = 0; i < ${#input}; i++)); do
+    char="${input:i:1}"
+    case "$char" in
+      '"')
+        escaped+='\"'
+        ;;
+      '\\')
+        escaped+='\\\\'
+        ;;
+      $'\b')
+        escaped+='\b'
+        ;;
+      $'\f')
+        escaped+='\f'
+        ;;
+      $'\n')
+        escaped+='\n'
+        ;;
+      $'\r')
+        escaped+='\r'
+        ;;
+      $'\t')
+        escaped+='\t'
+        ;;
+      *)
+        if [[ "$char" < $' ' ]]; then
+          printf -v escaped_char '\\u%04x' "'$char"
+          escaped+="$escaped_char"
+        else
+          escaped+="$char"
+        fi
+        ;;
+    esac
+  done
+
+  printf '%s' "$escaped"
+}
+
+require_tree_without_symlinks() {
+  local root="$1"
+  local label="$2"
+  local symlink_path=""
+
+  symlink_path=$(find "$root" -type l -print -quit)
+  if [[ -n "$symlink_path" ]]; then
+    die "$label contains symlink: $symlink_path"
+  fi
 }
 
 require_arg() {
@@ -149,13 +199,17 @@ main() {
     if [[ "$include_cache" -ne 1 && "$namespace" == cache_* ]]; then
       continue
     fi
+    if [[ -L "$path" ]]; then
+      die "selected namespace contains symlink: $path"
+    fi
     namespaces+=("$namespace")
-  done < <(find "$data_dir" -mindepth 1 -maxdepth 1 -type d | sort)
+  done < <(find "$data_dir" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | sort)
 
   [[ "${#namespaces[@]}" -gt 0 ]] || die "no namespace directories selected from $data_dir"
 
   local namespace=""
   for namespace in "${namespaces[@]}"; do
+    require_tree_without_symlinks "$data_dir/$namespace" "selected namespace $namespace"
     cp -R "$data_dir/$namespace" "$stage_dir/namespaces/$namespace"
   done
 

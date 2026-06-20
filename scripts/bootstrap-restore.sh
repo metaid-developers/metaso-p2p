@@ -46,6 +46,17 @@ dir_non_empty() {
   find "$dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
 }
 
+require_tree_without_symlinks() {
+  local root="$1"
+  local label="$2"
+  local symlink_path=""
+
+  symlink_path=$(find "$root" -type l -print -quit)
+  if [[ -n "$symlink_path" ]]; then
+    die "$label contains symlink: $symlink_path"
+  fi
+}
+
 verify_checksums() {
   local checksums_file="$1"
   local root_dir="$2"
@@ -110,6 +121,7 @@ main() {
   [[ -f "$unpack_dir/checksums.txt" ]] || die "archive missing checksums.txt"
   [[ -d "$unpack_dir/namespaces" ]] || die "archive missing namespaces/"
 
+  require_tree_without_symlinks "$unpack_dir" "archive payload"
   verify_checksums "$unpack_dir/checksums.txt" "$unpack_dir"
 
   local backup_dir=""
