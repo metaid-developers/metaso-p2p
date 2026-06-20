@@ -33,6 +33,26 @@ func TestDefaultBotHomepageV2BackfillConfigDisabled(t *testing.T) {
 	}
 }
 
+func TestDefaultSocialBackfillConfigDisabled(t *testing.T) {
+	cfg := Default()
+
+	if cfg.SocialBackfill.Enabled {
+		t.Fatal("expected social backfill to be disabled by default")
+	}
+	if cfg.SocialBackfill.Lookback != 1440*time.Hour {
+		t.Fatalf("expected default lookback 1440h, got %s", cfg.SocialBackfill.Lookback)
+	}
+	if cfg.SocialBackfill.Timeout != 2*time.Minute {
+		t.Fatalf("expected default timeout 2m, got %s", cfg.SocialBackfill.Timeout)
+	}
+	if cfg.SocialBackfill.PageSize != 100 {
+		t.Fatalf("expected default page size 100, got %d", cfg.SocialBackfill.PageSize)
+	}
+	if cfg.SocialBackfill.MANAPIBaseURL != "https://manapi.metaid.io" {
+		t.Fatalf("expected default MANAPI base URL, got %q", cfg.SocialBackfill.MANAPIBaseURL)
+	}
+}
+
 func TestLoadBotHomepageV2BackfillEnv(t *testing.T) {
 	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED", "true")
 	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", "720h")
@@ -59,6 +79,79 @@ func TestLoadBotHomepageV2BackfillEnv(t *testing.T) {
 	}
 	if cfg.BotHomepageV2Backfill.MANAPIBaseURL != "https://manapi.example" {
 		t.Fatalf("expected MANAPI base URL env value, got %q", cfg.BotHomepageV2Backfill.MANAPIBaseURL)
+	}
+}
+
+func TestLoadSocialBackfillEnv(t *testing.T) {
+	t.Setenv("METASO_P2P_SOCIAL_BACKFILL_ENABLED", "true")
+	t.Setenv("METASO_P2P_SOCIAL_BACKFILL_LOOKBACK", "720h")
+	t.Setenv("METASO_P2P_SOCIAL_BACKFILL_TIMEOUT", "45s")
+	t.Setenv("METASO_P2P_SOCIAL_BACKFILL_PAGE_SIZE", "50")
+	t.Setenv("METASO_P2P_SOCIAL_BACKFILL_MANAPI_BASE_URL", "https://manapi.social.example")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if !cfg.SocialBackfill.Enabled {
+		t.Fatal("expected social backfill enabled to load from env")
+	}
+	if cfg.SocialBackfill.Lookback != 720*time.Hour {
+		t.Fatalf("expected lookback env value, got %s", cfg.SocialBackfill.Lookback)
+	}
+	if cfg.SocialBackfill.Timeout != 45*time.Second {
+		t.Fatalf("expected timeout env value, got %s", cfg.SocialBackfill.Timeout)
+	}
+	if cfg.SocialBackfill.PageSize != 50 {
+		t.Fatalf("expected page size env value, got %d", cfg.SocialBackfill.PageSize)
+	}
+	if cfg.SocialBackfill.MANAPIBaseURL != "https://manapi.social.example" {
+		t.Fatalf("expected MANAPI base URL env value, got %q", cfg.SocialBackfill.MANAPIBaseURL)
+	}
+}
+
+func TestValidateSocialBackfill(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "lookback must be positive",
+			mutate: func(cfg *Config) {
+				cfg.SocialBackfill.Lookback = 0
+			},
+		},
+		{
+			name: "timeout must be positive",
+			mutate: func(cfg *Config) {
+				cfg.SocialBackfill.Timeout = 0
+			},
+		},
+		{
+			name: "page size must be positive",
+			mutate: func(cfg *Config) {
+				cfg.SocialBackfill.PageSize = 0
+			},
+		},
+		{
+			name: "enabled requires MANAPI base URL",
+			mutate: func(cfg *Config) {
+				cfg.SocialBackfill.Enabled = true
+				cfg.SocialBackfill.MANAPIBaseURL = ""
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.mutate(&cfg)
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
 	"github.com/metaid-developers/metaso-p2p/internal/config"
 )
 
@@ -69,5 +71,100 @@ func TestLoadPublishedContentReplayConfigFromEnv(t *testing.T) {
 	}
 	if cfg.ProgressEvery != 25 {
 		t.Fatalf("progress every = %d, want 25", cfg.ProgressEvery)
+	}
+}
+
+type fakeSocialBackfiller struct {
+	called  chan struct{}
+	release chan struct{}
+	opts    social.BackfillOptions
+	err     error
+}
+
+func (f *fakeSocialBackfiller) Backfill(opts social.BackfillOptions) error {
+	f.opts = opts
+	if f.called != nil {
+		close(f.called)
+	}
+	if f.release != nil {
+		<-f.release
+	}
+	return f.err
+}
+
+func TestRunSocialBackfillIfEnabledWaitsForCompletion(t *testing.T) {
+	fake := &fakeSocialBackfiller{
+		called:  make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cfg := config.SocialBackfillConfig{
+		Enabled:       true,
+		Lookback:      720 * time.Hour,
+		Timeout:       time.Minute,
+		PageSize:      55,
+		MANAPIBaseURL: "https://manapi.example",
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runSocialBackfillIfEnabled(fake, cfg)
+	}()
+
+	<-fake.called
+	select {
+	case err := <-done:
+		t.Fatalf("runSocialBackfillIfEnabled returned before backfill completed: %v", err)
+	default:
+	}
+
+	close(fake.release)
+	if err := <-done; err != nil {
+		t.Fatalf("runSocialBackfillIfEnabled returned error: %v", err)
+	}
+	if fake.opts.Client == nil {
+		t.Fatal("expected MANAPI client to be set")
+	}
+	if fake.opts.PageSize != 55 {
+		t.Fatalf("page size = %d, want 55", fake.opts.PageSize)
+	}
+	if fake.opts.Since.IsZero() {
+		t.Fatal("expected non-zero since")
+	}
+	if fake.opts.Context == nil {
+		t.Fatal("expected context to be set")
+	}
+	if _, ok := fake.opts.Context.Deadline(); !ok {
+		t.Fatal("expected context deadline to be set")
+	}
+}
+
+func TestRunSocialBackfillIfEnabledDisabledSkipsCall(t *testing.T) {
+	fake := &fakeSocialBackfiller{
+		called: make(chan struct{}),
+	}
+
+	if err := runSocialBackfillIfEnabled(fake, config.SocialBackfillConfig{}); err != nil {
+		t.Fatalf("runSocialBackfillIfEnabled returned error: %v", err)
+	}
+
+	select {
+	case <-fake.called:
+		t.Fatal("expected disabled social backfill to skip Backfill call")
+	default:
+	}
+}
+
+func TestRunSocialBackfillIfEnabledPropagatesError(t *testing.T) {
+	fake := &fakeSocialBackfiller{err: context.DeadlineExceeded}
+	cfg := config.SocialBackfillConfig{
+		Enabled:       true,
+		Lookback:      24 * time.Hour,
+		Timeout:       time.Second,
+		PageSize:      10,
+		MANAPIBaseURL: "https://manapi.example",
+	}
+
+	if err := runSocialBackfillIfEnabled(fake, cfg); err != context.DeadlineExceeded {
+		t.Fatalf("runSocialBackfillIfEnabled err = %v, want %v", err, context.DeadlineExceeded)
 	}
 }

@@ -241,6 +241,33 @@ maxPeers = 0
 maxSnapshotBytes = 0
 
 # ---------------------------------------------------------------------------
+# [socialBackfill]  Optional social follow MANAPI historical import
+# ---------------------------------------------------------------------------
+[socialBackfill]
+# Disabled by default. When enabled, startup can import recent /follow pins
+# from MANAPI so the social APIs have historical edges immediately.
+# Env: METASO_P2P_SOCIAL_BACKFILL_ENABLED
+enabled = false
+
+# How far back MANAPI backfill should read.
+# Format: Go duration string (e.g. "1440h" for 60 days).
+# Env: METASO_P2P_SOCIAL_BACKFILL_LOOKBACK
+lookback = "1440h"
+
+# Timeout for outbound MANAPI requests.
+# Format: Go duration string (e.g. "2m").
+# Env: METASO_P2P_SOCIAL_BACKFILL_TIMEOUT
+timeout = "2m"
+
+# Number of pins requested per MANAPI page.
+# Env: METASO_P2P_SOCIAL_BACKFILL_PAGE_SIZE
+pageSize = 100
+
+# MANAPI base URL used by the backfill client.
+# Env: METASO_P2P_SOCIAL_BACKFILL_MANAPI_BASE_URL
+manapiBaseUrl = "https://manapi.metaid.io"
+
+# ---------------------------------------------------------------------------
 # [botHomepageV2Backfill]  Optional Bot Homepage v2 MANAPI historical import
 # ---------------------------------------------------------------------------
 [botHomepageV2Backfill]
