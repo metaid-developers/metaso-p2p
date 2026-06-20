@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	lru "github.com/hashicorp/golang-lru/v2/expirable"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
@@ -33,6 +34,8 @@ type Aggregator struct {
 	globalPresence         presence.GlobalReader
 	assetResolver          *skillservice.AssetResolver
 	assetBaseURL           string
+	v3ResultCache          *lru.LRU[string, []byte]
+	v3ResultCacheTTL       time.Duration
 }
 
 func (a *Aggregator) Name() string { return namespace }
@@ -46,6 +49,10 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if a.now == nil {
 		a.now = func() int64 { return time.Now().UnixMilli() }
 	}
+	if a.v3ResultCacheTTL <= 0 {
+		a.v3ResultCacheTTL = cacheTTL
+	}
+	a.v3ResultCache = lru.NewLRU[string, []byte](cacheMaxEntries, nil, a.v3ResultCacheTTL)
 	return nil
 }
 

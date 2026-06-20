@@ -17,6 +17,9 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 	if a == nil || a.profileLookup == nil {
 		return nil, ErrAggregationUnavailable
 	}
+	if cached, ok := a.loadV3FromCache(buildV3CacheKey(requestGlobalMetaId, opts), opts.IncludePresence); ok {
+		return cached, nil
+	}
 
 	profile, err := a.profileLookup.LookupByGlobalMetaId(requestGlobalMetaId)
 	if err != nil {
@@ -40,7 +43,7 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 		warnings = append(warnings, sectionWarnings...)
 	}
 
-	return &DataV3{
+	result := &DataV3{
 		SchemaVersion: schemaVersionV3,
 		Identity: IdentityV3{
 			GlobalMetaId: canonical.GlobalMetaId,
@@ -51,7 +54,9 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 		Presence: a.resolvePresence(*profile, opts.IncludePresence),
 		Sections: sections,
 		Warnings: warnings,
-	}, nil
+	}
+	a.storeV3Cache(buildV3CacheKey(requestGlobalMetaId, opts), result, profile)
+	return result, nil
 }
 
 func (a *Aggregator) loadSectionsV3(canonical CanonicalIdentity, opts Options) ([]SectionV3, []string) {
