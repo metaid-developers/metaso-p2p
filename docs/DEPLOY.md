@@ -124,16 +124,65 @@ metaso-p2p stores all data in **PebbleDB**, an embedded key-value store (no exte
 - **Docker**: bind-mount a host directory to `/data` and set `METASO_P2P_PEBBLE_DATA_DIR=/data/pebble`
 - All indexed messages, user info, blocked-chat lists, and cursor state are persisted here
 - To reset: stop the server, delete the data directory, restart
+- For a new node that should start from a prebuilt index instead of replaying
+  full history, restore a bootstrap snapshot into the Pebble directory before
+  the first start. See [`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
 
 ### Backup & Recovery
 
-PebbleDB is a single directory of files. To back up:
+There are two normal operator workflows:
+
+- **Plain backup copy**: quick offline backup/rollback for the same node or the
+  same operator-controlled directory layout.
+- **Bootstrap snapshot**: standard artifact for seeding another node or moving
+  indexed state between hosts with manifest and checksum checks. See
+  [`docs/BOOTSTRAP.md`](./BOOTSTRAP.md).
+
+#### Plain backup copy
+
+PebbleDB is a single directory of files. To back up an offline node:
+
 ```bash
 # Stop the server first, then:
 cp -r ./data/pebble ./data/pebble-backup-$(date +%Y%m%d)
 ```
 
-To restore: stop the server, replace the data directory with the backup, restart.
+To restore, stop the server, replace the data directory with the backup, then
+restart.
+
+Use this when you already have the exact directory you want to put back and do
+not need a packaged artifact.
+
+#### Bootstrap snapshot
+
+Use bootstrap snapshots when the goal is to seed a new node from an already
+indexed source node, or to hand off a standard restore artifact between hosts.
+
+Pack on the stopped source node:
+
+```bash
+scripts/bootstrap-pack.sh \
+  --data-dir ./data/pebble \
+  --output-dir ./artifacts \
+  --network mainnet \
+  --source-node prod-node-a
+```
+
+Restore on the target node before starting the service:
+
+```bash
+scripts/bootstrap-restore.sh \
+  --archive ./artifacts/metaso-p2p-bootstrap-mainnet-<timestamp>.tar.gz \
+  --target-dir ./data/pebble
+```
+
+If the target directory already contains data that should be replaced, use
+`--force`. That moves the old directory to a sibling backup path before the new
+snapshot is installed.
+
+Prefer bootstrap restore over plain backup copy when the source and target are
+different nodes and you want a repeatable artifact boundary with
+`manifest.json` and checksum verification.
 
 ## Connecting idchat
 
