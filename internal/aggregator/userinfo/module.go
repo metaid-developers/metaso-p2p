@@ -344,6 +344,12 @@ func (a *Aggregator) LookupByGlobalMetaId(globalMetaId string) (*UserProfile, er
 	return a.lookupByGlobalMetaId(context.Background(), globalMetaId)
 }
 
+// LookupLocalByGlobalMetaId returns the locally indexed profile for a
+// GlobalMetaID without invoking remote profile fallback.
+func (a *Aggregator) LookupLocalByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
+	return a.findProfileByGlobalMetaId(globalMetaId)
+}
+
 // --- Profile persistence ---
 
 func (a *Aggregator) getProfile(metaid string) (*UserProfile, error) {

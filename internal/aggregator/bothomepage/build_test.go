@@ -40,6 +40,35 @@ func (f *fakeProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileS
 	return f.profile, f.err
 }
 
+type localOnlyPeerProfileLookup struct {
+	botProfile       *ProfileSnapshot
+	localPeerProfile *ProfileSnapshot
+	regularCalls     map[string]int
+	localCalls       map[string]int
+}
+
+func (l *localOnlyPeerProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	if l.regularCalls == nil {
+		l.regularCalls = make(map[string]int)
+	}
+	l.regularCalls[globalMetaId]++
+	if l.botProfile != nil && l.botProfile.GlobalMetaId == globalMetaId {
+		return l.botProfile, nil
+	}
+	return nil, errors.New("regular lookup should not hydrate chat peer")
+}
+
+func (l *localOnlyPeerProfileLookup) LookupLocalByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	if l.localCalls == nil {
+		l.localCalls = make(map[string]int)
+	}
+	l.localCalls[globalMetaId]++
+	if l.localPeerProfile != nil && l.localPeerProfile.GlobalMetaId == globalMetaId {
+		return l.localPeerProfile, nil
+	}
+	return nil, nil
+}
+
 func defaultV3Options() Options {
 	opts := DefaultOptions()
 	opts.Version = "v3"
@@ -1920,6 +1949,58 @@ func TestBuildV3ChatsDeduplicatesPeerProfileLookup(t *testing.T) {
 	}
 	if lookup.calls["idqPeerBot"] != 1 {
 		t.Fatalf("peer profile lookup calls = %d, want 1 for duplicate interactWith", lookup.calls["idqPeerBot"])
+	}
+}
+
+func TestBuildV3ChatsUseLocalOnlyPeerProfileLookup(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	lookup := &localOnlyPeerProfileLookup{
+		botProfile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+			Name:         "Section Bot",
+		},
+		localPeerProfile: &ProfileSnapshot{
+			GlobalMetaId: "idqPeerBot",
+			Name:         "Peer Bot",
+			AvatarId:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0",
+		},
+	}
+	agg.SetProfileLookup(lookup)
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{{
+			PinId:        "chat-1:i0",
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    1710000005,
+			InteractWith: "idqPeerBot",
+		}},
+	}})
+
+	opts := defaultV3Options()
+	opts.IncludeServices = false
+	opts.IncludeMetaApps = false
+	opts.IncludeBuzzes = false
+
+	got, err := agg.BuildV3("idqCanonicalBot", opts)
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	interactWith := got.Sections[0].Items[0].Data.InteractWith
+	if interactWith == nil {
+		t.Fatal("chat interactWith = nil, want local peer profile")
+	}
+	if *interactWith != (InteractWithV3{GlobalMetaId: "idqPeerBot", Name: "Peer Bot", AvatarId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0"}) {
+		t.Fatalf("chat interactWith = %+v, want local peer profile", *interactWith)
+	}
+	if lookup.regularCalls["idqPeerBot"] != 0 {
+		t.Fatalf("regular peer lookup calls = %d, want 0", lookup.regularCalls["idqPeerBot"])
+	}
+	if lookup.localCalls["idqPeerBot"] != 1 {
+		t.Fatalf("local peer lookup calls = %d, want 1", lookup.localCalls["idqPeerBot"])
 	}
 }
 

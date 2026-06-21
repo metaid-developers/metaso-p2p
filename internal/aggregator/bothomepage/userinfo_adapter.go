@@ -62,6 +62,14 @@ func (a *userInfoLookupAdapter) LookupByGlobalMetaId(globalMetaId string) (*Prof
 	return profileFromUserInfo(p), err
 }
 
+func (a *userInfoLookupAdapter) LookupLocalByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	if a == nil || a.ui == nil {
+		return nil, errUserInfoLookupUnavailable
+	}
+	p, err := a.ui.LookupLocalByGlobalMetaId(globalMetaId)
+	return profileFromUserInfo(p), err
+}
+
 func profileFromUserInfo(p *userinfo.UserProfile) *ProfileSnapshot {
 	if p == nil {
 		return nil

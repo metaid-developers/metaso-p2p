@@ -46,6 +46,10 @@ type ChatInteractionLister interface {
 	ListOutgoingHomepageInteractions(privatechat.HomepageInteractionListParams) (*privatechat.HomepageInteractionListResult, error)
 }
 
+type LocalProfileLookup interface {
+	LookupLocalByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error)
+}
+
 func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, error) {
 	requestGlobalMetaId = strings.TrimSpace(requestGlobalMetaId)
 	if requestGlobalMetaId == "" {

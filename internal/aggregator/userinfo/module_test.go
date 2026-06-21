@@ -524,6 +524,45 @@ func TestLookupByGlobalMetaId_ReturnsLocalProfileWhenRemoteLookupFails(t *testin
 	}
 }
 
+func TestLookupLocalByGlobalMetaIdDoesNotFetchRemote(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	local := &UserProfile{
+		MetaID:       "meta_local_only_global",
+		GlobalMetaID: "idq1localonlyglobal",
+		Address:      "address_local_only_global",
+		Name:         "Local Only Global",
+		AvatarId:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0",
+	}
+	if err := agg.saveProfile(local); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	remoteCalls := 0
+	agg.profileMode = "remote-only"
+	agg.remoteLookup = stubRemoteProfileLookup{
+		lookupByGlobalMetaId: func(context.Context, string) (*UserProfile, error) {
+			remoteCalls++
+			return &UserProfile{Name: "Remote Should Not Be Used"}, nil
+		},
+	}
+
+	profile, err := agg.LookupLocalByGlobalMetaId(local.GlobalMetaID)
+	if err != nil {
+		t.Fatalf("LookupLocalByGlobalMetaId: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("LookupLocalByGlobalMetaId returned nil")
+	}
+	if profile.MetaID != local.MetaID || profile.Name != local.Name || profile.AvatarId != local.AvatarId {
+		t.Fatalf("LookupLocalByGlobalMetaId profile = %#v, want local %#v", profile, local)
+	}
+	if remoteCalls != 0 {
+		t.Fatalf("remote lookup calls = %d, want 0", remoteCalls)
+	}
+}
+
 func TestLookupByGlobalMetaId_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()

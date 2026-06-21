@@ -203,15 +203,31 @@ func (a *Aggregator) resolveChatInteractWithV3(globalMetaId string, cache map[st
 	}
 
 	out := &InteractWithV3{GlobalMetaId: globalMetaId}
-	if a != nil && a.profileLookup != nil {
-		if profile, err := a.profileLookup.LookupByGlobalMetaId(globalMetaId); err == nil && profile != nil {
-			out.GlobalMetaId = firstNonEmpty(profile.GlobalMetaId, globalMetaId)
-			out.Name = strings.TrimSpace(profile.Name)
-			out.AvatarId = strings.TrimSpace(profile.AvatarId)
-		}
+	if profile := a.lookupLocalChatPeerProfileV3(globalMetaId); profile != nil {
+		out.GlobalMetaId = firstNonEmpty(profile.GlobalMetaId, globalMetaId)
+		out.Name = strings.TrimSpace(profile.Name)
+		out.AvatarId = strings.TrimSpace(profile.AvatarId)
 	}
 	cache[cacheKey] = out
 	return out
+}
+
+func (a *Aggregator) lookupLocalChatPeerProfileV3(globalMetaId string) *ProfileSnapshot {
+	if a == nil || a.profileLookup == nil {
+		return nil
+	}
+	if localLookup, ok := a.profileLookup.(LocalProfileLookup); ok {
+		profile, err := localLookup.LookupLocalByGlobalMetaId(globalMetaId)
+		if err != nil {
+			return nil
+		}
+		return profile
+	}
+	profile, err := a.profileLookup.LookupByGlobalMetaId(globalMetaId)
+	if err != nil {
+		return nil
+	}
+	return profile
 }
 
 func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) SectionItemV3 {
