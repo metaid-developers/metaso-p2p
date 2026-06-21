@@ -1417,7 +1417,7 @@ func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
 		BioId:             "bio-pin:i0",
 		ChatPublicKey:     "02chatpubkey",
 		ChatPublicKeyId:   "chat-pin:i0",
-		AvatarId:          "avatar-pin:i0",
+		AvatarId:          "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789i0",
 		AvatarContentType: "image/png;binary",
 		LLM:               `{"provider":"openai","model":"gpt-4.1"}`,
 		LLMId:             "llm-pin:i0",
@@ -1460,7 +1460,7 @@ func TestBuildV3ProfileUsesRawBotInfoBlocks(t *testing.T) {
 	if got.Profile.Avatar == nil {
 		t.Fatal("Profile.Avatar = nil, want avatar block")
 	}
-	if got.Profile.Avatar.PinId != "avatar-pin:i0" {
+	if got.Profile.Avatar.PinId != "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789i0" {
 		t.Fatalf("Profile.Avatar.PinId = %q", got.Profile.Avatar.PinId)
 	}
 	if got.Profile.Avatar.ContentType != "image/png" {
@@ -1572,7 +1572,7 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 				"idqPeerBot": {
 					GlobalMetaId: "idqPeerBot",
 					Name:         "Peer Bot",
-					AvatarId:     "peer-avatar:i0",
+					AvatarId:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0",
 				},
 			},
 		})
@@ -1726,7 +1726,7 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if chats.Items[0].Data.InteractWith == nil {
 			t.Fatal("chats.Items[0].Data.InteractWith = nil, want peer object")
 		}
-		if *chats.Items[0].Data.InteractWith != (InteractWithV3{GlobalMetaId: "idqPeerBot", Name: "Peer Bot", AvatarId: "peer-avatar:i0"}) {
+		if *chats.Items[0].Data.InteractWith != (InteractWithV3{GlobalMetaId: "idqPeerBot", Name: "Peer Bot", AvatarId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0"}) {
 			t.Fatalf("chats.Items[0].Data.InteractWith = %+v, want peer profile object", *chats.Items[0].Data.InteractWith)
 		}
 		if chats.Items[0].Data.Payload != nil {
@@ -1884,7 +1884,7 @@ func TestBuildV3ChatsDeduplicatesPeerProfileLookup(t *testing.T) {
 			"idqPeerBot": {
 				GlobalMetaId: "idqPeerBot",
 				Name:         "Peer Bot",
-				AvatarId:     "peer-avatar:i0",
+				AvatarId:     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefi0",
 			},
 		},
 	}

@@ -66,14 +66,14 @@ Each `chats` item keeps the common v3 item envelope:
 
 ```json
 {
-  "pinId": "simplemsg-pin:i0",
+  "pinId": "8bc2...i0",
   "protocolPath": "/protocols/simplemsg",
   "timestamp": 1781258875,
   "data": {
     "interactWith": {
       "globalMetaId": "idq...",
       "name": "Peer Bot",
-      "avatarId": "avatar-pin:i0"
+      "avatarId": "0123...cdefi0"
     }
   }
 }

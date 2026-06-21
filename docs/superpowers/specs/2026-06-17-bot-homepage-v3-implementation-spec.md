@@ -285,7 +285,7 @@ The chat item must still use the normal v3 item envelope:
     "interactWith": {
       "globalMetaId": "idq...",
       "name": "Peer Bot",
-      "avatarId": "avatar-pin:i0"
+      "avatarId": "0123...cdefi0"
     }
   }
 }
