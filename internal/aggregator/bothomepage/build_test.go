@@ -17,13 +17,26 @@ import (
 )
 
 type fakeProfileLookup struct {
-	profile *ProfileSnapshot
-	err     error
-	seen    string
+	profile  *ProfileSnapshot
+	profiles map[string]*ProfileSnapshot
+	err      error
+	errs     map[string]error
+	seen     string
+	calls    map[string]int
 }
 
 func (f *fakeProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
 	f.seen = globalMetaId
+	if f.calls == nil {
+		f.calls = make(map[string]int)
+	}
+	f.calls[globalMetaId]++
+	if err := f.errs[globalMetaId]; err != nil {
+		return nil, err
+	}
+	if profile := f.profiles[globalMetaId]; profile != nil {
+		return profile, nil
+	}
 	return f.profile, f.err
 }
 
@@ -1547,13 +1560,22 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if err := agg.Init(nil, nil); err != nil {
 			t.Fatalf("Init returned error: %v", err)
 		}
-		agg.SetProfileLookup(&fakeProfileLookup{profile: &ProfileSnapshot{
-			GlobalMetaId: "idqCanonicalBot",
-			MetaId:       "metaBot",
-			Address:      "1BotAddress",
-			ChainName:    "mvc",
-			Name:         "Section Bot",
-		}})
+		agg.SetProfileLookup(&fakeProfileLookup{
+			profile: &ProfileSnapshot{
+				GlobalMetaId: "idqCanonicalBot",
+				MetaId:       "metaBot",
+				Address:      "1BotAddress",
+				ChainName:    "mvc",
+				Name:         "Section Bot",
+			},
+			profiles: map[string]*ProfileSnapshot{
+				"idqPeerBot": {
+					GlobalMetaId: "idqPeerBot",
+					Name:         "Peer Bot",
+					AvatarId:     "peer-avatar:i0",
+				},
+			},
+		})
 
 		serviceLister := &recordingHomepageServiceLister{result: &skillservice.HomepageListResult{
 			List: []skillservice.ServiceListItem{{
@@ -1701,8 +1723,11 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if chats.Items[0].Timestamp != 1710000005 {
 			t.Fatalf("chats.Items[0].Timestamp = %d, want source timestamp", chats.Items[0].Timestamp)
 		}
-		if chats.Items[0].Data.InteractWith != "idqPeerBot" {
-			t.Fatalf("chats.Items[0].Data.InteractWith = %q, want idqPeerBot", chats.Items[0].Data.InteractWith)
+		if chats.Items[0].Data.InteractWith == nil {
+			t.Fatal("chats.Items[0].Data.InteractWith = nil, want peer object")
+		}
+		if *chats.Items[0].Data.InteractWith != (InteractWithV3{GlobalMetaId: "idqPeerBot", Name: "Peer Bot", AvatarId: "peer-avatar:i0"}) {
+			t.Fatalf("chats.Items[0].Data.InteractWith = %+v, want peer profile object", *chats.Items[0].Data.InteractWith)
 		}
 		if chats.Items[0].Data.Payload != nil {
 			t.Fatalf("chats.Items[0].Data.Payload = %#v, want nil", chats.Items[0].Data.Payload)
@@ -1791,6 +1816,111 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 			"buzzes section source unavailable",
 		})
 	})
+}
+
+func TestBuildV3ChatsInteractWithFallsBackWhenPeerProfileUnavailable(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(&fakeProfileLookup{
+		profile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+			Name:         "Section Bot",
+		},
+		errs: map[string]error{
+			"idqPeerBot": errors.New("peer profile unavailable"),
+		},
+	})
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{{
+			PinId:        "chat-current:i0",
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    1710000005,
+			InteractWith: "idqPeerBot",
+		}},
+	}})
+
+	opts := defaultV3Options()
+	opts.IncludeServices = false
+	opts.IncludeMetaApps = false
+	opts.IncludeBuzzes = false
+
+	got, err := agg.BuildV3("idqRequestedBot", opts)
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	assertExactSectionIDsV3(t, got.Sections, []string{"chats"})
+	if len(got.Sections[0].Items) != 1 {
+		t.Fatalf("chats.Items length = %d, want 1", len(got.Sections[0].Items))
+	}
+	interactWith := got.Sections[0].Items[0].Data.InteractWith
+	if interactWith == nil {
+		t.Fatal("chat interactWith = nil, want fallback object")
+	}
+	if *interactWith != (InteractWithV3{GlobalMetaId: "idqPeerBot"}) {
+		t.Fatalf("chat interactWith = %+v, want only globalMetaId fallback", *interactWith)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("Warnings = %v, want no warning for peer profile fallback", got.Warnings)
+	}
+}
+
+func TestBuildV3ChatsDeduplicatesPeerProfileLookup(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	lookup := &fakeProfileLookup{
+		profile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+			Name:         "Section Bot",
+		},
+		profiles: map[string]*ProfileSnapshot{
+			"idqPeerBot": {
+				GlobalMetaId: "idqPeerBot",
+				Name:         "Peer Bot",
+				AvatarId:     "peer-avatar:i0",
+			},
+		},
+	}
+	agg.SetProfileLookup(lookup)
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{
+			{
+				PinId:        "chat-1:i0",
+				ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+				Timestamp:    1710000005,
+				InteractWith: "idqPeerBot",
+			},
+			{
+				PinId:        "chat-2:i0",
+				ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+				Timestamp:    1710000004,
+				InteractWith: "idqPeerBot",
+			},
+		},
+	}})
+
+	opts := defaultV3Options()
+	opts.IncludeServices = false
+	opts.IncludeMetaApps = false
+	opts.IncludeBuzzes = false
+
+	got, err := agg.BuildV3("idqRequestedBot", opts)
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	if len(got.Sections) != 1 || len(got.Sections[0].Items) != 2 {
+		t.Fatalf("chats sections/items = %+v, want two chat items", got.Sections)
+	}
+	if lookup.calls["idqPeerBot"] != 1 {
+		t.Fatalf("peer profile lookup calls = %d, want 1 for duplicate interactWith", lookup.calls["idqPeerBot"])
+	}
 }
 
 func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
@@ -2457,8 +2587,18 @@ func assertMinimalChatSectionItemV3JSON(t *testing.T, item SectionItemV3) {
 	if _, ok := data["payload"]; ok {
 		t.Fatalf("encoded chat data unexpectedly contains payload: %s", raw)
 	}
-	if got, ok := data["interactWith"].(string); !ok || got == "" {
-		t.Fatalf("encoded chat data interactWith = %#v, want non-empty string; raw=%s", data["interactWith"], raw)
+	got, ok := data["interactWith"].(map[string]any)
+	if !ok {
+		t.Fatalf("encoded chat data interactWith = %#v, want object; raw=%s", data["interactWith"], raw)
+	}
+	allowed := map[string]bool{"avatarId": true, "globalMetaId": true, "name": true}
+	for key := range got {
+		if !allowed[key] {
+			t.Fatalf("encoded chat data interactWith key %q present; want only avatarId/globalMetaId/name; raw=%s", key, raw)
+		}
+	}
+	if got["globalMetaId"] == "" {
+		t.Fatalf("encoded chat data interactWith.globalMetaId = %#v, want non-empty; raw=%s", got["globalMetaId"], raw)
 	}
 }
 

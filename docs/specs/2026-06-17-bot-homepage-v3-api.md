@@ -310,7 +310,9 @@ Current extraction rule:
 
 - Include only outgoing simplemsg records for the current Bot.
 - Parse the simplemsg payload as JSON.
-- Set `data.interactWith` from the payload JSON `to` field.
+- Set `data.interactWith.globalMetaId` from the payload JSON `to` field.
+- When indexed profile data is available for that Global Meta ID, also include
+  `data.interactWith.name` and `data.interactWith.avatarId`.
 - Skip records that do not provide a usable `to` value.
 
 Chat items use the normal v3 item envelope:
@@ -321,15 +323,20 @@ Chat items use the normal v3 item envelope:
   "protocolPath": "/protocols/simplemsg",
   "timestamp": 1781258875,
   "data": {
-    "interactWith": "idq..."
+    "interactWith": {
+      "globalMetaId": "idq...",
+      "name": "Peer Bot",
+      "avatarId": "avatar-pin:i0"
+    }
   }
 }
 ```
 
-For `chats`, `data.interactWith` is the only exposed data field. The response
-must not expose message content, encryption metadata, the original simplemsg
-payload, txid fields, address fields, chain fields, or source fields inside
-`data`.
+For `chats`, `data.interactWith` is the only exposed data field. It is a flat
+object with `globalMetaId`, optional `name`, and optional `avatarId`. The
+response must not expose message content, encryption metadata, the original
+simplemsg payload, txid fields, address fields, chain fields, or source fields
+inside `data`.
 
 Example service item:
 

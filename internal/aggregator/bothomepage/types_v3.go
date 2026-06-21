@@ -64,6 +64,12 @@ type SectionItemV3 struct {
 }
 
 type SectionItemDataV3 struct {
-	Payload      any    `json:"payload,omitempty"`
-	InteractWith string `json:"interactWith,omitempty"`
+	Payload      any             `json:"payload,omitempty"`
+	InteractWith *InteractWithV3 `json:"interactWith,omitempty"`
+}
+
+type InteractWithV3 struct {
+	GlobalMetaId string `json:"globalMetaId"`
+	Name         string `json:"name,omitempty"`
+	AvatarId     string `json:"avatarId,omitempty"`
 }

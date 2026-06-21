@@ -174,8 +174,8 @@ func TestBuildV3CachesStablePayloadAndRefreshesPresence(t *testing.T) {
 	if second.Presence.State != "unknown" {
 		t.Fatalf("second presence state = %q, want unknown after presence refresh", second.Presence.State)
 	}
-	if profiles.calls != 1 {
-		t.Fatalf("profile lookup calls = %d, want 1 cache hit on second request", profiles.calls)
+	if profiles.calls != 2 {
+		t.Fatalf("profile lookup calls = %d, want 2 cache hit on second request", profiles.calls)
 	}
 	if services.calls != 1 {
 		t.Fatalf("homepage service calls = %d, want 1 cache hit on second request", services.calls)
@@ -208,8 +208,8 @@ func TestBuildV3CacheIgnoresIncludePresenceInStablePayloadKey(t *testing.T) {
 	if second.Presence.State != "unknown" {
 		t.Fatalf("second presence state = %q, want unknown when includePresence=false", second.Presence.State)
 	}
-	if profiles.calls != 1 {
-		t.Fatalf("profile lookup calls = %d, want 1 shared stable cache entry", profiles.calls)
+	if profiles.calls != 2 {
+		t.Fatalf("profile lookup calls = %d, want 2 shared stable cache entry", profiles.calls)
 	}
 	if services.calls != 1 {
 		t.Fatalf("homepage service calls = %d, want 1 shared stable cache entry", services.calls)
@@ -311,8 +311,8 @@ func TestBuildV3CacheExpiresAndFallsBackToReload(t *testing.T) {
 	if _, err := agg.BuildV3("idqBot", opts); err != nil {
 		t.Fatalf("second BuildV3 returned error: %v", err)
 	}
-	if profiles.calls != 2 {
-		t.Fatalf("profile lookup calls = %d, want 2 after TTL expiry reload", profiles.calls)
+	if profiles.calls != 4 {
+		t.Fatalf("profile lookup calls = %d, want 4 after TTL expiry reload", profiles.calls)
 	}
 	if services.calls != 2 {
 		t.Fatalf("homepage service calls = %d, want 2 after TTL expiry reload", services.calls)

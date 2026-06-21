@@ -234,7 +234,8 @@ Rules:
 - For modify-capable protocols, use the current effective record timestamp.
 - Non-chat section items expose `data.payload`, the parsed protocol payload.
   JSON becomes an object; non-binary text becomes a string.
-- Chat section items expose only `data.interactWith`.
+- Chat section items expose only `data.interactWith`; it is a flat object with
+  `globalMetaId`, optional `name`, and optional `avatarId`.
 - Do not include binary payload bytes.
 - Do not return `sourcePinId`, `currentPinId`, `createdAt`, `updatedAt`,
   `chainName`, publisher identity, `proof`, `service`, `payloadJson`,
@@ -268,7 +269,9 @@ Extraction rule:
 
 - Include only outgoing simplemsg records for the current Bot.
 - Parse the simplemsg payload as JSON.
-- Set `data.interactWith` from the payload JSON `to` field.
+- Set `data.interactWith.globalMetaId` from the payload JSON `to` field.
+- When indexed profile data is available for that Global Meta ID, also include
+  `data.interactWith.name` and `data.interactWith.avatarId`.
 - Skip records without a usable `to` value.
 
 The chat item must still use the normal v3 item envelope:
@@ -279,7 +282,11 @@ The chat item must still use the normal v3 item envelope:
   "protocolPath": "/protocols/simplemsg",
   "timestamp": 0,
   "data": {
-    "interactWith": "idq..."
+    "interactWith": {
+      "globalMetaId": "idq...",
+      "name": "Peer Bot",
+      "avatarId": "avatar-pin:i0"
+    }
   }
 }
 ```
@@ -347,9 +354,10 @@ Add focused tests before implementation is considered complete:
     `buzzes`
 11. Each section item only includes `pinId`, `protocolPath`, `timestamp`, and
     `data`.
-12. Chat item `data` includes only `interactWith` and excludes message content,
-    encryption metadata, original simplemsg payload, txid, address, chain, and
-    source fields.
+12. Chat item `data` includes only `interactWith`, whose flat object includes
+    `globalMetaId`, optional `name`, and optional `avatarId`; it excludes
+    message content, encryption metadata, original simplemsg payload, txid,
+    address, chain, and source fields.
 13. Services section uses the same visible services that v2 top-level services
     can see for the provider.
 14. Mempool `/info/persona`, `/info/llm`, `/info/homepage`, service, MetaApp,

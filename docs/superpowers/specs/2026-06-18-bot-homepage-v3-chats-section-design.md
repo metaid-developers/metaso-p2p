@@ -70,16 +70,20 @@ Each `chats` item keeps the common v3 item envelope:
   "protocolPath": "/protocols/simplemsg",
   "timestamp": 1781258875,
   "data": {
-    "interactWith": "idq..."
+    "interactWith": {
+      "globalMetaId": "idq...",
+      "name": "Peer Bot",
+      "avatarId": "avatar-pin:i0"
+    }
   }
 }
 ```
 
-`data.interactWith` is the normalized interaction target for this row. For the
-first simplemsg-only implementation, it is sourced from the simplemsg payload's
-`to` field as stored by the private-chat aggregator. `data` must not repeat
-`protocolPath` or `timestamp` because those values already exist on the item
-envelope.
+`data.interactWith` is the normalized interaction target for this row. It is a
+flat object: `globalMetaId` is sourced from the simplemsg payload's `to` field
+as stored by the private-chat aggregator, while `name` and `avatarId` come from
+indexed profile data when available. `data` must not repeat `protocolPath` or
+`timestamp` because those values already exist on the item envelope.
 
 ## Source Rules
 
@@ -125,6 +129,7 @@ Implementation should cover:
 - `chats` only includes outgoing simplemsg interactions for the requested Bot.
 - `chats` returns at most five items in descending timestamp order and sets
   `hasMore` when a sixth record exists.
-- `chats.items[i].data` only contains `interactWith`.
+- `chats.items[i].data` only contains `interactWith`; that object only contains
+  `globalMetaId`, optional `name`, and optional `avatarId`.
 - a missing or failing chat interaction reader does not fail the homepage.
 - the full router wiring connects `privatechat` to `bothomepage`.

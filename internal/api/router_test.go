@@ -708,6 +708,7 @@ func TestRouterBotHomepageV2AndV3ExposeProviderVisibleServices(t *testing.T) {
 func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
 	seedBotProfile(t, fixture, "idq-bot")
+	seedBotProfile(t, fixture, "idq-peer")
 
 	if _, err := fixture.privateAgg.HandleBlockPin(&aggregator.PinInscription{
 		Id:        "chat-idq-bot:i0",
@@ -787,8 +788,18 @@ func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
 	if !ok {
 		t.Fatalf("chat data = %T %#v, want object", item["data"], item["data"])
 	}
-	if itemData["interactWith"] != "idq-peer" {
-		t.Fatalf("chat data.interactWith = %#v, want idq-peer", itemData["interactWith"])
+	interactWith, ok := itemData["interactWith"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("chat data.interactWith = %T %#v, want object", itemData["interactWith"], itemData["interactWith"])
+	}
+	if interactWith["globalMetaId"] != "idq-peer" {
+		t.Fatalf("chat data.interactWith.globalMetaId = %#v, want idq-peer", interactWith["globalMetaId"])
+	}
+	if interactWith["name"] != "Homepage Bot" {
+		t.Fatalf("chat data.interactWith.name = %#v, want Homepage Bot", interactWith["name"])
+	}
+	if interactWith["avatarId"] != nil {
+		t.Fatalf("chat data.interactWith.avatarId = %#v, want absent or nil", interactWith["avatarId"])
 	}
 	if payload, ok := itemData["payload"]; ok && payload != nil {
 		t.Fatalf("chat data.payload = %#v, want absent or nil", payload)

@@ -169,6 +169,7 @@ func (a *Aggregator) loadChatsSectionV3(canonical CanonicalIdentity) (SectionV3,
 	}
 
 	items := make([]SectionItemV3, 0, len(result.Items))
+	interactWithProfiles := make(map[string]*InteractWithV3)
 	for _, item := range result.Items {
 		pinID := strings.TrimSpace(item.PinId)
 		interactWith := strings.TrimSpace(item.InteractWith)
@@ -180,7 +181,7 @@ func (a *Aggregator) loadChatsSectionV3(canonical CanonicalIdentity) (SectionV3,
 			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
 			Timestamp:    item.Timestamp,
 			Data: SectionItemDataV3{
-				InteractWith: interactWith,
+				InteractWith: a.resolveChatInteractWithV3(interactWith, interactWithProfiles),
 			},
 		})
 	}
@@ -189,6 +190,28 @@ func (a *Aggregator) loadChatsSectionV3(canonical CanonicalIdentity) (SectionV3,
 	}
 
 	return sectionWithItemsV3("chats", privatechat.HomepageSimpleMsgProtocolPath, items, result.HasMore), ""
+}
+
+func (a *Aggregator) resolveChatInteractWithV3(globalMetaId string, cache map[string]*InteractWithV3) *InteractWithV3 {
+	globalMetaId = strings.TrimSpace(globalMetaId)
+	if globalMetaId == "" {
+		return nil
+	}
+	cacheKey := strings.ToLower(globalMetaId)
+	if cached := cache[cacheKey]; cached != nil {
+		return cached
+	}
+
+	out := &InteractWithV3{GlobalMetaId: globalMetaId}
+	if a != nil && a.profileLookup != nil {
+		if profile, err := a.profileLookup.LookupByGlobalMetaId(globalMetaId); err == nil && profile != nil {
+			out.GlobalMetaId = firstNonEmpty(profile.GlobalMetaId, globalMetaId)
+			out.Name = strings.TrimSpace(profile.Name)
+			out.AvatarId = strings.TrimSpace(profile.AvatarId)
+		}
+	}
+	cache[cacheKey] = out
+	return out
 }
 
 func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) SectionItemV3 {
