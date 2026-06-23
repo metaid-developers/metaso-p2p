@@ -372,7 +372,18 @@ func aliasKey(value string) string {
 }
 
 func isHomepageSimpleMsgProtocol(protocol string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(protocol))
-	normalized = "/" + strings.Trim(normalized, "/")
+	normalized := normalizeHomepageProtocolPath(protocol)
 	return normalized == HomepageSimpleMsgProtocolPath
+}
+
+func normalizeHomepageProtocolPath(path string) string {
+	normalized := strings.ToLower(strings.TrimSpace(path))
+	normalized = "/" + strings.Trim(normalized, "/")
+	if idx := strings.Index(normalized, ":/"); idx >= 0 {
+		candidate := normalized[idx+1:]
+		if strings.HasPrefix(candidate, "/protocols/") {
+			return candidate
+		}
+	}
+	return normalized
 }

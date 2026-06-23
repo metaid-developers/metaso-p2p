@@ -62,10 +62,10 @@ const (
 	pchatKeyConst                     = "pchat:"
 	homepageSenderIndexKeyConst       = "hpchat:from:"
 	homepageSenderIndexStateKeyConst  = "hpchat:index-state:"
-	homepageSenderIndexVersion        = "v1"
+	homepageSenderIndexVersion        = "v2"
 	homepageMaterializedChatsKeyConst = "hpchat:mat:"
 	homepageMaterializedStateKeyConst = "hpchat:mat-state:"
-	homepageMaterializedStateVersion  = "v1"
+	homepageMaterializedStateVersion  = "v2"
 	homepageMaterializedChatsLimit    = 64
 )
 

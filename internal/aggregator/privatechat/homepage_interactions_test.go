@@ -177,6 +177,45 @@ func TestSavePrivateMessageWritesHomepageSenderIndexes(t *testing.T) {
 	}
 }
 
+func TestListOutgoingHomepageInteractionsAcceptsHostPrefixedSimpleMsg(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	if err := agg.SavePrivateMessage(&PrivateMessage{
+		FromGlobalMetaId: "global_bot",
+		From:             "bot_meta",
+		FromAddress:      "1BotLegacyAddress",
+		ToGlobalMetaId:   "global_peer",
+		To:               "peer_meta",
+		TxId:             "host-prefixed-out",
+		PinId:            "host-prefixed-out:i0",
+		Protocol:         "bc1p20k3x2c4mglfxr5wa5sgtgechwstpld80kru2cg4gmm4urvuaqqsvapxu0:/protocols/simplemsg",
+		Timestamp:        456,
+		Index:            -1,
+	}); err != nil {
+		t.Fatalf("SavePrivateMessage: %v", err)
+	}
+
+	got, err := agg.ListOutgoingHomepageInteractions(HomepageInteractionListParams{
+		GlobalMetaId: "global_bot",
+	})
+	if err != nil {
+		t.Fatalf("ListOutgoingHomepageInteractions: %v", err)
+	}
+
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(got.Items))
+	}
+	if got.Items[0] != (HomepageInteraction{
+		PinId:        "host-prefixed-out:i0",
+		ProtocolPath: HomepageSimpleMsgProtocolPath,
+		Timestamp:    456,
+		InteractWith: "peer_meta",
+	}) {
+		t.Fatalf("item = %#v", got.Items[0])
+	}
+}
+
 func TestSavePrivateMessageWritesHomepageMaterializedChats(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
@@ -869,5 +908,5 @@ func homepageMaterializedChatsKeyForTest(alias string) []byte {
 }
 
 func homepageMaterializedStateKeyForTest() []byte {
-	return []byte("hpchat:mat-state:v1")
+	return homepageMaterializedStateKey()
 }
