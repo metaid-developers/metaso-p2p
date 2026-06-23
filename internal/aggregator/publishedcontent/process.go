@@ -236,6 +236,11 @@ func protocolPathFromPinPath(path string) string {
 	if at := strings.Index(base, "@"); at > 0 {
 		base = base[:at]
 	}
+	if idx := strings.LastIndex(base, ":/"); idx >= 0 {
+		if candidate := base[idx+1:]; strings.HasPrefix(candidate, "/protocols/") {
+			base = candidate
+		}
+	}
 	return strings.ToLower(base)
 }
 

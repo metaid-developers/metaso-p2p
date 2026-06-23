@@ -241,6 +241,27 @@ func TestProcessCreateCanonicalizesAddressBackedGlobalMetaId(t *testing.T) {
 	}
 }
 
+func TestProcessCreateAcceptsHostPrefixedProtocolPath(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "host-prefixed-buzz:i0",
+		Path:        "bc1p20k3x2c4mglfxr5wa5sgtgechwstpld80kru2cg4gmm4urvuaqqsvapxu0:/protocols/simplebuzz",
+		Timestamp:   1782103591,
+		ContentType: "application/json;utf-8",
+		ContentBody: []byte(`{"content":"host prefixed buzz"}`),
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathSimpleBuzz, "host-prefixed-buzz:i0")
+	if rec.ProtocolPath != PathSimpleBuzz {
+		t.Fatalf("ProtocolPath = %q, want %q", rec.ProtocolPath, PathSimpleBuzz)
+	}
+	if rec.SourcePath != "bc1p20k3x2c4mglfxr5wa5sgtgechwstpld80kru2cg4gmm4urvuaqqsvapxu0:/protocols/simplebuzz" {
+		t.Fatalf("SourcePath = %q", rec.SourcePath)
+	}
+}
+
 func TestProcessCreateModifyRevokeFoldsCurrentRecord(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
