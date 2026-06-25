@@ -61,6 +61,88 @@ Notes:
 - These endpoints return current state, not historical follow timelines.
 - These endpoints do not return total counts.
 
+## Follow PIN Write Contract
+
+This section is for clients that publish `/follow` pins and expect those pins to
+be indexed by this read model.
+
+### Create A Follow Edge
+
+Publish a MetaID PIN with:
+
+| PIN Field | Required Value |
+| --- | --- |
+| `path` | `/follow` |
+| `operation` | `create` |
+| `contentBody` | Target account reference. Prefer the target `globalMetaId`. |
+| `contentSummary` | Optional fallback target account reference when `contentBody` is empty in MANAPI replay data. |
+| publisher identity | The account that is following the target. |
+
+The target account reference must be a plain string value, not a JSON object.
+These forms are valid:
+
+```text
+idqTargetGlobalMetaId
+"idqTargetGlobalMetaId"
+targetMetaId
+targetAddress
+```
+
+This form is not accepted by the current indexer:
+
+```json
+{"globalMetaId":"idqTargetGlobalMetaId"}
+```
+
+Target resolution rules:
+
+- The preferred target reference is `globalMetaId`.
+- `metaId` and address references are accepted only if they resolve through the
+  indexed profile lookup.
+- A target reference that already looks like a canonical `globalMetaId`
+  (`idq...`) can still be indexed even if profile lookup is missing.
+- An unresolved non-`globalMetaId` reference is ignored and does not create a
+  follow edge.
+
+The follower is derived from the publishing PIN identity. The indexer uses the
+PIN `globalMetaId` when present, otherwise it attempts to resolve `metaId`,
+`createMetaId`, `address`, or `createAddress` through the indexed profile
+lookup.
+
+Repeated create pins for the same follower-target pair replace the previous
+active edge. The newest active create pin supplies `followPinId` and
+`followedAt` in `view=profile` responses.
+
+### Revoke A Follow Edge
+
+To cancel a follow, publish a MetaID PIN with:
+
+| PIN Field | Required Value |
+| --- | --- |
+| `path` | `/follow@<originalFollowPinId>` |
+| `operation` | `revoke` |
+| `originalId` | `<originalFollowPinId>` |
+| `contentBody` | Ignored; may be empty. |
+
+`originalId` is the preferred target pointer. The `/follow@<originalFollowPinId>`
+path form is kept as a compatibility fallback when `originalId` is unavailable.
+
+The revoke target must be the currently active follow pin ID for that
+follower-target pair. Revoking an older follow pin that has already been
+replaced by a newer create pin does not remove the newest active edge.
+
+### Raw OP_RETURN Field Order
+
+Clients that construct raw MetaID OP_RETURN data must preserve the chain parser
+field order:
+
+```text
+OP_RETURN "metaid" <operation> <path> <encryption> <version> <contentType> <contentBody>
+```
+
+The social indexer currently does not branch on `contentType`; it reads the
+target from `contentBody` as described above.
+
 ## Common List Query Parameters
 
 The `following` and `followers` endpoints share the same query contract.
