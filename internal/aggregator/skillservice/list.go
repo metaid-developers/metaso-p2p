@@ -87,6 +87,8 @@ type ServiceListItem struct {
 	MRC20Id        any    `json:"mrc20Id"`
 	PaymentAddress string `json:"paymentAddress"`
 
+	DeclarationPayload map[string]any `json:"-"`
+
 	ProviderMetaId       string `json:"providerMetaId"`
 	ProviderGlobalMetaId string `json:"providerGlobalMetaId"`
 	ProviderAddress      string `json:"providerAddress"`
@@ -852,6 +854,8 @@ func (a *Aggregator) toListItem(exp expandedRecord) ServiceListItem {
 		MRC20Ticker:    payment.mrc20Ticker,
 		MRC20Id:        payment.mrc20Id,
 		PaymentAddress: payment.paymentAddress,
+
+		DeclarationPayload: cloneJSONMap(rec.DeclarationPayload),
 
 		ProviderMetaId:       firstNonEmpty(exp.profile.MetaId, rec.ProviderMetaId),
 		ProviderGlobalMetaId: firstNonEmpty(exp.profile.GlobalMetaId, rec.ProviderGlobalMetaId),

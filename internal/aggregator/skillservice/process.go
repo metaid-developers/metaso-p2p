@@ -71,7 +71,7 @@ func (a *Aggregator) processServicePin(pin *aggregator.PinInscription) error {
 // and ignore the duplicate create — protocol-level dedup is the publisher's
 // responsibility, not the aggregator's.
 func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error {
-	summary, ok := decodeServiceSummary(pin)
+	summary, payload, ok := decodeServiceSummary(pin)
 	if !ok {
 		// contentSummary missing or malformed; cannot build a record.
 		return nil
@@ -86,7 +86,7 @@ func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error 
 		return nil
 	}
 
-	rec := newServiceRecord(pin, summary, pin.Id /* sourcePinId == own id */)
+	rec := newServiceRecord(pin, summary, payload, pin.Id /* sourcePinId == own id */)
 	if err := a.saveService(rec, nil); err != nil {
 		return err
 	}
@@ -124,13 +124,13 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 		return nil
 	}
 
-	summary, ok := decodeServiceSummary(pin)
+	summary, payload, ok := decodeServiceSummary(pin)
 	if !ok {
 		return nil
 	}
 
 	sourcePinId := previous.SourceServicePinId
-	updated := newServiceRecord(pin, summary, sourcePinId)
+	updated := newServiceRecord(pin, summary, payload, sourcePinId)
 	// Preserve the original CreatedAt; modifies only move UpdatedAt forward.
 	updated.CreatedAt = previous.CreatedAt
 	// Modify PINs often omit provider identity metadata; keep the create
@@ -262,27 +262,31 @@ func isCurrentVersionTarget(rec *ServiceRecord, targetPinId string) bool {
 // into a ServiceContentSummary. Returns ok=false when the body is missing
 // or malformed; the caller is expected to skip the pin in that case rather
 // than emit a half-filled record.
-func decodeServiceSummary(pin *aggregator.PinInscription) (ServiceContentSummary, bool) {
+func decodeServiceSummary(pin *aggregator.PinInscription) (ServiceContentSummary, map[string]any, bool) {
 	var s ServiceContentSummary
 	if len(pin.ContentBody) == 0 {
-		return s, false
+		return s, nil, false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(pin.ContentBody, &payload); err != nil || payload == nil {
+		return s, nil, false
 	}
 	if err := json.Unmarshal(pin.ContentBody, &s); err != nil {
-		return s, false
+		return s, nil, false
 	}
 	// ServiceName / DisplayName must be present; without them the card has
 	// nothing to render. Other fields can be empty (e.g. free service).
 	if strings.TrimSpace(s.ServiceName) == "" && strings.TrimSpace(s.DisplayName) == "" {
-		return s, false
+		return s, nil, false
 	}
-	return s, true
+	return s, payload, true
 }
 
 // newServiceRecord builds a ServiceRecord from a fresh skill-service PIN
 // plus its parsed contentSummary. CreatedAt and UpdatedAt are seeded from
 // pin.Timestamp; later modifies/revokes update them via processServiceModify
 // / processServiceRevoke.
-func newServiceRecord(pin *aggregator.PinInscription, summary ServiceContentSummary, sourcePinId string) *ServiceRecord {
+func newServiceRecord(pin *aggregator.PinInscription, summary ServiceContentSummary, payload map[string]any, sourcePinId string) *ServiceRecord {
 	rec := &ServiceRecord{
 		SourceServicePinId: sourcePinId,
 		CurrentPinId:       pin.Id,
@@ -292,20 +296,21 @@ func newServiceRecord(pin *aggregator.PinInscription, summary ServiceContentSumm
 		ProviderGlobalMetaId: pin.GlobalMetaId,
 		ProviderAddress:      firstNonEmpty(pin.Address, pin.CreateAddress),
 
-		ServiceName:     summary.ServiceName,
-		DisplayName:     summary.DisplayName,
-		Description:     summary.Description,
-		ServiceIcon:     summary.ServiceIcon,
-		ProviderMetaBot: summary.ProviderMetaBot,
-		ProviderSkill:   summary.ProviderSkill,
-		Price:           summary.Price,
-		Currency:        summary.Currency,
-		PaymentChain:    summary.PaymentChain,
-		SettlementKind:  summary.SettlementKind,
-		MRC20Ticker:     summary.MRC20Ticker,
-		MRC20Id:         summary.MRC20Id,
-		OutputType:      summary.OutputType,
-		PaymentAddress:  summary.PaymentAddress,
+		DeclarationPayload: cloneJSONMap(payload),
+		ServiceName:        summary.ServiceName,
+		DisplayName:        summary.DisplayName,
+		Description:        summary.Description,
+		ServiceIcon:        summary.ServiceIcon,
+		ProviderMetaBot:    summary.ProviderMetaBot,
+		ProviderSkill:      summary.ProviderSkill,
+		Price:              summary.Price,
+		Currency:           summary.Currency,
+		PaymentChain:       summary.PaymentChain,
+		SettlementKind:     summary.SettlementKind,
+		MRC20Ticker:        summary.MRC20Ticker,
+		MRC20Id:            summary.MRC20Id,
+		OutputType:         summary.OutputType,
+		PaymentAddress:     summary.PaymentAddress,
 
 		Status:    statusFromPin(pin),
 		Operation: strings.ToLower(strings.TrimSpace(pin.Operation)),
@@ -333,6 +338,32 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func cloneJSONMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = cloneJSONValue(value)
+	}
+	return out
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneJSONValue(item)
+		}
+		return out
+	default:
+		return typed
+	}
 }
 
 // String renders the record briefly for log lines. We do not put this in

@@ -2039,6 +2039,21 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 			ChainName:          "btc",
 			CreatedAt:          1710000010,
 			UpdatedAt:          1710000011,
+			DeclarationPayload: map[string]any{
+				"serviceName":     "deep-read",
+				"displayName":     "Deep Read",
+				"description":     "Strict payload",
+				"serviceIcon":     "metafile://service-icon",
+				"providerMetaBot": "metabot-alpha",
+				"providerSkill":   "qa",
+				"outputType":      "json",
+				"price":           "1.00",
+				"currency":        "BTC",
+				"paymentChain":    "btc",
+				"settlementKind":  "address",
+				"paymentAddress":  "1btcPayment",
+				"customField":     "custom-value",
+			},
 		}},
 	}})
 	agg.SetPublishedContentLister(&protocolRecordingPublishedContentLister{
@@ -2105,15 +2120,24 @@ func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 		"serviceName",
 		"displayName",
 		"description",
+		"serviceIcon",
+		"providerMetaBot",
 		"providerSkill",
 		"outputType",
 		"price",
 		"currency",
+		"paymentChain",
 		"settlementKind",
 		"paymentAddress",
+		"customField",
 	})
-	if servicePayload["serviceName"] != "deep-read" || servicePayload["paymentAddress"] != "1btcPayment" {
-		t.Fatalf("service payload = %#v, want allow-list values", servicePayload)
+	if servicePayload["serviceName"] != "deep-read" || servicePayload["customField"] != "custom-value" {
+		t.Fatalf("service payload = %#v, want declaration payload values", servicePayload)
+	}
+	for _, wrapperKey := range []string{"providerName", "providerAvatar", "ratingAvg", "ratingCount", "chainName", "status", "operation", "createdAt", "updatedAt"} {
+		if _, exists := servicePayload[wrapperKey]; exists {
+			t.Fatalf("service payload includes wrapper key %q: %#v", wrapperKey, servicePayload)
+		}
 	}
 
 	metaapps := got.Sections[1]
@@ -2355,7 +2379,7 @@ func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 		Id:            "service-pending:i0",
 		Path:          skillservice.PathSkillService,
 		Operation:     skillservice.OperationCreate,
-		ContentBody:   []byte(`{"serviceName":"fortune","displayName":"Fortune","providerSkill":"fortune-skill","outputType":"text","price":"1","currency":"SPACE","settlementKind":"address","paymentAddress":"addr-idq-bot"}`),
+		ContentBody:   []byte(`{"serviceName":"fortune","displayName":"Fortune","description":"Reads future blocks","serviceIcon":"metafile://service-icon","providerMetaBot":"metabot-alpha","providerSkill":"fortune-skill","outputType":"text","price":"1","currency":"SPACE","paymentChain":"mvc","settlementKind":"address","mrc20Ticker":"SPACE","mrc20Id":"space-id","paymentAddress":"addr-idq-bot","disabled":false,"contextSchema":"fortune.v1"}`),
 		ContentType:   "application/json",
 		ChainName:     "mvc",
 		GlobalMetaId:  globalMetaID,
@@ -2425,6 +2449,39 @@ func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 	}
 	if services.Items[0].Data.Payload == nil {
 		t.Fatal("services.Items[0].Data.Payload = nil, want payload")
+	}
+	servicePayload, ok := services.Items[0].Data.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("services.Items[0].Data.Payload = %#v, want object", services.Items[0].Data.Payload)
+	}
+	for key, want := range map[string]any{
+		"serviceName":     "fortune",
+		"displayName":     "Fortune",
+		"description":     "Reads future blocks",
+		"serviceIcon":     "metafile://service-icon",
+		"providerMetaBot": "metabot-alpha",
+		"providerSkill":   "fortune-skill",
+		"outputType":      "text",
+		"price":           "1",
+		"currency":        "SPACE",
+		"paymentChain":    "mvc",
+		"settlementKind":  "address",
+		"mrc20Ticker":     "SPACE",
+		"mrc20Id":         "space-id",
+		"paymentAddress":  "addr-idq-bot",
+		"contextSchema":   "fortune.v1",
+	} {
+		if got := servicePayload[key]; got != want {
+			t.Fatalf("service payload[%q] = %#v, want %#v; payload=%#v", key, got, want, servicePayload)
+		}
+	}
+	if disabled, ok := servicePayload["disabled"].(bool); !ok || disabled {
+		t.Fatalf("service payload[disabled] = %#v, want false bool; payload=%#v", servicePayload["disabled"], servicePayload)
+	}
+	for _, wrapperKey := range []string{"providerName", "providerAvatar", "ratingAvg", "ratingCount", "chainName", "status", "operation", "createdAt", "updatedAt"} {
+		if _, exists := servicePayload[wrapperKey]; exists {
+			t.Fatalf("service payload includes wrapper key %q: %#v", wrapperKey, servicePayload)
+		}
 	}
 
 	buzzes := got.Sections[3]

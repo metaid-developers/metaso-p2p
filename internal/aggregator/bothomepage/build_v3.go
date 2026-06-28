@@ -236,18 +236,45 @@ func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) Section
 		ProtocolPath: skillservice.PathSkillService,
 		Timestamp:    item.UpdatedAt,
 		Data: SectionItemDataV3{
-			Payload: map[string]any{
-				"serviceName":    item.ServiceName,
-				"displayName":    item.DisplayName,
-				"description":    item.Description,
-				"providerSkill":  item.ProviderSkill,
-				"outputType":     item.OutputType,
-				"price":          item.Price,
-				"currency":       item.Currency,
-				"settlementKind": item.SettlementKind,
-				"paymentAddress": item.PaymentAddress,
-			},
+			Payload: serviceDeclarationPayloadV3(item),
 		},
+	}
+}
+
+func serviceDeclarationPayloadV3(item skillservice.ServiceListItem) map[string]any {
+	if len(item.DeclarationPayload) > 0 {
+		return cloneStringAnyMap(item.DeclarationPayload)
+	}
+	payload := make(map[string]any)
+	addNonEmptyPayloadValue(payload, "serviceName", item.ServiceName)
+	addNonEmptyPayloadValue(payload, "displayName", item.DisplayName)
+	addNonEmptyPayloadValue(payload, "description", item.Description)
+	addNonEmptyPayloadValue(payload, "serviceIcon", item.ServiceIcon)
+	addNonEmptyPayloadValue(payload, "providerSkill", item.ProviderSkill)
+	addNonEmptyPayloadValue(payload, "outputType", item.OutputType)
+	addNonEmptyPayloadValue(payload, "price", item.Price)
+	addNonEmptyPayloadValue(payload, "currency", item.Currency)
+	addNonEmptyPayloadValue(payload, "paymentChain", item.PaymentChain)
+	addNonEmptyPayloadValue(payload, "settlementKind", item.SettlementKind)
+	addNonEmptyPayloadValue(payload, "paymentAddress", item.PaymentAddress)
+	addNonNilPayloadValue(payload, "mrc20Ticker", item.MRC20Ticker)
+	addNonNilPayloadValue(payload, "mrc20Id", item.MRC20Id)
+	if item.Disabled {
+		payload["disabled"] = true
+	}
+	return payload
+}
+
+func addNonEmptyPayloadValue(payload map[string]any, key, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		payload[key] = value
+	}
+}
+
+func addNonNilPayloadValue(payload map[string]any, key string, value any) {
+	if value != nil {
+		payload[key] = value
 	}
 }
 

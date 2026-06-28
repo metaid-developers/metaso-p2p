@@ -248,9 +248,12 @@ the current v2 top-level `services` output, or fix the homepage-provider read
 path before using it. The v3 services section must not be empty when the same
 Bot has visible services in the current provider service list.
 
-The service item payload should be the service declaration payload fields, not
-the v2 service wrapper. Do not include provider profile hydration, rating
-objects, chain identity, or action verdict fields in v3.
+The service item payload should be the current effective `/protocols/skill-service`
+PIN's parsed declaration JSON payload, not a homepage-specific allow-list and not
+the v2 service wrapper. Preserve declaration payload fields, including future
+extension fields, so different applications see the same protocol data. Do not
+include provider profile hydration, rating objects, chain identity, or action
+verdict fields in v3.
 
 ### MetaApps Source
 

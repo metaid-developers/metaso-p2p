@@ -79,20 +79,21 @@ type ServiceRecord struct {
 	ProviderAddress      string `json:"providerAddress"`
 
 	// Summary fields (from contentSummary)
-	ServiceName     string `json:"serviceName"`
-	DisplayName     string `json:"displayName"`
-	Description     string `json:"description"`
-	ServiceIcon     string `json:"serviceIcon"`
-	ProviderMetaBot string `json:"providerMetaBot,omitempty"`
-	ProviderSkill   string `json:"providerSkill"`
-	Price           string `json:"price"`
-	Currency        string `json:"currency"`
-	PaymentChain    string `json:"paymentChain"`
-	SettlementKind  string `json:"settlementKind"`
-	MRC20Ticker     string `json:"mrc20Ticker,omitempty"`
-	MRC20Id         string `json:"mrc20Id,omitempty"`
-	OutputType      string `json:"outputType"`
-	PaymentAddress  string `json:"paymentAddress"`
+	DeclarationPayload map[string]any `json:"declarationPayload,omitempty"`
+	ServiceName        string         `json:"serviceName"`
+	DisplayName        string         `json:"displayName"`
+	Description        string         `json:"description"`
+	ServiceIcon        string         `json:"serviceIcon"`
+	ProviderMetaBot    string         `json:"providerMetaBot,omitempty"`
+	ProviderSkill      string         `json:"providerSkill"`
+	Price              string         `json:"price"`
+	Currency           string         `json:"currency"`
+	PaymentChain       string         `json:"paymentChain"`
+	SettlementKind     string         `json:"settlementKind"`
+	MRC20Ticker        string         `json:"mrc20Ticker,omitempty"`
+	MRC20Id            string         `json:"mrc20Id,omitempty"`
+	OutputType         string         `json:"outputType"`
+	PaymentAddress     string         `json:"paymentAddress"`
 
 	// Lifecycle state (chain-declared, not aggregator-decided)
 	Status    int    `json:"status"`
