@@ -204,6 +204,30 @@ Prefer bootstrap restore over plain backup copy when the source and target are
 different nodes and you want a repeatable artifact boundary with
 `manifest.json` and checksum verification.
 
+## One-Time Skill-Service Backfill
+
+When the persisted Bot Hub skill-service view needs to be repaired from
+historical MANAPI `/protocols/skill-service` pins, build and run the dedicated
+backfill command against the same Pebble data directory:
+
+```bash
+CGO_ENABLED=0 go build -o metaso-p2p-skillservice-backfill ./cmd/metaso-p2p-skillservice-backfill
+
+systemctl stop metaso-p2p
+./metaso-p2p-skillservice-backfill \
+  --data-dir /path/to/data/pebble \
+  --manapi-base-url https://manapi.metaid.io \
+  --lookback 2880h \
+  --timeout 30m \
+  --page-size 100
+systemctl start metaso-p2p
+```
+
+Stop the service before running the command because Pebble namespaces are
+opened exclusively. The command is idempotent and non-destructive: it replays
+matching protocol pins into the existing read model and does not clear old
+records.
+
 ## Connecting idchat
 
 See [`docs/IDCHAT_CONFIG_CHANGE.md`](./IDCHAT_CONFIG_CHANGE.md) for the exact config changes needed in idchat.
