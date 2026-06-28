@@ -133,7 +133,7 @@ func parseV3Options(values url.Values) (Options, error) {
 func parseVersion(values url.Values) string {
 	version := strings.ToLower(strings.TrimSpace(values.Get("version")))
 	schemaVersion := strings.TrimSpace(values.Get("schemaVersion"))
-	if version == "v3" || schemaVersion == schemaVersionV3 {
+	if version == "v3" || version == "3" || schemaVersion == schemaVersionV3 {
 		return "v3"
 	}
 	if version == "v2" || schemaVersion == "botHomepage.v2" {

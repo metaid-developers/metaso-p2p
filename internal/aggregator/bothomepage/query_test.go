@@ -101,6 +101,14 @@ func TestParseOptionsVersionV3(t *testing.T) {
 		t.Fatalf("Version = %q, want v3", got.Version)
 	}
 
+	got, err = ParseOptions(url.Values{"version": {"3"}})
+	if err != nil {
+		t.Fatalf("ParseOptions numeric version returned error: %v", err)
+	}
+	if got.Version != "v3" {
+		t.Fatalf("numeric Version = %q, want v3", got.Version)
+	}
+
 	got, err = ParseOptions(url.Values{"schemaVersion": {"botHomepage.v3"}})
 	if err != nil {
 		t.Fatalf("ParseOptions schemaVersion returned error: %v", err)

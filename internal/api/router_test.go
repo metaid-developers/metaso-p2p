@@ -583,6 +583,11 @@ func TestRouterBotHomepageVersionAndSchemaSelectors(t *testing.T) {
 			want: "botHomepage.v3",
 		},
 		{
+			name: "numeric version 3",
+			path: "/api/bot-homepage/globalmetaid/idq-bot?version=3",
+			want: "botHomepage.v3",
+		},
+		{
 			name: "schemaVersion v3",
 			path: "/api/bot-homepage/globalmetaid/idq-bot?schemaVersion=botHomepage.v3",
 			want: "botHomepage.v3",
