@@ -82,7 +82,12 @@ func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error 
 		return err
 	}
 	if existing != nil {
-		// First create wins; duplicate creates are no-ops.
+		// First create wins for distinct duplicate writes. Replaying the same
+		// create pin during historical backfill is allowed to enrich legacy
+		// records that predate DeclarationPayload persistence.
+		if existing.CurrentPinId == pin.Id && len(existing.DeclarationPayload) == 0 {
+			return a.refreshExistingCreateRecord(pin, summary, payload, existing)
+		}
 		return nil
 	}
 
@@ -93,6 +98,31 @@ func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error 
 	// A create's pin id IS the source; the pin_to_source index is only
 	// needed for modify / revoke ids that differ from the source.
 	return nil
+}
+
+func (a *Aggregator) refreshExistingCreateRecord(pin *aggregator.PinInscription, summary ServiceContentSummary, payload map[string]any, previous *ServiceRecord) error {
+	if previous == nil {
+		return nil
+	}
+	updated := newServiceRecord(pin, summary, payload, previous.SourceServicePinId)
+	updated.CreatedAt = previous.CreatedAt
+	updated.UpdatedAt = previous.UpdatedAt
+	if updated.CreatedAt == 0 {
+		updated.CreatedAt = pin.Timestamp
+	}
+	if updated.UpdatedAt == 0 {
+		updated.UpdatedAt = pin.Timestamp
+	}
+	if updated.ProviderMetaId == "" {
+		updated.ProviderMetaId = previous.ProviderMetaId
+	}
+	if updated.ProviderGlobalMetaId == "" {
+		updated.ProviderGlobalMetaId = previous.ProviderGlobalMetaId
+	}
+	if updated.ProviderAddress == "" {
+		updated.ProviderAddress = previous.ProviderAddress
+	}
+	return a.saveService(updated, previous)
 }
 
 // processServiceModify resolves the MetaID target pin back to the source

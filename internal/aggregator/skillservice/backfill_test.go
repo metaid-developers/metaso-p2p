@@ -135,6 +135,119 @@ func TestBackfillReplaysServicePinsOldestFirstWithinLookback(t *testing.T) {
 	}
 }
 
+func TestBackfillRefreshesLegacyCreateDeclarationPayload(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	legacy := &ServiceRecord{
+		SourceServicePinId:   "service-create:i0",
+		CurrentPinId:         "service-create:i0",
+		ChainName:            "mvc",
+		ProviderMetaId:       "meta-provider",
+		ProviderGlobalMetaId: "idq-provider",
+		ProviderAddress:      "1Provider",
+		ServiceName:          "weibo-hot-trend-service",
+		DisplayName:          "微博热搜",
+		Description:          "old",
+		ProviderSkill:        "weibo-hot-trend",
+		Price:                "0.00001",
+		Currency:             "SPACE",
+		PaymentChain:         "mvc",
+		SettlementKind:       "native",
+		OutputType:           "text",
+		PaymentAddress:       "1Pay",
+		Status:               StatusConfirmed,
+		Operation:            OperationCreate,
+		CreatedAt:            1719705600,
+		UpdatedAt:            1719705600,
+	}
+	if err := agg.saveService(legacy, nil); err != nil {
+		t.Fatalf("save legacy service: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		pins := []map[string]any{}
+		if r.URL.Query().Get("path") == PathSkillService {
+			pins = []map[string]any{{
+				"id":        "service-create:i0",
+				"path":      PathSkillService,
+				"operation": OperationCreate,
+				"contentBody": map[string]any{
+					"serviceName":     "weibo-hot-trend-service",
+					"displayName":     "微博热搜",
+					"description":     "获取微博热搜榜数据",
+					"serviceIcon":     "",
+					"providerMetaBot": "idq-provider",
+					"providerSkill":   "weibo-hot-trend",
+					"price":           "0.00001",
+					"currency":        "SPACE",
+					"paymentChain":    "mvc",
+					"settlementKind":  "native",
+					"mrc20Ticker":     nil,
+					"mrc20Id":         nil,
+					"skillDocument":   "",
+					"inputType":       "text",
+					"outputType":      "text",
+					"endpoint":        "simplemsg",
+					"paymentAddress":  "1Pay",
+				},
+				"globalMetaId":  "idq-provider",
+				"metaId":        "meta-provider",
+				"address":       "1Provider",
+				"createMetaId":  "meta-provider",
+				"createAddress": "1Provider",
+				"chainName":     "mvc",
+				"timestamp":     int64(1719705600),
+			}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code":    1,
+			"message": "ok",
+			"data": map[string]any{
+				"list":       pins,
+				"nextCursor": "",
+				"cursor":     "",
+			},
+		})
+	}))
+	defer server.Close()
+
+	err := agg.Backfill(BackfillOptions{
+		Context:  context.Background(),
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Since:    time.Unix(1719700000, 0),
+		PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	rec, err := agg.loadService("mvc", "service-create:i0")
+	if err != nil {
+		t.Fatalf("loadService: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("service missing after backfill")
+	}
+	for key, want := range map[string]any{
+		"serviceIcon":     "",
+		"providerMetaBot": "idq-provider",
+		"skillDocument":   "",
+		"inputType":       "text",
+		"endpoint":        "simplemsg",
+	} {
+		if got, exists := rec.DeclarationPayload[key]; !exists || got != want {
+			t.Fatalf("DeclarationPayload[%q] = %#v exists=%v, want %#v; payload=%#v", key, got, exists, want, rec.DeclarationPayload)
+		}
+	}
+	for _, key := range []string{"mrc20Ticker", "mrc20Id"} {
+		if got, exists := rec.DeclarationPayload[key]; !exists || got != nil {
+			t.Fatalf("DeclarationPayload[%q] = %#v exists=%v, want explicit null; payload=%#v", key, got, exists, rec.DeclarationPayload)
+		}
+	}
+}
+
 func skillBackfillServicePin(id, path, operation, originalID, displayName string, timestamp int64) map[string]any {
 	return map[string]any{
 		"id":         id,
