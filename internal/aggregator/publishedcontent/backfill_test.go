@@ -81,6 +81,46 @@ func TestBackfillUsesContentSummaryFallback(t *testing.T) {
 	}
 }
 
+func TestBackfillReplaysPublishedContentPinsOldestFirstWithinLookback(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	create := manapiPinForTest("metaapp-create:i0", PathMetaApp, now.Add(-2*time.Hour))
+	create["contentType"] = "application/json"
+	create["contentBody"] = map[string]any{"title": "v1"}
+	modify := manapiPinForTest("metaapp-modify:i0", PathMetaApp+"@metaapp-create:i0", now.Add(-time.Hour))
+	modify["operation"] = OperationModify
+	modify["originalId"] = "metaapp-create:i0"
+	modify["contentType"] = "application/json"
+	modify["contentBody"] = map[string]any{"title": "v2"}
+	server := newBackfillMANAPIServer(t, map[string][]map[string]any{
+		PathMetaApp: {modify, create},
+	})
+	defer server.Close()
+
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	err := agg.Backfill(BackfillOptions{
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathMetaApp},
+		Since:    now.AddDate(0, -2, 0),
+		PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	rec := mustLoadRecord(t, agg, "mvc", PathMetaApp, "metaapp-create:i0")
+	if rec.CurrentPinId != "metaapp-modify:i0" {
+		t.Fatalf("CurrentPinId = %q, want metaapp-modify:i0", rec.CurrentPinId)
+	}
+	if got := rec.PayloadJSON["title"]; got != "v2" {
+		t.Fatalf("payload title = %#v, want v2", got)
+	}
+	if rec.CreatedAt != now.Add(-2*time.Hour).UnixMilli() || rec.UpdatedAt != now.Add(-time.Hour).UnixMilli() {
+		t.Fatalf("timestamps = created %d updated %d", rec.CreatedAt, rec.UpdatedAt)
+	}
+}
+
 func TestBackfillRejectsRepeatedCursor(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	first := manapiPinForTest("first-buzz:i0", PathSimpleBuzz, now.Add(-time.Hour))

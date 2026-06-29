@@ -1,4 +1,4 @@
-package publishedcontent
+package privatechat
 
 import (
 	"bytes"
@@ -32,6 +32,12 @@ type BackfillClient struct {
 
 const defaultBackfillPageSize = 100
 
+var defaultBackfillPaths = []string{HomepageSimpleMsgProtocolPath}
+
+func DefaultBackfillPaths() []string {
+	return append([]string(nil), defaultBackfillPaths...)
+}
+
 func NewBackfillClient(baseURL string, httpClient *http.Client) *BackfillClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -43,9 +49,12 @@ func NewBackfillClient(baseURL string, httpClient *http.Client) *BackfillClient 
 }
 
 func (a *Aggregator) Backfill(opts BackfillOptions) error {
+	if a == nil {
+		return errors.New("privatechat backfill aggregator is required")
+	}
 	client := opts.Client
 	if client == nil {
-		return errors.New("publishedcontent backfill client is required")
+		return errors.New("privatechat backfill client is required")
 	}
 	paths := normaliseBackfillPaths(opts.Paths)
 	pageSize := opts.PageSize
@@ -91,7 +100,7 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 			cursor = page.NextCursor
 		}
 		for i := len(pinsToReplay) - 1; i >= 0; i-- {
-			if err := a.processPin(pinsToReplay[i], false); err != nil {
+			if _, err := a.HandleBlockPin(pinsToReplay[i]); err != nil {
 				return err
 			}
 		}
@@ -101,13 +110,17 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 
 func normaliseBackfillPaths(paths []string) []string {
 	if len(paths) == 0 {
-		return []string{PathSimpleBuzz, PathMetaApp, PathMetaBotSkill}
+		return DefaultBackfillPaths()
 	}
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
-		if normalised := protocolPathFromPinPath(path); normalised != "" {
-			out = append(out, normalised)
+		normalised := strings.TrimSpace(path)
+		if strings.EqualFold(normalised, HomepageSimpleMsgProtocolPath) {
+			out = append(out, HomepageSimpleMsgProtocolPath)
 		}
+	}
+	if len(out) == 0 {
+		return DefaultBackfillPaths()
 	}
 	return out
 }
@@ -192,7 +205,7 @@ func decodeBackfillPage(raw []byte) (backfillPage, error) {
 	}
 	page := backfillPage{
 		Pins:       envelope.Data.List,
-		NextCursor: firstNonEmpty(envelope.Data.NextCursor, envelope.Data.Cursor, envelope.NextCursor, envelope.Cursor),
+		NextCursor: firstNonEmptyString(envelope.Data.NextCursor, envelope.Data.Cursor, envelope.NextCursor, envelope.Cursor),
 	}
 	if page.Pins == nil {
 		page.Pins = envelope.List
@@ -220,13 +233,17 @@ type manapiPin struct {
 }
 
 func (p manapiPin) toAggregatorPin() *aggregator.PinInscription {
+	content := p.ContentBody.Bytes()
+	if len(bytes.TrimSpace(content)) == 0 && strings.TrimSpace(p.ContentSummary) != "" {
+		content = []byte(strings.TrimSpace(p.ContentSummary))
+	}
 	return &aggregator.PinInscription{
 		Id:             strings.TrimSpace(p.ID),
 		Path:           strings.TrimSpace(p.Path),
 		OriginalPath:   strings.TrimSpace(p.OriginalPath),
 		Operation:      strings.TrimSpace(p.Operation),
 		ContentType:    strings.TrimSpace(p.ContentType),
-		ContentBody:    p.ContentBody.Bytes(),
+		ContentBody:    content,
 		ContentSummary: strings.TrimSpace(p.ContentSummary),
 		MetaId:         strings.TrimSpace(p.MetaId),
 		GlobalMetaId:   strings.TrimSpace(p.GlobalMetaId),
@@ -308,4 +325,13 @@ func manapiTimestampBefore(timestamp int64, since time.Time) bool {
 		return timestamp < cutoffMillis
 	}
 	return timestamp < since.Unix()
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
