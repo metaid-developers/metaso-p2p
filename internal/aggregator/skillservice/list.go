@@ -87,7 +87,8 @@ type ServiceListItem struct {
 	MRC20Id        any    `json:"mrc20Id"`
 	PaymentAddress string `json:"paymentAddress"`
 
-	DeclarationPayload map[string]any `json:"-"`
+	DeclarationPayload         map[string]any `json:"-"`
+	FallbackDeclarationPayload map[string]any `json:"-"`
 
 	ProviderMetaId       string `json:"providerMetaId"`
 	ProviderGlobalMetaId string `json:"providerGlobalMetaId"`
@@ -855,7 +856,8 @@ func (a *Aggregator) toListItem(exp expandedRecord) ServiceListItem {
 		MRC20Id:        payment.mrc20Id,
 		PaymentAddress: payment.paymentAddress,
 
-		DeclarationPayload: cloneJSONMap(rec.DeclarationPayload),
+		DeclarationPayload:         cloneJSONMap(rec.DeclarationPayload),
+		FallbackDeclarationPayload: fallbackDeclarationPayloadFromRecord(rec),
 
 		ProviderMetaId:       firstNonEmpty(exp.profile.MetaId, rec.ProviderMetaId),
 		ProviderGlobalMetaId: firstNonEmpty(exp.profile.GlobalMetaId, rec.ProviderGlobalMetaId),
@@ -874,5 +876,39 @@ func (a *Aggregator) toListItem(exp expandedRecord) ServiceListItem {
 		ChainName: rec.ChainName,
 		CreatedAt: rec.CreatedAt,
 		UpdatedAt: rec.UpdatedAt,
+	}
+}
+
+func fallbackDeclarationPayloadFromRecord(rec *ServiceRecord) map[string]any {
+	if rec == nil {
+		return nil
+	}
+	payload := make(map[string]any)
+	addRawPayloadString(payload, "serviceName", rec.ServiceName)
+	addRawPayloadString(payload, "displayName", rec.DisplayName)
+	addRawPayloadString(payload, "description", rec.Description)
+	addRawPayloadString(payload, "serviceIcon", rec.ServiceIcon)
+	addRawPayloadString(payload, "providerMetaBot", rec.ProviderMetaBot)
+	addRawPayloadString(payload, "providerSkill", rec.ProviderSkill)
+	addRawPayloadString(payload, "outputType", rec.OutputType)
+	addRawPayloadString(payload, "price", rec.Price)
+	addRawPayloadString(payload, "currency", rec.Currency)
+	addRawPayloadString(payload, "paymentChain", rec.PaymentChain)
+	addRawPayloadString(payload, "settlementKind", rec.SettlementKind)
+	addRawPayloadString(payload, "paymentAddress", rec.PaymentAddress)
+	addRawPayloadString(payload, "mrc20Ticker", rec.MRC20Ticker)
+	addRawPayloadString(payload, "mrc20Id", rec.MRC20Id)
+	if rec.Disabled {
+		payload["disabled"] = true
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	return payload
+}
+
+func addRawPayloadString(payload map[string]any, key, value string) {
+	if strings.TrimSpace(value) != "" {
+		payload[key] = value
 	}
 }

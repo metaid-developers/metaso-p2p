@@ -245,6 +245,9 @@ func serviceDeclarationPayloadV3(item skillservice.ServiceListItem) map[string]a
 	if len(item.DeclarationPayload) > 0 {
 		return cloneStringAnyMap(item.DeclarationPayload)
 	}
+	if len(item.FallbackDeclarationPayload) > 0 {
+		return cloneStringAnyMap(item.FallbackDeclarationPayload)
+	}
 	payload := make(map[string]any)
 	addNonEmptyPayloadValue(payload, "serviceName", item.ServiceName)
 	addNonEmptyPayloadValue(payload, "displayName", item.DisplayName)

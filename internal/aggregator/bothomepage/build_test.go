@@ -2276,6 +2276,120 @@ func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) 
 	}
 }
 
+func TestBuildV3LegacyServiceFallbackKeepsRawAssetReferences(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	t.Cleanup(func() { store.Close() })
+	cacheProvider := cache.New(store)
+
+	userAgg := &userinfo.Aggregator{}
+	if err := userAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("userinfo.Init returned error: %v", err)
+	}
+	skillAgg := &skillservice.Aggregator{}
+	if err := skillAgg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("skillservice.Init returned error: %v", err)
+	}
+	skillAgg.SetAssetBaseURL("https://manapi.metaid.io/content")
+	agg := &Aggregator{}
+	if err := agg.Init(store, cacheProvider); err != nil {
+		t.Fatalf("bothomepage.Init returned error: %v", err)
+	}
+	agg.SetProfileLookup(NewUserInfoLookupAdapter(userAgg))
+	agg.SetHomepageServiceLister(skillAgg)
+
+	const (
+		globalMetaID = "idq-legacy-raw-provider"
+		metaID       = "meta-legacy-raw-provider"
+		address      = "addr-legacy-raw-provider"
+		servicePinID = "legacy-raw-service:i0"
+		rawIcon      = "metafile://legacy-icon:i0"
+	)
+
+	for _, pin := range []*aggregator.PinInscription{
+		{
+			Id:           "init-legacy-raw-provider:i0",
+			Path:         "/",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			Timestamp:    1710000000,
+		},
+		{
+			Id:           "name-legacy-raw-provider:i0",
+			Path:         "/info/name",
+			MetaId:       metaID,
+			Address:      address,
+			GlobalMetaId: globalMetaID,
+			ChainName:    "mvc",
+			ContentBody:  []byte("Legacy Raw Provider"),
+			Timestamp:    1710000001,
+		},
+	} {
+		if _, err := userAgg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("userinfo.HandleBlockPin(%s): %v", pin.Id, err)
+		}
+	}
+
+	if _, err := skillAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            servicePinID,
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   []byte(`{"serviceName":"legacy-raw","displayName":"Legacy Raw","description":"legacy service","serviceIcon":"` + rawIcon + `","providerSkill":"legacy-skill","outputType":"text","price":"1","currency":"MVC","settlementKind":"native","paymentAddress":"addr-legacy-raw-provider"}`),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  globalMetaID,
+		MetaId:        metaID,
+		CreateMetaId:  metaID,
+		Address:       address,
+		CreateAddress: address,
+		Timestamp:     1710000020,
+		Number:        120,
+	}); err != nil {
+		t.Fatalf("skillservice.HandleBlockPin: %v", err)
+	}
+
+	recordKey := []byte("service:mvc:" + servicePinID)
+	rawRecord, err := store.Get(skillservice.NamespaceService, recordKey)
+	if err != nil {
+		t.Fatalf("load service record: %v", err)
+	}
+	var legacyRecord map[string]any
+	if err := json.Unmarshal(rawRecord, &legacyRecord); err != nil {
+		t.Fatalf("decode service record: %v", err)
+	}
+	delete(legacyRecord, "declarationPayload")
+	strippedRecord, err := json.Marshal(legacyRecord)
+	if err != nil {
+		t.Fatalf("encode stripped service record: %v", err)
+	}
+	if err := store.Set(skillservice.NamespaceService, recordKey, strippedRecord); err != nil {
+		t.Fatalf("store stripped service record: %v", err)
+	}
+
+	got, err := agg.BuildV3(globalMetaID, defaultV3Options())
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	services := got.Sections[0]
+	if len(services.Items) != 1 {
+		t.Fatalf("services.Items length = %d, want 1: %+v", len(services.Items), services.Items)
+	}
+	payload, ok := services.Items[0].Data.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("services.Items[0].Data.Payload = %#v, want object", services.Items[0].Data.Payload)
+	}
+	if payload["serviceIcon"] != rawIcon {
+		t.Fatalf("serviceIcon = %#v, want raw chain value %#v; payload=%#v", payload["serviceIcon"], rawIcon, payload)
+	}
+	if payload["currency"] != "MVC" {
+		t.Fatalf("currency = %#v, want raw chain value MVC; payload=%#v", payload["currency"], payload)
+	}
+	if _, exists := payload["paymentChain"]; exists {
+		t.Fatalf("paymentChain exists in legacy fallback payload: %#v", payload)
+	}
+}
+
 func TestBuildV3UsesMempoolProfileAndSectionPins(t *testing.T) {
 	store := storage.NewPebbleStore(t.TempDir())
 	t.Cleanup(func() { store.Close() })
