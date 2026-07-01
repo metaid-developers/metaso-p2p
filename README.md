@@ -80,8 +80,10 @@ See [`docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`](docs/spec
 
 ### Bot Homepage
 - `GET /api/bot-homepage/globalmetaid/:globalMetaId` — render-ready Bot homepage aggregation for OAC Bot Browser
+- `GET /api/bot-homepage/globalmetaid/:globalMetaId?version=v3` — first-screen Bot Homepage v3 data for custom Bot Home Page clients
 
 See [`docs/specs/2026-06-07-bot-homepage-api.md`](docs/specs/2026-06-07-bot-homepage-api.md) for the full v1 contract.
+See [`docs/BOT_HOMEPAGE_V3_CONSUMER_GUIDE.md`](docs/BOT_HOMEPAGE_V3_CONSUMER_GUIDE.md) for a lightweight v3 consumer guide.
 
 ## Development
 
