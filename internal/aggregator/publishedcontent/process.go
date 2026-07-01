@@ -13,12 +13,16 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) 
 	if pin == nil || pin.Id == "" || pin.ChainName == "" {
 		return nil
 	}
+	op := normaliseOperation(pin.Operation)
 	protocolPath := protocolPathFromPinPath(pin.Path)
 	if !isPublishedProtocol(protocolPath) {
+		if isVersionOperation(op) {
+			return a.processTargetedPublishedPin(pin, op, isMempool)
+		}
 		return nil
 	}
 
-	switch normaliseOperation(pin.Operation) {
+	switch op {
 	case OperationCreate:
 		return a.processCreate(pin, protocolPath, isMempool)
 	case OperationModify:
@@ -28,6 +32,38 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) 
 	default:
 		return nil
 	}
+}
+
+func (a *Aggregator) processTargetedPublishedPin(pin *aggregator.PinInscription, op string, isMempool bool) error {
+	targetPinId := targetPinID(pin)
+	if targetPinId == "" {
+		return nil
+	}
+	protocolPath, ok, err := a.protocolPathForTargetPin(pin.ChainName, targetPinId)
+	if err != nil || !ok {
+		return err
+	}
+	switch op {
+	case OperationModify:
+		return a.processModify(pin, protocolPath, isMempool)
+	case OperationRevoke:
+		return a.processRevoke(pin, protocolPath, isMempool)
+	default:
+		return nil
+	}
+}
+
+func (a *Aggregator) protocolPathForTargetPin(chainName, targetPinId string) (string, bool, error) {
+	for _, protocolPath := range publishedProtocolPaths {
+		rec, err := a.loadRecordByAnyPinId(chainName, protocolPath, targetPinId)
+		if err != nil {
+			return "", false, err
+		}
+		if rec != nil {
+			return protocolPath, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath string, isMempool bool) error {
@@ -267,8 +303,19 @@ func pinTargetFromPath(path string) string {
 }
 
 func isPublishedProtocol(protocolPath string) bool {
-	switch protocolPath {
-	case PathSimpleBuzz, PathMetaApp, PathMetaBotSkill:
+	for _, supported := range publishedProtocolPaths {
+		if protocolPath == supported {
+			return true
+		}
+	}
+	return false
+}
+
+var publishedProtocolPaths = []string{PathSimpleBuzz, PathMetaApp, PathMetaBotSkill}
+
+func isVersionOperation(operation string) bool {
+	switch normaliseOperation(operation) {
+	case OperationModify, OperationRevoke:
 		return true
 	default:
 		return false

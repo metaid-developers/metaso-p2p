@@ -320,6 +320,116 @@ func TestProcessCreateModifyRevokeFoldsCurrentRecord(t *testing.T) {
 	}
 }
 
+func TestProcessPureTargetModifyFoldsPublishedContentRecord(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "metaapp-create:i0",
+		Path:        PathMetaApp,
+		Operation:   OperationCreate,
+		Timestamp:   1000,
+		ContentType: "application/json",
+		ContentBody: []byte(`{"title":"v1","disabled":false}`),
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "metaapp-modify:i0",
+		Path:        "@metaapp-create:i0",
+		OriginalId:  "metaapp-create:i0",
+		Operation:   OperationModify,
+		Timestamp:   2000,
+		ContentType: "application/json",
+		ContentBody: []byte(`{"title":"v2","disabled":true}`),
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathMetaApp, "metaapp-create:i0")
+	if rec.CurrentPinId != "metaapp-modify:i0" {
+		t.Fatalf("CurrentPinId = %q, want metaapp-modify:i0", rec.CurrentPinId)
+	}
+	if rec.CurrentPath != "@metaapp-create:i0" {
+		t.Fatalf("CurrentPath = %q, want pure target path", rec.CurrentPath)
+	}
+	if rec.Operation != OperationModify || rec.Hidden {
+		t.Fatalf("record state = operation %q hidden %v, want visible modify", rec.Operation, rec.Hidden)
+	}
+	if got := rec.PayloadJSON["title"]; got != "v2" {
+		t.Fatalf("payload title = %#v, want v2", got)
+	}
+
+	result, err := agg.List(ListParams{
+		ProtocolPath:          PathMetaApp,
+		PublisherGlobalMetaId: "gid-user",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("List items = %d, want modified record", len(result.Items))
+	}
+	if result.Items[0].CurrentPinId != "metaapp-modify:i0" {
+		t.Fatalf("List current pin = %q, want metaapp-modify:i0", result.Items[0].CurrentPinId)
+	}
+	if got := result.Items[0].PayloadJSON["title"]; got != "v2" {
+		t.Fatalf("list payload title = %#v, want v2", got)
+	}
+}
+
+func TestProcessPureTargetRevokeHidesPublishedContentRecord(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "metaapp-create:i0",
+		Path:        PathMetaApp,
+		Operation:   OperationCreate,
+		Timestamp:   1000,
+		ContentType: "application/json",
+		ContentBody: []byte(`{"title":"v1"}`),
+	}))
+	mustProcess(t, agg, makeContentPin(contentPinOpts{
+		PinId:       "metaapp-revoke:i0",
+		Path:        "@metaapp-create:i0",
+		OriginalId:  "metaapp-create:i0",
+		Operation:   OperationRevoke,
+		Timestamp:   2000,
+		ContentType: "application/json",
+	}))
+
+	rec := mustLoadRecord(t, agg, "mvc", PathMetaApp, "metaapp-create:i0")
+	if rec.CurrentPinId != "metaapp-revoke:i0" {
+		t.Fatalf("CurrentPinId = %q, want metaapp-revoke:i0", rec.CurrentPinId)
+	}
+	if rec.Operation != OperationRevoke || !rec.Hidden {
+		t.Fatalf("record state = operation %q hidden %v, want hidden revoke", rec.Operation, rec.Hidden)
+	}
+
+	result, err := agg.List(ListParams{
+		ProtocolPath:          PathMetaApp,
+		PublisherGlobalMetaId: "gid-user",
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("revoked record should be hidden by default, got %+v", result.Items)
+	}
+
+	hidden, err := agg.List(ListParams{
+		ProtocolPath:          PathMetaApp,
+		PublisherGlobalMetaId: "gid-user",
+		IncludeHidden:         true,
+		Size:                  5,
+	})
+	if err != nil {
+		t.Fatalf("List hidden: %v", err)
+	}
+	if len(hidden.Items) != 1 || hidden.Items[0].CurrentPinId != "metaapp-revoke:i0" || !hidden.Items[0].Hidden {
+		t.Fatalf("include hidden item = %+v, want revoked current record", hidden.Items)
+	}
+}
+
 func TestMempoolCreateIsUpgradedByConfirmedBlockPin(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
