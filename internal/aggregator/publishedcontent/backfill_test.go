@@ -121,6 +121,62 @@ func TestBackfillReplaysPublishedContentPinsOldestFirstWithinLookback(t *testing
 	}
 }
 
+func TestBackfillDiscoversTargetedVersionPinsFromModifyHistory(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	create := manapiPinForTest("metaapp-create:i0", PathMetaApp, now.Add(-3*time.Hour))
+	create["contentType"] = "application/json"
+	create["contentBody"] = map[string]any{"title": "v1", "disabled": false}
+	create["modify_history"] = []string{"metaapp-create:i0", "metaapp-modify:i0"}
+
+	modify := manapiPinForTest("metaapp-modify:i0", "@metaapp-create:i0", now.Add(-2*time.Hour))
+	modify["operation"] = OperationModify
+	modify["originalId"] = "metaapp-create:i0"
+	modify["contentType"] = "application/json"
+	modify["contentBody"] = map[string]any{"title": "v2", "disabled": true}
+	modify["modify_history"] = []string{"metaapp-create:i0", "metaapp-modify:i0"}
+
+	revoke := manapiPinForTest("metaapp-revoke:i0", "@metaapp-modify:i0", now.Add(-time.Hour))
+	revoke["operation"] = OperationRevoke
+	revoke["originalId"] = "metaapp-modify:i0"
+	revoke["contentBody"] = ""
+
+	server := newBackfillMANAPIServer(t, map[string][]map[string]any{
+		PathMetaApp:          {create},
+		"@metaapp-create:i0": {modify},
+		"@metaapp-modify:i0": {revoke},
+	})
+	defer server.Close()
+
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	err := agg.Backfill(BackfillOptions{
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathMetaApp},
+		Since:    now.AddDate(0, -2, 0),
+		PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	visible, err := agg.List(ListParams{ProtocolPath: PathMetaApp, Size: 10})
+	if err != nil {
+		t.Fatalf("List visible: %v", err)
+	}
+	if len(visible.Items) != 0 {
+		t.Fatalf("visible items = %+v, want revoked metaapp hidden", visible.Items)
+	}
+
+	rec := mustLoadRecord(t, agg, "mvc", PathMetaApp, "metaapp-create:i0")
+	if rec.CurrentPinId != "metaapp-revoke:i0" {
+		t.Fatalf("CurrentPinId = %q, want metaapp-revoke:i0", rec.CurrentPinId)
+	}
+	if rec.Operation != OperationRevoke || !rec.Hidden {
+		t.Fatalf("record operation/hidden = %s/%t, want revoke/true", rec.Operation, rec.Hidden)
+	}
+}
+
 func TestBackfillRejectsRepeatedCursor(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	first := manapiPinForTest("first-buzz:i0", PathSimpleBuzz, now.Add(-time.Hour))

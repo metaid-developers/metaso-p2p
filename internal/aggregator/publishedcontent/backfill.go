@@ -58,41 +58,104 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	}
 
 	for _, path := range paths {
-		cursor := ""
-		seenCursors := make(map[string]struct{})
-		pinsToReplay := make([]*aggregator.PinInscription, 0, pageSize)
-		for {
-			seenCursors[cursor] = struct{}{}
-			page, err := client.ListPath(ctx, path, cursor, pageSize)
-			if err != nil {
-				return err
-			}
-			if len(page.Pins) == 0 {
-				break
-			}
-
-			allOlder := true
-			for _, pin := range page.Pins {
-				if manapiTimestampBefore(pin.Timestamp, opts.Since) {
-					continue
-				}
-				allOlder = false
-				pinsToReplay = append(pinsToReplay, pin.toAggregatorPin())
-			}
-			if allOlder {
-				break
-			}
-			if page.NextCursor == "" || len(page.Pins) < pageSize {
-				break
-			}
-			if _, seen := seenCursors[page.NextCursor]; seen {
-				return fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
-			}
-			cursor = page.NextCursor
+		pinsToReplay, err := fetchBackfillPins(ctx, client, path, opts.Since, pageSize)
+		if err != nil {
+			return err
 		}
-		for i := len(pinsToReplay) - 1; i >= 0; i-- {
-			if err := a.processPin(pinsToReplay[i], false); err != nil {
-				return err
+		if err := a.replayBackfillPins(pinsToReplay); err != nil {
+			return err
+		}
+		if err := a.backfillTargetedVersionPins(ctx, client, pinsToReplay, opts.Since, pageSize); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fetchBackfillPins(ctx context.Context, client *BackfillClient, path string, since time.Time, pageSize int) ([]manapiPin, error) {
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	pinsToReplay := make([]manapiPin, 0, pageSize)
+	for {
+		seenCursors[cursor] = struct{}{}
+		page, err := client.ListPath(ctx, path, cursor, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Pins) == 0 {
+			break
+		}
+
+		allOlder := true
+		for _, pin := range page.Pins {
+			if manapiTimestampBefore(pin.Timestamp, since) {
+				continue
+			}
+			allOlder = false
+			pinsToReplay = append(pinsToReplay, pin)
+		}
+		if allOlder {
+			break
+		}
+		if page.NextCursor == "" || len(page.Pins) < pageSize {
+			break
+		}
+		if _, seen := seenCursors[page.NextCursor]; seen {
+			return nil, fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
+		}
+		cursor = page.NextCursor
+	}
+	return pinsToReplay, nil
+}
+
+func (a *Aggregator) replayBackfillPins(pins []manapiPin) error {
+	for i := len(pins) - 1; i >= 0; i-- {
+		if err := a.processPin(pins[i].toAggregatorPin(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Aggregator) backfillTargetedVersionPins(ctx context.Context, client *BackfillClient, seeds []manapiPin, since time.Time, pageSize int) error {
+	queue := make([]string, 0)
+	queued := make(map[string]struct{})
+	enqueue := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := queued[path]; ok {
+			return
+		}
+		queued[path] = struct{}{}
+		queue = append(queue, path)
+	}
+	for _, pin := range seeds {
+		for _, path := range pin.targetedVersionBackfillPaths() {
+			enqueue(path)
+		}
+	}
+
+	processed := make(map[string]struct{})
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		if _, ok := processed[path]; ok {
+			continue
+		}
+		processed[path] = struct{}{}
+
+		pins, err := fetchBackfillPins(ctx, client, path, since, pageSize)
+		if err != nil {
+			return err
+		}
+		if err := a.replayBackfillPins(pins); err != nil {
+			return err
+		}
+		for _, pin := range pins {
+			for _, path := range pin.targetedVersionBackfillPaths() {
+				enqueue(path)
 			}
 		}
 	}
@@ -217,6 +280,7 @@ type manapiPin struct {
 	Timestamp      int64              `json:"timestamp"`
 	GenesisHeight  int64              `json:"genesisHeight"`
 	OriginalId     string             `json:"originalId"`
+	ModifyHistory  []string           `json:"modify_history"`
 }
 
 func (p manapiPin) toAggregatorPin() *aggregator.PinInscription {
@@ -238,6 +302,31 @@ func (p manapiPin) toAggregatorPin() *aggregator.PinInscription {
 		GenesisHeight:  p.GenesisHeight,
 		OriginalId:     strings.TrimSpace(p.OriginalId),
 	}
+}
+
+func (p manapiPin) targetedVersionBackfillPaths() []string {
+	ids := make([]string, 0, len(p.ModifyHistory)+1)
+	if len(p.ModifyHistory) > 1 {
+		ids = append(ids, p.ModifyHistory...)
+	}
+	if normaliseOperation(p.Operation) == OperationModify && strings.TrimSpace(p.ID) != "" {
+		ids = append(ids, p.ID)
+	}
+	paths := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		path := "@" + id
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 type manapiContentBytes []byte
