@@ -1631,7 +1631,7 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 				publishedcontent.PathSimpleBuzz: {
 					Items: []publishedcontent.SectionItem{{
 						SourcePinId:    "buzz-source:i0",
-						CurrentPinId:   "buzz-current:i0",
+						CurrentPinId:   "buzz-modify:i0",
 						ProtocolPath:   publishedcontent.PathSimpleBuzz,
 						PayloadText:    "latest buzz",
 						PayloadExposed: true,
@@ -1642,7 +1642,7 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 				publishedcontent.PathMetaApp: {
 					Items: []publishedcontent.SectionItem{{
 						SourcePinId:  "metaapp-source:i0",
-						CurrentPinId: "metaapp-current:i0",
+						CurrentPinId: "metaapp-modify:i0",
 						ProtocolPath: publishedcontent.PathMetaApp,
 						PayloadJSON: map[string]any{
 							"title": "Homepage MetaApp",
@@ -1700,8 +1700,8 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if len(services.Items) != 1 {
 			t.Fatalf("services.Items length = %d, want 1", len(services.Items))
 		}
-		if services.Items[0].PinId != "service-current:i0" {
-			t.Fatalf("services.Items[0].PinId = %q, want current pin id", services.Items[0].PinId)
+		if services.Items[0].PinId != "service-source:i0" {
+			t.Fatalf("services.Items[0].PinId = %q, want stable source pin id", services.Items[0].PinId)
 		}
 		if services.Items[0].Timestamp != 1710000002 {
 			t.Fatalf("services.Items[0].Timestamp = %d, want UpdatedAt", services.Items[0].Timestamp)
@@ -1728,6 +1728,9 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		}
 		if len(metaapps.Items) != 1 {
 			t.Fatalf("metaapps.Items length = %d, want 1", len(metaapps.Items))
+		}
+		if metaapps.Items[0].PinId != "metaapp-source:i0" {
+			t.Fatalf("metaapps.Items[0].PinId = %q, want stable source pin id", metaapps.Items[0].PinId)
 		}
 		if payload, ok := metaapps.Items[0].Data.Payload.(map[string]any); !ok || payload["title"] != "Homepage MetaApp" || payload["kind"] != "tool" {
 			t.Fatalf("metaapps.Items[0].Data.Payload = %#v, want JSON payload", metaapps.Items[0].Data.Payload)
@@ -1782,8 +1785,8 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if len(buzzes.Items) != 1 {
 			t.Fatalf("buzzes.Items length = %d, want 1", len(buzzes.Items))
 		}
-		if buzzes.Items[0].PinId != "buzz-current:i0" {
-			t.Fatalf("buzzes.Items[0].PinId = %q, want current pin id", buzzes.Items[0].PinId)
+		if buzzes.Items[0].PinId != "buzz-source:i0" {
+			t.Fatalf("buzzes.Items[0].PinId = %q, want stable source pin id", buzzes.Items[0].PinId)
 		}
 		if buzzes.Items[0].Timestamp != 1710000003 {
 			t.Fatalf("buzzes.Items[0].Timestamp = %d, want CreatedAt", buzzes.Items[0].Timestamp)

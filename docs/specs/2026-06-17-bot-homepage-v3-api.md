@@ -44,8 +44,9 @@ Business errors keep the existing codes:
   content base URLs.
 - Do not expose chain identity unless the field is required for the homepage
   contract. v3 intentionally omits `chainName` and address fields.
-- Use `pinId` as the only item provenance field. It means "the PIN that stores
-  this current data."
+- Use `pinId` as the only item provenance field. For version-aggregated items,
+  it means "the stable source/root PIN of this logical object"; the payload
+  still reflects the latest effective content after modify folding.
 - Use one `timestamp` per section item. It is the indexer timestamp used for
   homepage ordering and display.
 - Return raw JSON payload objects for `/info/llm`, `/info/persona`,
@@ -288,7 +289,8 @@ All section item arrays use one common shape:
 
 Rules:
 
-- `pinId` is the current effective data PIN.
+- `pinId` is the stable source/root PIN for version-aggregated items. For
+  non-versioned items such as chats, it is the item's own PIN.
 - `protocolPath` is repeated on the item so the item remains self-describing
   when cached or rendered outside its parent section.
 - `timestamp` is the indexer timestamp used for ordering/display.

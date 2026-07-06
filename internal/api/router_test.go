@@ -710,6 +710,238 @@ func TestRouterBotHomepageV2AndV3ExposeProviderVisibleServices(t *testing.T) {
 	}
 }
 
+func TestRouterBotHomepageV3UsesStableSourcePinIdsForModifiedItems(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+	seedBotProfile(t, fixture, "idq-bot")
+	seedBotProfile(t, fixture, "idq-peer")
+
+	const (
+		serviceSourcePinID = "service-root:i0"
+		serviceModifyPinID = "service-modify:i0"
+		metaappSourcePinID = "metaapp-root:i0"
+		metaappModifyPinID = "metaapp-modify:i0"
+		buzzSourcePinID    = "buzz-root:i0"
+		buzzModifyPinID    = "buzz-modify:i0"
+	)
+
+	if _, err := fixture.skillAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            serviceSourcePinID,
+		Path:          skillservice.PathSkillService,
+		Operation:     skillservice.OperationCreate,
+		ContentBody:   mustMarshalJSON(t, map[string]interface{}{"serviceName": "fortune", "displayName": "Fortune", "providerSkill": "fortune-skill", "outputType": "text", "price": "1", "currency": "SPACE", "settlementKind": "address", "paymentAddress": "addr-idq-bot"}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000101,
+		Number:        201,
+	}); err != nil {
+		t.Fatalf("seed source skill service: %v", err)
+	}
+	if _, err := fixture.skillAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            serviceModifyPinID,
+		Path:          "@" + serviceSourcePinID,
+		OriginalId:    serviceSourcePinID,
+		Operation:     skillservice.OperationModify,
+		ContentBody:   mustMarshalJSON(t, map[string]interface{}{"serviceName": "fortune", "displayName": "Fortune v2", "providerSkill": "fortune-skill", "outputType": "text", "price": "2", "currency": "SPACE", "settlementKind": "address", "paymentAddress": "addr-idq-bot"}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000102,
+		Number:        202,
+	}); err != nil {
+		t.Fatalf("seed modified skill service: %v", err)
+	}
+
+	if _, err := fixture.publishedAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            metaappSourcePinID,
+		Path:          publishedcontent.PathMetaApp,
+		Operation:     publishedcontent.OperationCreate,
+		ContentBody:   mustMarshalJSON(t, map[string]interface{}{"title": "Homepage App", "kind": "tool"}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000103,
+		Number:        203,
+	}); err != nil {
+		t.Fatalf("seed source metaapp: %v", err)
+	}
+	if _, err := fixture.publishedAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            metaappModifyPinID,
+		Path:          "@" + metaappSourcePinID,
+		OriginalId:    metaappSourcePinID,
+		Operation:     publishedcontent.OperationModify,
+		ContentBody:   mustMarshalJSON(t, map[string]interface{}{"title": "Homepage App v2", "kind": "tool"}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000104,
+		Number:        204,
+	}); err != nil {
+		t.Fatalf("seed modified metaapp: %v", err)
+	}
+
+	if _, err := fixture.publishedAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            buzzSourcePinID,
+		Path:          publishedcontent.PathSimpleBuzz,
+		Operation:     publishedcontent.OperationCreate,
+		ContentBody:   []byte("hello world"),
+		ContentType:   "text/plain",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000105,
+		Number:        205,
+	}); err != nil {
+		t.Fatalf("seed source buzz: %v", err)
+	}
+	if _, err := fixture.publishedAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            buzzModifyPinID,
+		Path:          "@" + buzzSourcePinID,
+		OriginalId:    buzzSourcePinID,
+		Operation:     publishedcontent.OperationModify,
+		ContentBody:   []byte("hello edited world"),
+		ContentType:   "text/plain",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000106,
+		Number:        206,
+	}); err != nil {
+		t.Fatalf("seed modified buzz: %v", err)
+	}
+
+	if _, err := fixture.privateAgg.HandleBlockPin(&aggregator.PinInscription{
+		Id:        "chat-idq-bot:i0",
+		Path:      privatechat.HomepageSimpleMsgProtocolPath,
+		Operation: "create",
+		ContentBody: mustMarshalJSON(t, map[string]interface{}{
+			"from":        "meta-idq-bot",
+			"to":          "idq-peer",
+			"content":     "encrypted",
+			"contentType": "text/plain",
+			"encryption":  "ecies",
+		}),
+		ContentType:   "application/json",
+		ChainName:     "mvc",
+		GlobalMetaId:  "idq-bot",
+		MetaId:        "meta-idq-bot",
+		CreateMetaId:  "meta-idq-bot",
+		Address:       "addr-idq-bot",
+		CreateAddress: "addr-idq-bot",
+		Timestamp:     1710000107,
+		Number:        207,
+	}); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+
+	w, body := get(t, fixture.router, "/api/bot-homepage/globalmetaid/idq-bot?version=v3")
+	if w.Code != http.StatusOK || body["code"] != float64(0) {
+		t.Fatalf("v3 status=%d body=%s", w.Code, w.Body.String())
+	}
+	data, ok := body["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("v3 data = %T %#v, want object", body["data"], body["data"])
+	}
+	sections, ok := data["sections"].([]interface{})
+	if !ok {
+		t.Fatalf("v3 sections = %T %#v, want array", data["sections"], data["sections"])
+	}
+
+	services := routerSectionByID(t, sections, "services")
+	serviceItems, ok := services["items"].([]interface{})
+	if !ok || len(serviceItems) != 1 {
+		t.Fatalf("services.items = %T %#v, want one item", services["items"], services["items"])
+	}
+	serviceItem, ok := serviceItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("service item = %T %#v, want object", serviceItems[0], serviceItems[0])
+	}
+	if serviceItem["pinId"] != serviceSourcePinID {
+		t.Fatalf("service pinId = %#v, want source pin %q", serviceItem["pinId"], serviceSourcePinID)
+	}
+	serviceData, ok := serviceItem["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("service data = %T %#v, want object", serviceItem["data"], serviceItem["data"])
+	}
+	servicePayload, ok := serviceData["payload"].(map[string]interface{})
+	if !ok || servicePayload["displayName"] != "Fortune v2" {
+		t.Fatalf("service payload = %#v, want modified declaration payload", serviceData["payload"])
+	}
+
+	metaapps := routerSectionByID(t, sections, "metaapps")
+	metaappItems, ok := metaapps["items"].([]interface{})
+	if !ok || len(metaappItems) != 1 {
+		t.Fatalf("metaapps.items = %T %#v, want one item", metaapps["items"], metaapps["items"])
+	}
+	metaappItem, ok := metaappItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metaapp item = %T %#v, want object", metaappItems[0], metaappItems[0])
+	}
+	if metaappItem["pinId"] != metaappSourcePinID {
+		t.Fatalf("metaapp pinId = %#v, want source pin %q", metaappItem["pinId"], metaappSourcePinID)
+	}
+	metaappData, ok := metaappItem["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metaapp data = %T %#v, want object", metaappItem["data"], metaappItem["data"])
+	}
+	metaappPayload, ok := metaappData["payload"].(map[string]interface{})
+	if !ok || metaappPayload["title"] != "Homepage App v2" {
+		t.Fatalf("metaapp payload = %#v, want modified payload", metaappData["payload"])
+	}
+
+	buzzes := routerSectionByID(t, sections, "buzzes")
+	buzzItems, ok := buzzes["items"].([]interface{})
+	if !ok || len(buzzItems) != 1 {
+		t.Fatalf("buzzes.items = %T %#v, want one item", buzzes["items"], buzzes["items"])
+	}
+	buzzItem, ok := buzzItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("buzz item = %T %#v, want object", buzzItems[0], buzzItems[0])
+	}
+	if buzzItem["pinId"] != buzzSourcePinID {
+		t.Fatalf("buzz pinId = %#v, want source pin %q", buzzItem["pinId"], buzzSourcePinID)
+	}
+	buzzData, ok := buzzItem["data"].(map[string]interface{})
+	if !ok || buzzData["payload"] != "hello edited world" {
+		t.Fatalf("buzz payload = %#v, want modified text payload", buzzItem["data"])
+	}
+
+	chats := routerSectionByID(t, sections, "chats")
+	chatItems, ok := chats["items"].([]interface{})
+	if !ok || len(chatItems) != 1 {
+		t.Fatalf("chats.items = %T %#v, want one item", chats["items"], chats["items"])
+	}
+	chatItem, ok := chatItems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("chat item = %T %#v, want object", chatItems[0], chatItems[0])
+	}
+	if chatItem["pinId"] != "chat-idq-bot:i0" {
+		t.Fatalf("chat pinId = %#v, want chat source pin", chatItem["pinId"])
+	}
+}
+
 func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
 	seedBotProfile(t, fixture, "idq-bot")

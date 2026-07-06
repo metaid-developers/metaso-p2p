@@ -232,7 +232,7 @@ func (a *Aggregator) lookupLocalChatPeerProfileV3(globalMetaId string) *ProfileS
 
 func sectionItemFromHomepageServiceV3(item skillservice.ServiceListItem) SectionItemV3 {
 	return SectionItemV3{
-		PinId:        firstNonEmpty(item.CurrentPinId, item.SourceServicePinId),
+		PinId:        stableServicePinIDV3(item),
 		ProtocolPath: skillservice.PathSkillService,
 		Timestamp:    item.UpdatedAt,
 		Data: SectionItemDataV3{
@@ -304,7 +304,7 @@ func (a *Aggregator) loadPublishedContentSectionV3(canonical CanonicalIdentity, 
 			continue
 		}
 		items = append(items, SectionItemV3{
-			PinId:        firstNonEmpty(item.CurrentPinId, item.SourcePinId),
+			PinId:        stablePublishedContentPinIDV3(item),
 			ProtocolPath: item.ProtocolPath,
 			Timestamp:    publishedContentItemSortTimestamp(item),
 			Data: SectionItemDataV3{
@@ -329,6 +329,14 @@ func sectionItemPayloadV3(item publishedcontent.SectionItem) (any, bool) {
 		return nil, false
 	}
 	return payload, true
+}
+
+func stableServicePinIDV3(item skillservice.ServiceListItem) string {
+	return firstNonEmpty(item.SourceServicePinId, item.CurrentPinId)
+}
+
+func stablePublishedContentPinIDV3(item publishedcontent.SectionItem) string {
+	return firstNonEmpty(item.SourcePinId, item.CurrentPinId)
 }
 
 func buildProfileV3(profile *ProfileSnapshot) (ProfileV3, []string) {
