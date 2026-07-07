@@ -2,14 +2,29 @@ package socket
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 const defaultPresenceSnapshotPath = "/.well-known/metaso-p2p/presence"
+
+const globalPresenceLookupFallbackSize = 10000
+
+type globalPresenceStatus struct {
+	GlobalMetaId  string   `json:"globalMetaId"`
+	State         string   `json:"state"`
+	UpdatedAt     *int64   `json:"updatedAt"`
+	Source        string   `json:"source"`
+	Scope         string   `json:"scope"`
+	SourceNodeIds []string `json:"sourceNodeIds,omitempty"`
+	Connections   int      `json:"connections,omitempty"`
+}
 
 // HandleOnlineStats returns the total number of active connections.
 func (s *Server) HandleOnlineStats(c *gin.Context) {
@@ -151,6 +166,40 @@ func (s *Server) HandleIdchatUserOnline(c *gin.Context) {
 	})
 }
 
+// HandleGlobalPresenceByGlobalMetaId returns the merged global presence status
+// for one requested globalMetaId. It requires an enabled global reader and does
+// not fall back to local-only socket state, because the contract is explicitly
+// global.
+func (s *Server) HandleGlobalPresenceByGlobalMetaId(c *gin.Context) {
+	globalMetaId := strings.TrimSpace(c.Param("globalMetaId"))
+	if globalMetaId == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": "globalMetaId required",
+		})
+		return
+	}
+
+	reader := s.presenceGlobalReader()
+	if reader == nil || !reader.Enabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    50000,
+			"message": "global presence unavailable",
+		})
+		return
+	}
+
+	local := s.manager.OnlineEntries()
+	items := s.globalPresenceEntries(reader, local)
+	status := s.globalPresenceStatus(globalMetaId, items)
+	c.JSON(http.StatusOK, gin.H{
+		"code":           0,
+		"data":           status,
+		"message":        "",
+		"processingTime": time.Now().UnixMilli(),
+	})
+}
+
 func (s *Server) onlineItemsForIDChat(size int) []OnlineEntry {
 	scope := "local"
 	reader := s.presenceGlobalReader()
@@ -193,6 +242,7 @@ func (s *Server) RegisterPresenceRoutes(router *gin.Engine, snapshotPath ...stri
 		socketGroup.GET("/online/stats", s.HandleOnlineStats)
 		socketGroup.GET("/online/list", s.HandleOnlineList)
 	}
+	router.GET("/api/presence/globalmetaid/:globalMetaId", s.HandleGlobalPresenceByGlobalMetaId)
 
 	path := defaultPresenceSnapshotPath
 	if len(snapshotPath) > 0 && snapshotPath[0] != "" {
@@ -213,4 +263,125 @@ func (s *Server) resolvePresenceScope(c *gin.Context) string {
 		}
 	}
 	return "local"
+}
+
+type globalPresenceEntriesReader interface {
+	OnlineEntries(local []presence.OnlineEntry) []presence.OnlineEntry
+}
+
+func (s *Server) globalPresenceEntries(reader presence.GlobalReader, local []presence.OnlineEntry) []presence.OnlineEntry {
+	if allReader, ok := reader.(globalPresenceEntriesReader); ok {
+		return allReader.OnlineEntries(local)
+	}
+	return reader.OnlineList(local, 1, globalPresenceLookupFallbackSize)
+}
+
+func (s *Server) globalPresenceStatus(requestedGlobalMetaId string, items []presence.OnlineEntry) globalPresenceStatus {
+	requestedGlobalMetaId = strings.TrimSpace(requestedGlobalMetaId)
+	status := globalPresenceStatus{
+		GlobalMetaId: requestedGlobalMetaId,
+		State:        "unknown",
+		Scope:        "global",
+	}
+
+	candidates := s.presenceIdentityCandidates(requestedGlobalMetaId)
+	matches := findMatchingPresenceEntries(items, candidates)
+	if len(matches) == 0 {
+		return status
+	}
+
+	status.State = "online"
+	status.Source = "global-presence"
+
+	var updatedAt int64
+	connectionCount := 0
+	sourceNodeSet := make(map[string]struct{})
+	for _, item := range matches {
+		itemUpdatedAt := item.LastSeenAt
+		if itemUpdatedAt == 0 {
+			itemUpdatedAt = item.ConnectedAt
+		}
+		if itemUpdatedAt > updatedAt {
+			updatedAt = itemUpdatedAt
+		}
+
+		if item.Sources > 0 {
+			connectionCount += item.Sources
+		} else {
+			connectionCount++
+		}
+		for _, nodeID := range item.SourceNodeIds {
+			nodeID = strings.TrimSpace(nodeID)
+			if nodeID == "" {
+				continue
+			}
+			sourceNodeSet[nodeID] = struct{}{}
+		}
+	}
+	if updatedAt > 0 {
+		status.UpdatedAt = &updatedAt
+	}
+	if connectionCount > 0 {
+		status.Connections = connectionCount
+	}
+	if len(sourceNodeSet) > 0 {
+		status.SourceNodeIds = make([]string, 0, len(sourceNodeSet))
+		for nodeID := range sourceNodeSet {
+			status.SourceNodeIds = append(status.SourceNodeIds, nodeID)
+		}
+		sort.Strings(status.SourceNodeIds)
+	}
+
+	return status
+}
+
+func (s *Server) presenceIdentityCandidates(globalMetaId string) []string {
+	candidates := []string{globalMetaId}
+	profile := s.lookupPresenceProfile(globalMetaId)
+	if profile == nil {
+		return uniquePresenceCandidates(candidates)
+	}
+	return uniquePresenceCandidates([]string{
+		globalMetaId,
+		profile.GlobalMetaId,
+		profile.MetaId,
+		profile.Address,
+	})
+}
+
+func uniquePresenceCandidates(values []string) []string {
+	candidates := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, value)
+	}
+	return candidates
+}
+
+func findMatchingPresenceEntries(items []presence.OnlineEntry, candidates []string) []presence.OnlineEntry {
+	if len(items) == 0 || len(candidates) == 0 {
+		return nil
+	}
+
+	lookup := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		lookup[strings.ToLower(strings.TrimSpace(candidate))] = struct{}{}
+	}
+
+	matches := make([]presence.OnlineEntry, 0, len(items))
+	for _, item := range items {
+		if _, ok := lookup[strings.ToLower(strings.TrimSpace(item.MetaId))]; ok {
+			matches = append(matches, item)
+		}
+	}
+	return matches
 }

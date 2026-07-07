@@ -72,9 +72,10 @@ type fakeGlobalReader struct {
 	items        []presence.OnlineEntry
 	stats        presence.GlobalStats
 
-	listCalls  int
-	statsCalls int
-	lastLocal  []presence.OnlineEntry
+	entriesCalls int
+	listCalls    int
+	statsCalls   int
+	lastLocal    []presence.OnlineEntry
 }
 
 func (r *fakeGlobalReader) Enabled() bool {
@@ -83,6 +84,12 @@ func (r *fakeGlobalReader) Enabled() bool {
 
 func (r *fakeGlobalReader) DefaultScope() string {
 	return r.defaultScope
+}
+
+func (r *fakeGlobalReader) OnlineEntries(local []presence.OnlineEntry) []presence.OnlineEntry {
+	r.entriesCalls++
+	r.lastLocal = append([]presence.OnlineEntry(nil), local...)
+	return append([]presence.OnlineEntry(nil), r.items...)
 }
 
 func (r *fakeGlobalReader) OnlineList(local []presence.OnlineEntry, page int, size int) []presence.OnlineEntry {
@@ -545,6 +552,205 @@ func TestOnlineListScopeDefaultUsesEnabledGlobalReaderDefaultScope(t *testing.T)
 	items := decodeOnlineListMaps(t, w.Body.Bytes())
 	if len(items) != 1 || items[0]["metaid"] != "meta-global" {
 		t.Fatalf("default global scope should use global reader, got %#v", items)
+	}
+}
+
+func TestGlobalPresenceByGlobalMetaIdReturnsOnlineFromEnabledGlobalReader(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	addServerTestConnection(srv, "meta-local", ConnTypePC, 1710000000000, 1710000000500)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "local",
+		items: []presence.OnlineEntry{
+			{
+				MetaId:        "idq-remote",
+				Type:          "app",
+				ConnectedAt:   1710000000000,
+				LastSeenAt:    1710000001000,
+				SourceNodeIds: []string{"node-remote"},
+				Sources:       1,
+			},
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/api/presence/globalmetaid/idq-remote")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d body=%s", resp.Code, w.Body.String())
+	}
+
+	var data struct {
+		GlobalMetaId  string   `json:"globalMetaId"`
+		State         string   `json:"state"`
+		UpdatedAt     *int64   `json:"updatedAt"`
+		Scope         string   `json:"scope"`
+		Source        string   `json:"source"`
+		SourceNodeIds []string `json:"sourceNodeIds"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode response data: %v", err)
+	}
+	if data.GlobalMetaId != "idq-remote" {
+		t.Fatalf("globalMetaId = %q, want idq-remote", data.GlobalMetaId)
+	}
+	if data.State != "online" {
+		t.Fatalf("state = %q, want online", data.State)
+	}
+	if data.UpdatedAt == nil || *data.UpdatedAt != 1710000001000 {
+		t.Fatalf("updatedAt = %#v, want 1710000001000", data.UpdatedAt)
+	}
+	if data.Scope != "global" {
+		t.Fatalf("scope = %q, want global", data.Scope)
+	}
+	if data.Source != "global-presence" {
+		t.Fatalf("source = %q, want global-presence", data.Source)
+	}
+	if !reflect.DeepEqual(data.SourceNodeIds, []string{"node-remote"}) {
+		t.Fatalf("sourceNodeIds = %#v, want [node-remote]", data.SourceNodeIds)
+	}
+	if reader.entriesCalls != 1 {
+		t.Fatalf("global presence lookup should read full global entries once, got %d", reader.entriesCalls)
+	}
+	if reader.listCalls != 0 {
+		t.Fatalf("global presence lookup should not use paginated list reader, got %d calls", reader.listCalls)
+	}
+	if len(reader.lastLocal) != 1 || reader.lastLocal[0].MetaId != "meta-local" {
+		t.Fatalf("global presence reader should receive local presence snapshot, got %#v", reader.lastLocal)
+	}
+}
+
+func TestGlobalPresenceByGlobalMetaIdRequiresEnabledGlobalReader(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader *fakeGlobalReader
+	}{
+		{name: "nil reader"},
+		{name: "disabled reader", reader: &fakeGlobalReader{enabled: false, defaultScope: "global"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, router := newTestRouter(t)
+			defer shutdownServerWithoutTestConnections(srv)
+			if tc.reader != nil {
+				srv.SetGlobalReader(tc.reader)
+			}
+
+			w := performRequest(t, router, "GET", "/api/presence/globalmetaid/idq-target")
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+			}
+
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			if got := int(body["code"].(float64)); got != 50000 {
+				t.Fatalf("code = %d, want 50000 body=%s", got, w.Body.String())
+			}
+			if body["message"] != "global presence unavailable" {
+				t.Fatalf("message = %#v, want global presence unavailable", body["message"])
+			}
+		})
+	}
+}
+
+func TestGlobalPresenceByGlobalMetaIdReturnsUnknownWhenNoGlobalMatchExists(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	reader := &fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "global",
+		items: []presence.OnlineEntry{
+			{MetaId: "idq-someone-else", Type: "pc", ConnectedAt: 1710000000000, LastSeenAt: 1710000000500, SourceNodeIds: []string{"node-remote"}, Sources: 1},
+		},
+	}
+	srv.SetGlobalReader(reader)
+
+	w := performRequest(t, router, "GET", "/api/presence/globalmetaid/idq-target")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("expected code=0, got %d body=%s", resp.Code, w.Body.String())
+	}
+	var data struct {
+		GlobalMetaId string `json:"globalMetaId"`
+		State        string `json:"state"`
+		UpdatedAt    *int64 `json:"updatedAt"`
+		Scope        string `json:"scope"`
+		Source       string `json:"source"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode response data: %v", err)
+	}
+	if data.GlobalMetaId != "idq-target" {
+		t.Fatalf("globalMetaId = %q, want idq-target", data.GlobalMetaId)
+	}
+	if data.State != "unknown" {
+		t.Fatalf("state = %q, want unknown", data.State)
+	}
+	if data.UpdatedAt != nil {
+		t.Fatalf("updatedAt = %#v, want nil", data.UpdatedAt)
+	}
+	if data.Scope != "global" {
+		t.Fatalf("scope = %q, want global", data.Scope)
+	}
+	if data.Source != "" {
+		t.Fatalf("source = %q, want empty", data.Source)
+	}
+}
+
+func TestGlobalPresenceByGlobalMetaIdMatchesProfileAliases(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	srv.SetProfileLookup(&fakePresenceProfileLookup{
+		byGlobalMeta: map[string]*ProfileSnapshot{
+			"idq-target": {
+				GlobalMetaId: "idq-target",
+				MetaId:       "meta-target",
+				Address:      "1TargetAddress",
+			},
+		},
+	})
+	srv.SetGlobalReader(&fakeGlobalReader{
+		enabled:      true,
+		defaultScope: "global",
+		items: []presence.OnlineEntry{
+			{MetaId: "meta-target", Type: "app", ConnectedAt: 1710000000000, LastSeenAt: 1710000000500, SourceNodeIds: []string{"node-remote"}, Sources: 1},
+		},
+	})
+
+	w := performRequest(t, router, "GET", "/api/presence/globalmetaid/idq-target")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	var data struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to decode response data: %v", err)
+	}
+	if data.State != "online" {
+		t.Fatalf("state = %q, want online", data.State)
 	}
 }
 

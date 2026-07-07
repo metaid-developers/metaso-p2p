@@ -72,6 +72,9 @@ Key sections:
 - Connect: `wss://host/socket/socket.io?metaid=<globalMetaId>&type=pc|app`
 - Events: `WS_SERVER_NOTIFY_GROUP_CHAT`, `WS_SERVER_NOTIFY_PRIVATE_CHAT`, `WS_SERVER_NOTIFY_GROUP_ROLE`
 
+### Presence
+- `GET /api/presence/globalmetaid/:globalMetaId` — global online-state lookup merged across local and federated nodes
+
 ### Bot Hub Skill Service
 - `GET /api/bot-hub/skill-service/list` — paginated skill-service listing for the Bot Hub
 - `GET /api/bot-hub/skill-service/detail/:serviceId` — service detail including provider profile and payment declaration

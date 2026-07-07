@@ -205,6 +205,11 @@ func (s *Store) GlobalOnline(local []presence.OnlineEntry, now time.Time) []pres
 	return result.items
 }
 
+// OnlineEntries returns the full merged global presence set without pagination.
+func (s *Store) OnlineEntries(local []presence.OnlineEntry) []presence.OnlineEntry {
+	return s.GlobalOnline(local, s.now())
+}
+
 // OnlineList returns a paginated global presence list.
 func (s *Store) OnlineList(local []presence.OnlineEntry, page int, size int) []presence.OnlineEntry {
 	items := s.GlobalOnline(local, s.now())
