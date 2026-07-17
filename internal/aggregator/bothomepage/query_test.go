@@ -144,8 +144,8 @@ func TestParseOptionsV3Defaults(t *testing.T) {
 	if got.IncludeProofs {
 		t.Fatal("IncludeProofs = true, want false")
 	}
-	if got.ServiceSize != homepageSectionLimit {
-		t.Fatalf("ServiceSize = %d, want homepage section limit %d", got.ServiceSize, homepageSectionLimit)
+	if got.ServiceSize != homepageV3SectionLimit {
+		t.Fatalf("ServiceSize = %d, want v3 homepage section limit %d", got.ServiceSize, homepageV3SectionLimit)
 	}
 	if got.ChainName != "" {
 		t.Fatalf("ChainName = %q, want empty", got.ChainName)

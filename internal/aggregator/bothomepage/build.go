@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	schemaVersionV1         = "botHomepage.v1"
-	schemaVersionV2         = "botHomepage.v2"
-	schemaVersionV3         = "botHomepage.v3"
-	homepageSectionLimit    = 5
-	homepageSectionReadSize = homepageSectionLimit + 1
+	schemaVersionV1           = "botHomepage.v1"
+	schemaVersionV2           = "botHomepage.v2"
+	schemaVersionV3           = "botHomepage.v3"
+	homepageSectionLimit      = 5
+	homepageSectionReadSize   = homepageSectionLimit + 1
+	homepageV3SectionLimit    = 10
+	homepageV3SectionReadSize = homepageV3SectionLimit + 1
 )
 
 var (
@@ -703,7 +705,8 @@ func (a *Aggregator) loadPublishedContentSection(canonical CanonicalIdentity, op
 
 func (a *Aggregator) loadPublishedContentByCanonicalIdentity(canonical CanonicalIdentity, opts Options, protocolPath string) (*publishedcontent.ListResult, error) {
 	queries := publishedContentIdentityQueries(canonical, opts, protocolPath)
-	items := make([]publishedcontent.SectionItem, 0, homepageSectionReadSize)
+	readSize := homepageSectionReadSizeForVersion(opts.Version)
+	items := make([]publishedcontent.SectionItem, 0, readSize)
 	seen := make(map[string]struct{})
 	hasMore := false
 	start := 0
@@ -756,9 +759,9 @@ func (a *Aggregator) loadPublishedContentByCanonicalIdentity(canonical Canonical
 		}
 		return left > right
 	})
-	if len(items) > homepageSectionReadSize {
+	if len(items) > readSize {
 		hasMore = true
-		items = items[:homepageSectionReadSize]
+		items = items[:readSize]
 	}
 
 	return &publishedcontent.ListResult{Items: items, HasMore: hasMore}, nil
@@ -768,7 +771,7 @@ func publishedContentIdentityQueries(canonical CanonicalIdentity, opts Options, 
 	base := publishedcontent.ListParams{
 		ProtocolPath: protocolPath,
 		ChainName:    opts.ChainName,
-		Size:         homepageSectionReadSize,
+		Size:         homepageSectionReadSizeForVersion(opts.Version),
 	}
 	queries := make([]publishedcontent.ListParams, 0, 3)
 	seen := make(map[string]struct{})
@@ -798,6 +801,13 @@ func publishedContentIdentityQueries(canonical CanonicalIdentity, opts Options, 
 	})
 
 	return queries
+}
+
+func homepageSectionReadSizeForVersion(version string) int {
+	if version == "v3" {
+		return homepageV3SectionReadSize
+	}
+	return homepageSectionReadSize
 }
 
 func publishedContentItemKey(item publishedcontent.SectionItem) string {

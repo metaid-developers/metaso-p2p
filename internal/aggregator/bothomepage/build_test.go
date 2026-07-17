@@ -3,6 +3,7 @@ package bothomepage
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func defaultV3Options() Options {
 	opts.IncludeMetaApps = true
 	opts.IncludeSkills = false
 	opts.IncludeProofs = false
-	opts.ServiceSize = homepageSectionLimit
+	opts.ServiceSize = homepageV3SectionLimit
 	opts.ChainName = ""
 	return opts
 }
@@ -1112,6 +1113,22 @@ func TestSectionWithItemsKeepsMoreDisabledForListerHasMore(t *testing.T) {
 	}
 }
 
+func TestSectionWithItemsV3LimitsItemsToTen(t *testing.T) {
+	items := make([]SectionItemV3, homepageV3SectionReadSize)
+	for index := range items {
+		items[index].PinId = fmt.Sprintf("item-%d", index+1)
+	}
+
+	got := sectionWithItemsV3("buzzes", publishedcontent.PathSimpleBuzz, items, false)
+
+	if got.Page.Limit != 10 || got.Page.Count != 10 || len(got.Items) != 10 {
+		t.Fatalf("section page/items = %+v/%d, want limit/count/items 10", got.Page, len(got.Items))
+	}
+	if !got.Page.HasMore {
+		t.Fatal("HasMore = false, want true when input exceeds v3 section limit")
+	}
+}
+
 func TestBuildHomepageIncludesProviderServices(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -1689,12 +1706,17 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		}
 
 		assertExactSectionIDsV3(t, got.Sections, []string{"services", "metaapps", "chats", "buzzes"})
+		for _, section := range got.Sections {
+			if section.Page.Limit != homepageV3SectionLimit {
+				t.Fatalf("section %q page limit = %d, want %d", section.ID, section.Page.Limit, homepageV3SectionLimit)
+			}
+		}
 
 		services := got.Sections[0]
 		if services.ProtocolPath != skillservice.PathSkillService {
 			t.Fatalf("services.ProtocolPath = %q, want %q", services.ProtocolPath, skillservice.PathSkillService)
 		}
-		if services.Page.Limit != homepageSectionLimit || services.Page.Count != 1 || !services.Page.HasMore {
+		if services.Page.Limit != homepageV3SectionLimit || services.Page.Count != 1 || !services.Page.HasMore {
 			t.Fatalf("services.Page = %+v", services.Page)
 		}
 		if len(services.Items) != 1 {
@@ -1712,8 +1734,8 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if serviceLister.gotParams.ProviderGlobalMetaId != "idqCanonicalBot" {
 			t.Fatalf("service lister ProviderGlobalMetaId = %q, want idqCanonicalBot", serviceLister.gotParams.ProviderGlobalMetaId)
 		}
-		if serviceLister.gotParams.Size != homepageSectionReadSize {
-			t.Fatalf("service lister Size = %d, want %d", serviceLister.gotParams.Size, homepageSectionReadSize)
+		if serviceLister.gotParams.Size != homepageV3SectionReadSize {
+			t.Fatalf("service lister Size = %d, want %d", serviceLister.gotParams.Size, homepageV3SectionReadSize)
 		}
 		if !serviceLister.gotParams.IncludeInactive {
 			t.Fatal("service lister IncludeInactive = false, want true")
@@ -1740,7 +1762,7 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if chats.ProtocolPath != privatechat.HomepageSimpleMsgProtocolPath {
 			t.Fatalf("chats.ProtocolPath = %q, want %q", chats.ProtocolPath, privatechat.HomepageSimpleMsgProtocolPath)
 		}
-		if chats.Page.Limit != homepageSectionLimit || chats.Page.Count != 1 || !chats.Page.HasMore {
+		if chats.Page.Limit != homepageV3SectionLimit || chats.Page.Count != 1 || !chats.Page.HasMore {
 			t.Fatalf("chats.Page = %+v", chats.Page)
 		}
 		if len(chats.Items) != 1 {
@@ -1774,8 +1796,8 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if chatLister.gotParams.Address != "1BotAddress" {
 			t.Fatalf("chat lister Address = %q, want 1BotAddress", chatLister.gotParams.Address)
 		}
-		if chatLister.gotParams.Size != homepageSectionReadSize {
-			t.Fatalf("chat lister Size = %d, want %d", chatLister.gotParams.Size, homepageSectionReadSize)
+		if chatLister.gotParams.Size != homepageV3SectionReadSize {
+			t.Fatalf("chat lister Size = %d, want %d", chatLister.gotParams.Size, homepageV3SectionReadSize)
 		}
 
 		buzzes := got.Sections[3]
@@ -1801,6 +1823,9 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		assertPublishedContentProtocolCalls(t, contentLister.gotParams, publishedcontent.PathSimpleBuzz, 3)
 		assertPublishedContentProtocolCalls(t, contentLister.gotParams, publishedcontent.PathMetaApp, 3)
 		for _, params := range contentLister.gotParams {
+			if params.Size != homepageV3SectionReadSize {
+				t.Fatalf("published content Size = %d, want %d", params.Size, homepageV3SectionReadSize)
+			}
 			if params.ChainName != "" {
 				t.Fatalf("published content ChainName = %q, want empty for v3 sections", params.ChainName)
 			}

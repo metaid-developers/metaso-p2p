@@ -100,7 +100,7 @@ func emptySectionV3(id, protocolPath string) SectionV3 {
 		ID:           id,
 		ProtocolPath: protocolPath,
 		Page: SectionPageV3{
-			Limit:   homepageSectionLimit,
+			Limit:   homepageV3SectionLimit,
 			Count:   0,
 			HasMore: false,
 		},
@@ -109,15 +109,15 @@ func emptySectionV3(id, protocolPath string) SectionV3 {
 }
 
 func sectionWithItemsV3(id, protocolPath string, items []SectionItemV3, hasMore bool) SectionV3 {
-	if len(items) > homepageSectionLimit {
+	if len(items) > homepageV3SectionLimit {
 		hasMore = true
-		items = items[:homepageSectionLimit]
+		items = items[:homepageV3SectionLimit]
 	}
 	return SectionV3{
 		ID:           id,
 		ProtocolPath: protocolPath,
 		Page: SectionPageV3{
-			Limit:   homepageSectionLimit,
+			Limit:   homepageV3SectionLimit,
 			Count:   len(items),
 			HasMore: hasMore,
 		},
@@ -132,7 +132,7 @@ func (a *Aggregator) loadServicesSectionV3(canonical CanonicalIdentity, opts Opt
 
 	result, err := a.homepageServiceLister.ListHomepageByProvider(skillservice.HomepageListParams{
 		ProviderGlobalMetaId: canonical.GlobalMetaId,
-		Size:                 homepageSectionReadSize,
+		Size:                 homepageV3SectionReadSize,
 		IncludeInactive:      opts.IncludeInactiveServices,
 	})
 	if err != nil {
@@ -159,7 +159,7 @@ func (a *Aggregator) loadChatsSectionV3(canonical CanonicalIdentity) (SectionV3,
 		GlobalMetaId: canonical.GlobalMetaId,
 		MetaId:       canonical.MetaId,
 		Address:      canonical.Address,
-		Size:         homepageSectionReadSize,
+		Size:         homepageV3SectionReadSize,
 	})
 	if err != nil {
 		return emptySectionV3("chats", privatechat.HomepageSimpleMsgProtocolPath), "chats section source unavailable"

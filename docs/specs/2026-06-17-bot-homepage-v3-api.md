@@ -256,23 +256,23 @@ v3 returns exactly these homepage sections, in this order:
 
 v3 does not include a `skills` section.
 
-Each section returns at most five items:
+Each section returns at most ten items:
 
 ```json
 {
   "id": "services",
   "protocolPath": "/protocols/skill-service",
   "page": {
-    "limit": 5,
-    "count": 5,
+    "limit": 10,
+    "count": 10,
     "hasMore": true
   },
   "items": []
 }
 ```
 
-The backend may read six records internally to compute `hasMore`, but it must
-return at most five.
+The backend may read eleven records internally to compute `hasMore`, but it must
+return at most ten.
 
 ## Section Item
 

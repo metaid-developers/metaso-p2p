@@ -100,7 +100,7 @@ func parseV3Options(values url.Values) (Options, error) {
 		IncludeChats:    true,
 		IncludeMetaApps: true,
 		IncludeBuzzes:   true,
-		ServiceSize:     homepageSectionLimit,
+		ServiceSize:     homepageV3SectionLimit,
 		IncludePresence: true,
 	}
 
