@@ -248,11 +248,7 @@ func (a *Aggregator) ListHomepageByProvider(p HomepageListParams) (*HomepageList
 	if err != nil {
 		return nil, err
 	}
-	if !stateReady || len(records) == 0 {
-		if stateReady && len(records) == 0 {
-			log.Printf("[skillservice] homepage provider index miss after backfill state for %s; running one fallback scan",
-				p.ProviderGlobalMetaId)
-		}
+	if !stateReady {
 		if err := a.addHomepageProviderFullScanFallbackCandidates(records, p); err != nil {
 			return nil, err
 		}

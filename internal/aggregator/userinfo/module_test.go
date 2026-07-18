@@ -623,6 +623,46 @@ func TestLookupByAddress_UsesReverseIndexWithoutScanMatch(t *testing.T) {
 	}
 }
 
+func TestLookupLocalByIdentityUsesExactIndexesWithoutScanning(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	profile := &UserProfile{
+		MetaID:       "meta_local_identity",
+		GlobalMetaID: "idq1localidentity",
+		Address:      "1LocalIdentityAddress",
+		Name:         "Local Identity",
+	}
+	if err := agg.saveProfile(profile); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := store.Set(namespace, globalMetaIdKey(profile.Address), []byte(profile.MetaID)); err != nil {
+		t.Fatalf("seed stale legacy globalMetaId index: %v", err)
+	}
+	agg.scanProfiles = func(match func(*UserProfile) bool) (*UserProfile, error) {
+		t.Fatal("local identity lookup must not scan profiles")
+		return nil, nil
+	}
+
+	for _, identity := range []string{profile.MetaID, profile.GlobalMetaID, profile.Address} {
+		got, err := agg.LookupLocalByIdentity(identity)
+		if err != nil {
+			t.Fatalf("LookupLocalByIdentity(%q): %v", identity, err)
+		}
+		if got == nil || got.MetaID != profile.MetaID {
+			t.Fatalf("LookupLocalByIdentity(%q) = %#v, want %q", identity, got, profile.MetaID)
+		}
+	}
+
+	missing, err := agg.LookupLocalByIdentity("idq1missinglocalidentity")
+	if err != nil {
+		t.Fatalf("LookupLocalByIdentity(missing): %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("LookupLocalByIdentity(missing) = %#v, want nil", missing)
+	}
+}
+
 func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()

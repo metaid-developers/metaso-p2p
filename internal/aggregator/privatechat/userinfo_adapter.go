@@ -34,6 +34,14 @@ func (a *userInfoLookupAdapter) LookupByAddress(address string) (*IdentityProfil
 	return identityFromUserInfo(p), err
 }
 
+func (a *userInfoLookupAdapter) LookupLocalByIdentity(identity string) (*IdentityProfile, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupLocalByIdentity(identity)
+	return identityFromUserInfo(p), err
+}
+
 func identityFromUserInfo(p *userinfo.UserProfile) *IdentityProfile {
 	if p == nil {
 		return nil

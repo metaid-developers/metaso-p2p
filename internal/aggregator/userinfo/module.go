@@ -350,6 +350,55 @@ func (a *Aggregator) LookupLocalByGlobalMetaId(globalMetaId string) (*UserProfil
 	return a.findProfileByGlobalMetaId(globalMetaId)
 }
 
+// LookupLocalByIdentity resolves a MetaID, GlobalMetaID, or chain address
+// through the local reverse indexes only. It intentionally avoids the
+// scan/remote fallback used by the public lookup methods because hot paths
+// such as private-chat indexing may resolve several aliases per message.
+func (a *Aggregator) LookupLocalByIdentity(identity string) (*UserProfile, error) {
+	identity = strings.TrimSpace(identity)
+	if a == nil || a.store == nil || identity == "" {
+		return nil, nil
+	}
+
+	if profile, err := a.getProfile(identity); err != nil {
+		return nil, err
+	} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.MetaID), identity) {
+		return profile, nil
+	}
+
+	for _, candidate := range []struct {
+		key   []byte
+		match func(*UserProfile) bool
+	}{
+		{
+			key: globalMetaIdKey(identity),
+			match: func(profile *UserProfile) bool {
+				return strings.EqualFold(strings.TrimSpace(profile.GlobalMetaID), identity)
+			},
+		},
+		{
+			key: addressKey(identity),
+			match: func(profile *UserProfile) bool {
+				return strings.EqualFold(strings.TrimSpace(profile.Address), identity)
+			},
+		},
+	} {
+		raw, err := a.store.Get(namespace, candidate.key)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		profile, err := a.getProfile(string(raw))
+		if err != nil {
+			return nil, err
+		}
+		if profile != nil && candidate.match(profile) {
+			return profile, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // --- Profile persistence ---
 
 func (a *Aggregator) getProfile(metaid string) (*UserProfile, error) {

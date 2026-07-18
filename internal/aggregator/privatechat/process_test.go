@@ -59,6 +59,17 @@ type fakePrivateChatProfileLookup struct {
 	byAddress      map[string]*IdentityProfile
 }
 
+type localPrivateChatProfileLookup struct {
+	fakePrivateChatProfileLookup
+	profile    *IdentityProfile
+	localCalls int
+}
+
+func (f *localPrivateChatProfileLookup) LookupLocalByIdentity(identity string) (*IdentityProfile, error) {
+	f.localCalls++
+	return f.profile, nil
+}
+
 func (f *fakePrivateChatProfileLookup) LookupByMetaId(metaid string) (*IdentityProfile, error) {
 	return f.byMetaId[metaid], nil
 }
@@ -345,6 +356,26 @@ func TestPrivateChatNotifyEventTargetsRecipientAliases(t *testing.T) {
 	}
 	if evt.MetaId != "idqBuyerGlobal" {
 		t.Fatalf("MetaId fallback = %q, want idqBuyerGlobal", evt.MetaId)
+	}
+}
+
+func TestIdentityAliasesPreferSingleLocalIdentityLookup(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+	lookup := &localPrivateChatProfileLookup{profile: &IdentityProfile{
+		MetaId:       "buyer_local_meta",
+		GlobalMetaId: "idqBuyerGlobal",
+		Address:      "1BuyerAddress",
+	}}
+	agg.SetProfileLookup(lookup)
+
+	got := agg.identityAliases("1BuyerAddress")
+	want := []string{"1BuyerAddress", "buyer_local_meta", "idqBuyerGlobal"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("identityAliases = %#v, want %#v", got, want)
+	}
+	if lookup.localCalls != 1 {
+		t.Fatalf("local identity lookup calls = %d, want 1", lookup.localCalls)
 	}
 }
 

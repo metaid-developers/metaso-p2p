@@ -44,6 +44,10 @@ type homepageMetaAppsCanonicalGlobalState interface {
 	HomepageMetaAppsCanonicalGlobalReady() (bool, error)
 }
 
+type localIdentityProfileLookup interface {
+	LookupLocalByIdentity(identity string) (*ProfileSnapshot, error)
+}
+
 type ChatInteractionLister interface {
 	ListOutgoingHomepageInteractions(privatechat.HomepageInteractionListParams) (*privatechat.HomepageInteractionListResult, error)
 }

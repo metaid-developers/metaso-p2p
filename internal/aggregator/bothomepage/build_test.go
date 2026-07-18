@@ -48,6 +48,30 @@ type localOnlyPeerProfileLookup struct {
 	localCalls       map[string]int
 }
 
+type localIdentityPeerProfileLookup struct {
+	botProfile    *ProfileSnapshot
+	peerProfile   *ProfileSnapshot
+	identityCalls map[string]int
+}
+
+func (l *localIdentityPeerProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	if l.botProfile != nil && l.botProfile.GlobalMetaId == globalMetaId {
+		return l.botProfile, nil
+	}
+	return nil, nil
+}
+
+func (l *localIdentityPeerProfileLookup) LookupLocalByIdentity(identity string) (*ProfileSnapshot, error) {
+	if l.identityCalls == nil {
+		l.identityCalls = make(map[string]int)
+	}
+	l.identityCalls[identity]++
+	if l.peerProfile != nil && (l.peerProfile.GlobalMetaId == identity || l.peerProfile.MetaId == identity || l.peerProfile.Address == identity) {
+		return l.peerProfile, nil
+	}
+	return nil, nil
+}
+
 func (l *localOnlyPeerProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
 	if l.regularCalls == nil {
 		l.regularCalls = make(map[string]int)
@@ -2032,6 +2056,51 @@ func TestBuildV3ChatsUseLocalOnlyPeerProfileLookup(t *testing.T) {
 	}
 }
 
+func TestBuildV3ChatsResolveAddressPeerThroughLocalIdentityIndex(t *testing.T) {
+	agg := &Aggregator{}
+	if err := agg.Init(nil, nil); err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	lookup := &localIdentityPeerProfileLookup{
+		botProfile: &ProfileSnapshot{
+			GlobalMetaId: "idqCanonicalBot",
+			MetaId:       "metaBot",
+			Address:      "1BotAddress",
+		},
+		peerProfile: &ProfileSnapshot{
+			GlobalMetaId: "idqPeerBot",
+			MetaId:       "metaPeerBot",
+			Address:      "1PeerAddress",
+			Name:         "Peer Bot",
+		},
+	}
+	agg.SetProfileLookup(lookup)
+	agg.SetChatInteractionLister(&recordingChatInteractionLister{result: &privatechat.HomepageInteractionListResult{
+		Items: []privatechat.HomepageInteraction{{
+			PinId:        "chat-address-peer:i0",
+			ProtocolPath: privatechat.HomepageSimpleMsgProtocolPath,
+			Timestamp:    1710000005,
+			InteractWith: "1PeerAddress",
+		}},
+	}})
+
+	opts := defaultV3Options()
+	opts.IncludeServices = false
+	opts.IncludeMetaApps = false
+	opts.IncludeBuzzes = false
+	got, err := agg.BuildV3("idqCanonicalBot", opts)
+	if err != nil {
+		t.Fatalf("BuildV3 returned error: %v", err)
+	}
+	interactWith := got.Sections[0].Items[0].Data.InteractWith
+	if interactWith == nil || *interactWith != (InteractWithV3{GlobalMetaId: "idqPeerBot", Name: "Peer Bot"}) {
+		t.Fatalf("chat interactWith = %+v, want canonical local identity profile", interactWith)
+	}
+	if lookup.identityCalls["1PeerAddress"] != 1 {
+		t.Fatalf("local identity lookup calls = %d, want 1", lookup.identityCalls["1PeerAddress"])
+	}
+}
+
 func TestBuildV3SectionItemsAreMinimal(t *testing.T) {
 	agg := &Aggregator{}
 	if err := agg.Init(nil, nil); err != nil {
@@ -2271,6 +2340,9 @@ func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) 
 		if err := store.DeleteByPrefix(skillservice.NamespaceService, prefix); err != nil {
 			t.Fatalf("delete legacy homepage index prefix %q: %v", string(prefix), err)
 		}
+	}
+	if err := store.Delete(skillservice.NamespaceService, []byte("homepage_provider_global_index_state:v1")); err != nil {
+		t.Fatalf("delete homepage provider index state: %v", err)
 	}
 
 	v2Opts := DefaultOptions()

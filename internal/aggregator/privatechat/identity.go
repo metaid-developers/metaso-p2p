@@ -16,6 +16,10 @@ type ProfileLookup interface {
 	LookupByAddress(address string) (*IdentityProfile, error)
 }
 
+type localIdentityLookup interface {
+	LookupLocalByIdentity(identity string) (*IdentityProfile, error)
+}
+
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
 }
@@ -43,6 +47,15 @@ func (a *Aggregator) identityAliases(id string) []string {
 	add(id)
 
 	if a == nil || a.profileLookup == nil {
+		return aliases
+	}
+	if lookup, ok := a.profileLookup.(localIdentityLookup); ok {
+		profile, err := lookup.LookupLocalByIdentity(id)
+		if err == nil && profile != nil {
+			add(profile.MetaId)
+			add(profile.GlobalMetaId)
+			add(profile.Address)
+		}
 		return aliases
 	}
 

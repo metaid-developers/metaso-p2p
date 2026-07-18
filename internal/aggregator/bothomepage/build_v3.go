@@ -216,6 +216,13 @@ func (a *Aggregator) lookupLocalChatPeerProfileV3(globalMetaId string) *ProfileS
 	if a == nil || a.profileLookup == nil {
 		return nil
 	}
+	if localLookup, ok := a.profileLookup.(localIdentityProfileLookup); ok {
+		profile, err := localLookup.LookupLocalByIdentity(globalMetaId)
+		if err != nil {
+			return nil
+		}
+		return profile
+	}
 	if localLookup, ok := a.profileLookup.(LocalProfileLookup); ok {
 		profile, err := localLookup.LookupLocalByGlobalMetaId(globalMetaId)
 		if err != nil {

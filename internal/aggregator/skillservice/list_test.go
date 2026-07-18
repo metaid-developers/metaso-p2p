@@ -987,6 +987,7 @@ func TestListHomepageByProviderFallsBackWhenHomepageIndexesMissing(t *testing.T)
 		providerGlobalIndexKey("idq-canonical-provA", 1000, "mvc", "legacy-home:i0"),
 		providerGlobalChainIndexKey("idq-canonical-provA", "mvc", 1000, "legacy-home:i0"),
 		homepageProviderMetaIndexKey("provA", 1000, "mvc", "legacy-home:i0"),
+		homepageProviderGlobalIndexStateKey(),
 	} {
 		if err := f.agg.store.Delete(NamespaceService, key); err != nil {
 			t.Fatalf("delete homepage index %q: %v", string(key), err)
@@ -1021,6 +1022,46 @@ func TestListHomepageByProviderFallsBackWhenHomepageIndexesMissing(t *testing.T)
 	}
 	if res.HasMore {
 		t.Fatal("expected HasMore=false for single fallback service")
+	}
+}
+
+func TestListHomepageByProviderTreatsReadyEmptyIndexesAsAuthoritative(t *testing.T) {
+	f := newListFixture(t)
+	profile := &ProfileSnapshot{
+		MetaId:       "provA",
+		GlobalMetaId: "idq-canonical-provA",
+	}
+	f.agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"provA": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq-canonical-provA": profile},
+	})
+	f.seed(t, servicePinOpts{
+		PinId: "ready-index-service:i0", Operation: OperationCreate, ChainName: "mvc",
+		ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "ready-index-service", DisplayName: "Ready Index Service",
+	})
+
+	for _, key := range [][]byte{
+		providerGlobalIndexKey("idq1-provA", 1000, "mvc", "ready-index-service:i0"),
+		providerGlobalChainIndexKey("idq1-provA", "mvc", 1000, "ready-index-service:i0"),
+		providerGlobalIndexKey("idq-canonical-provA", 1000, "mvc", "ready-index-service:i0"),
+		providerGlobalChainIndexKey("idq-canonical-provA", "mvc", 1000, "ready-index-service:i0"),
+		homepageProviderMetaIndexKey("provA", 1000, "mvc", "ready-index-service:i0"),
+	} {
+		if err := f.agg.store.Delete(NamespaceService, key); err != nil {
+			t.Fatalf("delete homepage index %q: %v", string(key), err)
+		}
+	}
+
+	res, err := f.agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq-canonical-provA",
+		Size:                 11,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 0 {
+		t.Fatalf("ready empty indexes returned %d items via full scan, want 0", len(res.List))
 	}
 }
 
