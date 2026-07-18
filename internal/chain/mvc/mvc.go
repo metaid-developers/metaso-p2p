@@ -86,19 +86,51 @@ func (c *Chain) GetBestHeight() int64 {
 }
 
 func (c *Chain) GetMempoolTransactionList() ([]any, error) {
-	txIDs, err := c.client.GetRawMempool()
+	txIDs, err := c.GetMempoolTransactionIDs()
 	if err != nil {
 		return nil, err
 	}
-	var list []any
-	for _, hash := range txIDs {
+	transactions, err := c.GetMempoolTransactions(txIDs)
+	if err != nil {
+		return nil, err
+	}
+	list := make([]any, 0, len(transactions))
+	for _, txID := range txIDs {
+		if tx, ok := transactions[txID]; ok {
+			list = append(list, tx)
+		}
+	}
+	return list, nil
+}
+
+func (c *Chain) GetMempoolTransactionIDs() ([]string, error) {
+	hashes, err := c.client.GetRawMempool()
+	if err != nil {
+		return nil, err
+	}
+	txIDs := make([]string, 0, len(hashes))
+	for _, hash := range hashes {
+		if hash != nil {
+			txIDs = append(txIDs, hash.String())
+		}
+	}
+	return txIDs, nil
+}
+
+func (c *Chain) GetMempoolTransactions(txIDs []string) (map[string]any, error) {
+	transactions := make(map[string]any, len(txIDs))
+	for _, txID := range txIDs {
+		hash, err := chainhash.NewHashFromStr(txID)
+		if err != nil {
+			continue
+		}
 		tx, err := c.client.GetRawTransaction(hash)
 		if err != nil {
 			continue
 		}
-		list = append(list, tx.MsgTx())
+		transactions[txID] = tx.MsgTx()
 	}
-	return list, nil
+	return transactions, nil
 }
 
 func (c *Chain) BroadcastTx(txRaw string) (string, error) {

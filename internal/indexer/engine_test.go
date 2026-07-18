@@ -22,6 +22,28 @@ type mockChain struct {
 	mempoolListErr error
 }
 
+type incrementalMockChain struct {
+	mockChain
+	txIDs         []string
+	transactions  map[string]any
+	fetchRequests [][]string
+}
+
+func (m *incrementalMockChain) GetMempoolTransactionIDs() ([]string, error) {
+	return append([]string(nil), m.txIDs...), nil
+}
+
+func (m *incrementalMockChain) GetMempoolTransactions(txIDs []string) (map[string]any, error) {
+	m.fetchRequests = append(m.fetchRequests, append([]string(nil), txIDs...))
+	result := make(map[string]any)
+	for _, txID := range txIDs {
+		if tx, ok := m.transactions[txID]; ok {
+			result[txID] = tx
+		}
+	}
+	return result, nil
+}
+
 func (m *mockChain) Name() string                             { return m.name }
 func (m *mockChain) Init() error                              { return m.initErr }
 func (m *mockChain) GetBlock(height int64) (any, error)       { return nil, nil }
@@ -344,6 +366,41 @@ func TestEngineMempoolDedupeTTLAllowsRefresh(t *testing.T) {
 	afterTTL := engine.filterSeenMempoolPins("mvc", []*aggregator.PinInscription{pin}, nil, time.Unix(102, 0))
 	if len(afterTTL) != 1 {
 		t.Fatalf("expected pin after TTL to pass dedupe, got %d pins", len(afterTTL))
+	}
+}
+
+func TestEngineMempoolPollFetchesOnlyUnseenRawTransactions(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	engine := NewEngine(store, registry)
+	chain := &incrementalMockChain{
+		mockChain:    mockChain{name: "mvc"},
+		txIDs:        []string{"tx1", "tx2"},
+		transactions: map[string]any{"tx1": "raw1"},
+	}
+	idx := &mockIndexer{name: "mvc"}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+	chain.transactions["tx2"] = "raw2"
+	engine.pollMempoolOnce()
+	engine.pollMempoolOnce()
+
+	if len(chain.fetchRequests) != 2 {
+		t.Fatalf("raw transaction fetch calls = %d, want 2", len(chain.fetchRequests))
+	}
+	if got := chain.fetchRequests[0]; len(got) != 2 || got[0] != "tx1" || got[1] != "tx2" {
+		t.Fatalf("first raw transaction request = %#v, want [tx1 tx2]", got)
+	}
+	if got := chain.fetchRequests[1]; len(got) != 1 || got[0] != "tx2" {
+		t.Fatalf("retry raw transaction request = %#v, want [tx2]", got)
+	}
+	if idx.mempoolCalls != 2 {
+		t.Fatalf("mempool parse calls = %d, want 2 successful incremental batches", idx.mempoolCalls)
 	}
 }
 

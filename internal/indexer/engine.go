@@ -33,6 +33,7 @@ type Engine struct {
 	mempoolPollInterval   time.Duration
 	mempoolDedupeTTL      time.Duration
 	mempoolSeen           map[string]time.Time
+	mempoolTxSeen         map[string]time.Time
 	mempoolMu             sync.Mutex
 	running               bool
 	cancel                context.CancelFunc
@@ -55,6 +56,7 @@ func NewEngine(store *storage.PebbleStore, registry *aggregator.Registry) *Engin
 		mempoolPollInterval:   10 * time.Second,
 		mempoolDedupeTTL:      30 * time.Minute,
 		mempoolSeen:           make(map[string]time.Time),
+		mempoolTxSeen:         make(map[string]time.Time),
 	}
 }
 
@@ -251,7 +253,7 @@ func (e *Engine) pollMempoolOnce() {
 	now := time.Now()
 	for _, entry := range entries {
 		chainName := entry.chain.Name()
-		txList, err := entry.chain.GetMempoolTransactionList()
+		txList, err := e.getMempoolTransactionList(entry.chain, chainName, now)
 		if err != nil {
 			log.Printf("[indexer] %s mempool: GetMempoolTransactionList error: %v", chainName, err)
 			continue
@@ -269,6 +271,78 @@ func (e *Engine) pollMempoolOnce() {
 
 		for _, pin := range pins {
 			e.registry.RouteMempoolPin(pin)
+		}
+	}
+}
+
+func (e *Engine) getMempoolTransactionList(c chain.Chain, chainName string, now time.Time) ([]any, error) {
+	source, ok := c.(chain.IncrementalMempoolChain)
+	if !ok {
+		return c.GetMempoolTransactionList()
+	}
+
+	txIDs, err := source.GetMempoolTransactionIDs()
+	if err != nil {
+		return nil, err
+	}
+	pending := e.filterUnseenMempoolTxIDs(chainName, txIDs, now)
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	transactions, err := source.GetMempoolTransactions(pending)
+	if err != nil {
+		return nil, err
+	}
+
+	list := make([]any, 0, len(transactions))
+	succeeded := make([]string, 0, len(transactions))
+	for _, txID := range pending {
+		if tx, ok := transactions[txID]; ok && tx != nil {
+			list = append(list, tx)
+			succeeded = append(succeeded, txID)
+		}
+	}
+	e.markMempoolTxIDsSeen(chainName, succeeded, now)
+	return list, nil
+}
+
+func (e *Engine) filterUnseenMempoolTxIDs(chainName string, txIDs []string, now time.Time) []string {
+	e.mempoolMu.Lock()
+	defer e.mempoolMu.Unlock()
+
+	for key, seenAt := range e.mempoolTxSeen {
+		if e.mempoolDedupeTTL > 0 && now.Sub(seenAt) > e.mempoolDedupeTTL {
+			delete(e.mempoolTxSeen, key)
+		}
+	}
+
+	pending := make([]string, 0, len(txIDs))
+	added := make(map[string]struct{}, len(txIDs))
+	for _, txID := range txIDs {
+		txID = strings.TrimSpace(txID)
+		if txID == "" {
+			continue
+		}
+		key := chainName + ":" + txID
+		if _, ok := added[key]; ok {
+			continue
+		}
+		if seenAt, ok := e.mempoolTxSeen[key]; ok && (e.mempoolDedupeTTL <= 0 || now.Sub(seenAt) <= e.mempoolDedupeTTL) {
+			continue
+		}
+		added[key] = struct{}{}
+		pending = append(pending, txID)
+	}
+	return pending
+}
+
+func (e *Engine) markMempoolTxIDsSeen(chainName string, txIDs []string, now time.Time) {
+	e.mempoolMu.Lock()
+	defer e.mempoolMu.Unlock()
+	for _, txID := range txIDs {
+		txID = strings.TrimSpace(txID)
+		if txID != "" {
+			e.mempoolTxSeen[chainName+":"+txID] = now
 		}
 	}
 }

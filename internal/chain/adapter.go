@@ -40,6 +40,14 @@ type Chain interface {
 	BroadcastTx(txRaw string) (txID string, err error)
 }
 
+// IncrementalMempoolChain lets the engine fetch raw transactions only for
+// mempool txids it has not processed recently. Chains that do not implement
+// this interface continue to use GetMempoolTransactionList.
+type IncrementalMempoolChain interface {
+	GetMempoolTransactionIDs() ([]string, error)
+	GetMempoolTransactions(txIDs []string) (map[string]any, error)
+}
+
 // Indexer parses chain-specific raw data into structured PinInscriptions.
 type Indexer interface {
 	// Name returns the chain identifier.
