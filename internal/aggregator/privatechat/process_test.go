@@ -35,6 +35,12 @@ func setupTestAggregator(t *testing.T) (*Aggregator, *storage.PebbleStore, *gin.
 	return agg, store, router
 }
 
+func TestCacheTTLUsesDurationUnits(t *testing.T) {
+	if cacheTTL != 5*time.Minute {
+		t.Fatalf("cacheTTL = %s, want 5m", cacheTTL)
+	}
+}
+
 func performRequest(t *testing.T, router *gin.Engine, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req, _ := http.NewRequest(method, path, nil)

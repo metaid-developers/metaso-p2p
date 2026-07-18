@@ -1,6 +1,8 @@
 package groupchat
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -19,7 +21,7 @@ type Aggregator struct {
 const (
 	namespace       = "groupchat"
 	cacheMaxEntries = 2000
-	cacheTTL        = 5 * 60 // 5 min default (seconds)
+	cacheTTL        = 5 * time.Minute
 )
 
 func (a *Aggregator) Name() string { return "groupchat" }

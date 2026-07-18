@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,7 +42,7 @@ const (
 	namespace       = "notify"
 	blockedPrefix   = "blocked:"
 	cacheMaxEntries = 1000
-	cacheTTL        = 5 * 60 // 5 min
+	cacheTTL        = 5 * time.Minute
 )
 
 func (a *Aggregator) Name() string { return "notify" }

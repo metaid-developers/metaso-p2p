@@ -2,6 +2,7 @@ package privatechat
 
 import (
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,7 +26,7 @@ type Aggregator struct {
 const (
 	namespace       = "privatechat"
 	cacheMaxEntries = 2000
-	cacheTTL        = 5 * 60 // 5 min default (seconds)
+	cacheTTL        = 5 * time.Minute
 )
 
 func (a *Aggregator) Name() string { return "privatechat" }
