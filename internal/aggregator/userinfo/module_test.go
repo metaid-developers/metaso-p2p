@@ -408,6 +408,79 @@ func TestHandleBlockPin_ModifiedAvatarUpdatesPinID(t *testing.T) {
 	}
 }
 
+func TestHandleBlockPin_RejectsOlderInfoPinsAfterNewerReplay(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const metaid = "meta_info_revision"
+	const address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	newer := func(path, id string, body []byte) *aggregator.PinInscription {
+		return &aggregator.PinInscription{
+			Id: "new-" + id, Path: path, Operation: "create", MetaId: metaid,
+			Address: address, ChainName: "mvc", ContentBody: body,
+			ContentType: "image/png", Timestamp: 2000, GenesisHeight: 200,
+		}
+	}
+	older := func(path, id string, body []byte) *aggregator.PinInscription {
+		return &aggregator.PinInscription{
+			Id: "old-" + id, Path: path, Operation: "create", MetaId: metaid,
+			Address: address, ChainName: "mvc", ContentBody: body,
+			ContentType: "image/png", Timestamp: 1000, GenesisHeight: 100,
+		}
+	}
+
+	for _, pin := range []*aggregator.PinInscription{
+		{Id: "init-revision:i0", Path: "/", Operation: "init", MetaId: metaid, Address: address, ChainName: "mvc"},
+		newer("/info/avatar", "avatar:i0", []byte("new-avatar")),
+		newer("/info/homepage", "homepage:i0", []byte("new-homepage")),
+		newer("/info/bio", "bio:i0", []byte("new-bio")),
+		older("/info/avatar", "avatar:i0", []byte("old-avatar")),
+		older("/info/homepage", "homepage:i0", []byte("old-homepage")),
+		older("/info/bio", "bio:i0", []byte("old-bio")),
+	} {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	stored, err := agg.getProfile(metaid)
+	if err != nil {
+		t.Fatalf("getProfile: %v", err)
+	}
+	if stored.AvatarId != "new-avatar:i0" || stored.Avatar != "/content/new-avatar:i0" {
+		t.Fatalf("older avatar replay overwrote newer value: %#v", stored)
+	}
+	if stored.HomepageId != "new-homepage:i0" || stored.Homepage != "new-homepage" {
+		t.Fatalf("older homepage replay overwrote newer value: %#v", stored)
+	}
+	if stored.BioId != "new-bio:i0" || stored.Bio != "new-bio" {
+		t.Fatalf("older bio replay overwrote newer value: %#v", stored)
+	}
+}
+
+func TestHandleBlockPin_UsesAddressWhenMANAPIMetaIDIsMissing(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	const globalMetaID = "idq-manapi-profile"
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id: "manapi-homepage:i0", Path: "/info/homepage", Operation: "create",
+		GlobalMetaId: globalMetaID, Address: address, ChainName: "mvc",
+		Timestamp: 2000, GenesisHeight: 200, ContentBody: []byte("homepage"),
+	}); err != nil {
+		t.Fatalf("HandleBlockPin: %v", err)
+	}
+
+	profile, err := agg.LookupLocalByGlobalMetaId(globalMetaID)
+	if err != nil {
+		t.Fatalf("LookupLocalByGlobalMetaId: %v", err)
+	}
+	if profile == nil || profile.MetaID != address || profile.Homepage != "homepage" {
+		t.Fatalf("MANAPI address fallback did not persist profile: %#v", profile)
+	}
+}
+
 func TestNormaliseInfoPath_StripsModifyTarget(t *testing.T) {
 	if got := normaliseInfoPath("@avatar-old:i0"); got != "" {
 		t.Fatalf("normaliseInfoPath(target-only) = %q, want empty path", got)

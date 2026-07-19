@@ -105,13 +105,27 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	if metaid == "" {
 		metaid = pin.CreateMetaId
 	}
+	address := pin.Address
+	if address == "" {
+		address = pin.CreateAddress
+	}
+	if metaid == "" {
+		// MANAPI may omit metaId for profile pins while still returning the
+		// owning address. The chain indexer uses the same address identity.
+		metaid = address
+	}
 	if metaid == "" {
 		return nil, nil
 	}
 
-	address := pin.Address
-	if address == "" {
-		address = pin.CreateAddress
+	if isLatestProfileInfoPath(path) {
+		apply, err := a.shouldApplyInfoPin(metaid, path, pin)
+		if err != nil {
+			return nil, err
+		}
+		if !apply {
+			return nil, nil
+		}
 	}
 
 	// Load or create profile
@@ -206,6 +220,11 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 
 	if err := a.saveProfile(profile); err != nil {
 		return nil, err
+	}
+	if isLatestProfileInfoPath(path) {
+		if err := a.saveInfoRevision(metaid, path, pin); err != nil {
+			return nil, err
+		}
 	}
 
 	// Invalidate cache for this user
