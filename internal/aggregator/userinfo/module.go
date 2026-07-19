@@ -98,6 +98,9 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	}
 
 	path := normaliseInfoPath(pin.Path)
+	if originalPath := strings.TrimSpace(pin.OriginalPath); originalPath != "" && (path == "" || !strings.HasPrefix(path, "/info/")) {
+		path = normaliseInfoPath(originalPath)
+	}
 	metaid := pin.MetaId
 	if metaid == "" {
 		metaid = pin.CreateMetaId
@@ -217,6 +220,9 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 
 func normaliseInfoPath(path string) string {
 	path = strings.TrimSpace(path)
+	if at := strings.Index(path, "@"); at >= 0 {
+		path = strings.TrimSpace(path[:at])
+	}
 	if strings.HasPrefix(strings.ToLower(path), "/info/") {
 		return strings.ToLower(path)
 	}

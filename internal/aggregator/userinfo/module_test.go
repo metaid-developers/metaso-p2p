@@ -341,6 +341,82 @@ func TestHandleBlockPin_StoresV3BotInfoPathsAndClears(t *testing.T) {
 	}
 }
 
+func TestHandleBlockPin_ModifiedAvatarUpdatesPinID(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	const metaid = "meta_avatar_modify"
+	const address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+
+	for _, pin := range []*aggregator.PinInscription{
+		{Id: "init-avatar-modify:i0", Path: "/", Operation: "init", MetaId: metaid, Address: address, ChainName: "mvc"},
+		{Id: "avatar-old:i0", Path: "/info/avatar", Operation: "create", MetaId: metaid, Address: address, ChainName: "mvc", ContentType: "image/png", ContentBody: []byte("old")},
+	} {
+		if _, err := agg.HandleBlockPin(pin); err != nil {
+			t.Fatalf("HandleBlockPin(%s): %v", pin.Path, err)
+		}
+	}
+
+	updated := &aggregator.PinInscription{
+		Id:           "avatar-new:i0",
+		Path:         "/info/avatar@avatar-old:i0",
+		Operation:    "modify",
+		MetaId:       metaid,
+		Address:      address,
+		ChainName:    "mvc",
+		ContentType:  "image/jpeg",
+		ContentBody:  []byte("new"),
+		OriginalPath: "/info/avatar",
+	}
+	if _, err := agg.HandleBlockPin(updated); err != nil {
+		t.Fatalf("HandleBlockPin(modify avatar): %v", err)
+	}
+
+	updatedViaOriginalPath := &aggregator.PinInscription{
+		Id:           "avatar-newer:i0",
+		Path:         "@avatar-new:i0",
+		OriginalPath: "/info/avatar",
+		Operation:    "modify",
+		MetaId:       metaid,
+		Address:      address,
+		ChainName:    "mvc",
+		ContentType:  "image/webp",
+		ContentBody:  []byte("newer"),
+	}
+	if _, err := agg.HandleBlockPin(updatedViaOriginalPath); err != nil {
+		t.Fatalf("HandleBlockPin(modify avatar via originalPath): %v", err)
+	}
+
+	profile, err := agg.LookupByMetaId(metaid)
+	if err != nil {
+		t.Fatalf("LookupByMetaId: %v", err)
+	}
+	if profile.Avatar != "/content/avatar-newer:i0" || profile.AvatarId != "avatar-newer:i0" || profile.AvatarContentType != "image/webp" {
+		t.Fatalf("modified avatar not stored: %#v", profile)
+	}
+
+	w := performRequest(t, router, "GET", "/api/info/metaid/"+metaid)
+	var response struct {
+		Code int         `json:"code"`
+		Data UserProfile `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Code != 1 || response.Data.AvatarId != "avatar-newer:i0" {
+		t.Fatalf("HTTP profile did not expose modified avatar: code=%d data=%#v", response.Code, response.Data)
+	}
+}
+
+func TestNormaliseInfoPath_StripsModifyTarget(t *testing.T) {
+	if got := normaliseInfoPath("@avatar-old:i0"); got != "" {
+		t.Fatalf("normaliseInfoPath(target-only) = %q, want empty path", got)
+	}
+	if got := normaliseInfoPath("/info/avatar@avatar-old:i0"); got != "/info/avatar" {
+		t.Fatalf("normaliseInfoPath(targeted) = %q, want /info/avatar", got)
+	}
+}
+
 func TestHandleMempoolPin_StoresPersona(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
