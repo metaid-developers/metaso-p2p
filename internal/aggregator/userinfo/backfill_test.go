@@ -161,6 +161,46 @@ func TestBackfillReplaysInfoPinsOldestToNewestAcrossPages(t *testing.T) {
 	}
 }
 
+func TestBackfillScansPastOldPagesWhenMANAPIOrderIsNotChronological(t *testing.T) {
+	now := time.Date(2026, 7, 19, 14, 0, 0, 0, time.UTC)
+	metaID := "meta-unordered-pages"
+	globalMetaID := "gid-unordered-pages"
+	address := "addr-unordered-pages"
+
+	olderAvatar := manapiInfoPinForTest("old-page-avatar:i0", "/info/avatar", "old", now.Add(-2*time.Hour), metaID, globalMetaID, address)
+	newerAvatar := manapiInfoPinForTest("new-page-avatar:i0", "/info/avatar", "new", now.Add(-time.Minute), metaID, globalMetaID, address)
+	olderAvatar["contentType"] = "image/png"
+	newerAvatar["contentType"] = "image/webp"
+
+	server := newUserInfoBackfillMANAPIServer(t, map[string]int{}, map[string][]map[string]any{
+		"/info/avatar": {olderAvatar, newerAvatar},
+	})
+	defer server.Close()
+
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	if err := agg.Backfill(BackfillOptions{
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{"/info/avatar"},
+		Since:    now.Add(-time.Hour),
+		PageSize: 1,
+	}); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	profile, err := agg.LookupByGlobalMetaId(globalMetaID)
+	if err != nil {
+		t.Fatalf("LookupByGlobalMetaId: %v", err)
+	}
+	if profile == nil {
+		t.Fatal("LookupByGlobalMetaId returned nil profile")
+	}
+	if profile.AvatarId != "new-page-avatar:i0" || profile.AvatarContentType != "image/webp" {
+		t.Fatalf("backfill stopped before newer unordered page: %#v", profile)
+	}
+}
+
 func manapiInfoPinForTest(id, path, body string, ts time.Time, metaID, globalMetaID, address string) map[string]any {
 	return map[string]any{
 		"id":             id,

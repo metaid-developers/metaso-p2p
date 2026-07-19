@@ -96,16 +96,11 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 				break
 			}
 
-			allOlder := true
 			for _, pin := range page.Pins {
 				if manapiTimestampBefore(pin.Timestamp, opts.Since) {
 					continue
 				}
-				allOlder = false
 				pinsToReplay = append(pinsToReplay, pin.toAggregatorPin())
-			}
-			if allOlder {
-				break
 			}
 			if page.NextCursor == "" || len(page.Pins) < pageSize {
 				break
