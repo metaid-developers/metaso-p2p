@@ -4,10 +4,33 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
 )
+
+func TestDefaultBackfillPathsCoverSupportedProfilePaths(t *testing.T) {
+	want := []string{
+		"/info/name",
+		"/info/avatar",
+		"/info/nft-avatar",
+		"/info/bio",
+		"/info/role",
+		"/info/soul",
+		"/info/goal",
+		"/info/chatSkills",
+		"/info/LLM",
+		"/info/llm",
+		"/info/persona",
+		"/info/homepage",
+		"/info/background",
+		"/info/chatpubkey",
+	}
+	if got := DefaultBackfillPaths(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultBackfillPaths() = %#v, want %#v", got, want)
+	}
+}
 
 func TestBackfillInfoPathsStoresPersonaAndHomepage(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
@@ -91,9 +114,18 @@ func TestBackfillReplaysInfoPinsOldestToNewestAcrossPages(t *testing.T) {
 
 	olderClear := manapiInfoPinForTest("older-clear:i0", "/info/homepage", "", now.Add(-2*time.Minute), metaID, globalMetaID, address)
 	newerHomepage := manapiInfoPinForTest("newer-homepage:i0", "/info/homepage", `{"uri":"metaapp://homepage","renderer":"metaapp","contentType":"application/vnd.metaapp"}`, now.Add(-time.Minute), metaID, globalMetaID, address)
+	olderAvatar := manapiInfoPinForTest("older-avatar:i0", "/info/avatar", "older", now.Add(-3*time.Minute), metaID, globalMetaID, address)
+	middleAvatar := manapiInfoPinForTest("middle-avatar:i0", "/info/avatar", "middle", now.Add(-2*time.Minute), metaID, globalMetaID, address)
+	newerAvatar := manapiInfoPinForTest("newer-avatar:i0", "/info/avatar", "newer", now.Add(-time.Minute), metaID, globalMetaID, address)
+	for _, avatar := range []map[string]any{olderAvatar, middleAvatar, newerAvatar} {
+		avatar["contentType"] = "image/png"
+	}
 
 	server := newUserInfoBackfillMANAPIServer(t, map[string]int{}, map[string][]map[string]any{
 		"/info/homepage": {newerHomepage, olderClear},
+		// Deliberately neither newest-first nor oldest-first. Backfill must
+		// order revisions before applying fixed-path create semantics.
+		"/info/avatar": {middleAvatar, newerAvatar, olderAvatar},
 	})
 	defer server.Close()
 
@@ -120,6 +152,12 @@ func TestBackfillReplaysInfoPinsOldestToNewestAcrossPages(t *testing.T) {
 	}
 	if profile.Homepage != `{"uri":"metaapp://homepage","renderer":"metaapp","contentType":"application/vnd.metaapp"}` {
 		t.Fatalf("Homepage = %q, want newer homepage payload", profile.Homepage)
+	}
+	if profile.AvatarId != "newer-avatar:i0" || profile.Avatar != "/content/newer-avatar:i0" {
+		t.Fatalf("avatar create revisions did not resolve to newest pin: %#v", profile)
+	}
+	if profile.AvatarContentType != "image/png" {
+		t.Fatalf("AvatarContentType = %q, want image/png", profile.AvatarContentType)
 	}
 }
 

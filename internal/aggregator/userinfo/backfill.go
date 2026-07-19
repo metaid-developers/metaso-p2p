@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,10 @@ type BackfillClient struct {
 const defaultBackfillPageSize = 100
 
 var defaultBackfillPaths = []string{
+	"/info/name",
+	"/info/avatar",
+	"/info/nft-avatar",
+	"/info/bio",
 	"/info/role",
 	"/info/soul",
 	"/info/goal",
@@ -41,6 +46,8 @@ var defaultBackfillPaths = []string{
 	"/info/llm",
 	"/info/persona",
 	"/info/homepage",
+	"/info/background",
+	"/info/chatpubkey",
 }
 
 func DefaultBackfillPaths() []string {
@@ -108,8 +115,21 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 			}
 			cursor = page.NextCursor
 		}
-		for i := len(pinsToReplay) - 1; i >= 0; i-- {
-			if _, err := a.HandleBlockPin(pinsToReplay[i]); err != nil {
+		sort.SliceStable(pinsToReplay, func(i, j int) bool {
+			left := pinsToReplay[i]
+			right := pinsToReplay[j]
+			leftTimestamp := normalisePinTimestampMillis(left.Timestamp)
+			rightTimestamp := normalisePinTimestampMillis(right.Timestamp)
+			if leftTimestamp != rightTimestamp {
+				return leftTimestamp < rightTimestamp
+			}
+			if left.GenesisHeight != right.GenesisHeight {
+				return left.GenesisHeight < right.GenesisHeight
+			}
+			return left.Id < right.Id
+		})
+		for _, pin := range pinsToReplay {
+			if _, err := a.HandleBlockPin(pin); err != nil {
 				return err
 			}
 		}
@@ -331,8 +351,12 @@ func manapiTimestampBefore(timestamp int64, since time.Time) bool {
 		return false
 	}
 	cutoffMillis := since.UnixMilli()
-	if timestamp > 100000000000 {
-		return timestamp < cutoffMillis
+	return normalisePinTimestampMillis(timestamp) < cutoffMillis
+}
+
+func normalisePinTimestampMillis(timestamp int64) int64 {
+	if timestamp > 0 && timestamp < 100000000000 {
+		return timestamp * 1000
 	}
-	return timestamp < since.Unix()
+	return timestamp
 }
