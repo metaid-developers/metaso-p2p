@@ -2,6 +2,7 @@ package userinfo
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -275,32 +276,41 @@ func assertPrefixResponseCode(t *testing.T, raw []byte, want int) {
 }
 
 func BenchmarkLookupGlobalMetaIDPrefix(b *testing.B) {
-	store := storage.NewPebbleStore(b.TempDir())
-	b.Cleanup(func() { _ = store.Close() })
-	agg := &Aggregator{}
-	if err := agg.Init(store, cache.New(store)); err != nil {
-		b.Fatalf("init aggregator: %v", err)
-	}
+	for _, size := range []int{100_000, 1_000_000} {
+		b.Run(fmt.Sprintf("records=%d", size), func(b *testing.B) {
+			store := storage.NewPebbleStore(b.TempDir())
+			b.Cleanup(func() { _ = store.Close() })
+			agg := &Aggregator{}
+			if err := agg.Init(store, cache.New(store)); err != nil {
+				b.Fatalf("init aggregator: %v", err)
+			}
 
-	records := make([]globalMetaIDCreationRecord, 100000)
-	for i := range records {
-		records[i] = globalMetaIDCreationRecord{
-			GlobalMetaID: "idq1w8ye" + fmtBase32TestValue(i),
-			MetaID:       fmtBase32TestValue(i),
-			CreatedAt:    int64(i + 1),
-			ChainName:    "mvc",
-			PinID:        fmtBase32TestValue(i) + ":i0",
-		}
-	}
-	if _, err := agg.upsertGlobalMetaIDCreationRecords(records); err != nil {
-		b.Fatalf("seed prefix index: %v", err)
-	}
+			const seedBatchSize = 10_000
+			for start := 0; start < size; start += seedBatchSize {
+				end := min(start+seedBatchSize, size)
+				records := make([]globalMetaIDCreationRecord, 0, end-start)
+				for i := start; i < end; i++ {
+					suffix := fmtBase32TestValue(i)
+					records = append(records, globalMetaIDCreationRecord{
+						GlobalMetaID: "idq1w8ye" + suffix,
+						MetaID:       suffix,
+						CreatedAt:    int64(i + 1),
+						ChainName:    "mvc",
+						PinID:        suffix + ":i0",
+					})
+				}
+				if _, err := agg.upsertGlobalMetaIDCreationRecords(records); err != nil {
+					b.Fatalf("seed prefix index: %v", err)
+				}
+			}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := agg.lookupGlobalMetaIDPrefix("idq1w8ye"); err != nil {
-			b.Fatal(err)
-		}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := agg.lookupGlobalMetaIDPrefix("idq1w8ye"); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
