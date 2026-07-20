@@ -18,6 +18,12 @@ type PebbleStore struct {
 	opened bool
 }
 
+// KeyValue is one entry in an atomic namespace batch.
+type KeyValue struct {
+	Key   []byte
+	Value []byte
+}
+
 // NewPebbleStore creates a new PebbleStore rooted at dataDir.
 func NewPebbleStore(dataDir string) *PebbleStore {
 	return &PebbleStore{
@@ -84,6 +90,25 @@ func (s *PebbleStore) Set(namespace string, key, value []byte) error {
 		return err
 	}
 	return db.Set(key, value, pebble.Sync)
+}
+
+// SetBatch atomically writes all entries to one namespace.
+func (s *PebbleStore) SetBatch(namespace string, entries []KeyValue) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, entry := range entries {
+		if err := batch.Set(entry.Key, entry.Value, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 // Get reads a key from a namespace. Returns pebble.ErrNotFound if not found.

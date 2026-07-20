@@ -111,6 +111,7 @@ func main() {
 		// config.Default mirrors the documented recommendation).
 		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userinfoAgg))
+		userinfoAgg.SetProfileUpdatedHook(botHomepageAgg.InvalidateProfile)
 		botHomepageAgg.SetServiceLister(skillserviceAgg)
 		botHomepageAgg.SetHomepageServiceLister(skillserviceAgg)
 		if publishedAgg != nil {

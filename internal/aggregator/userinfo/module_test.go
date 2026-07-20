@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -455,6 +458,149 @@ func TestHandleBlockPin_RejectsOlderInfoPinsAfterNewerReplay(t *testing.T) {
 	}
 	if stored.BioId != "new-bio:i0" || stored.Bio != "new-bio" {
 		t.Fatalf("older bio replay overwrote newer value: %#v", stored)
+	}
+}
+
+func TestHandleBlockPin_UsesCanonicalProfileInsteadOfStaleAddressAlias(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		canonicalMetaID = "canonical-metaid"
+		address         = "1CanonicalAddress"
+		globalMetaID    = "idq1canonicalprofile"
+		oldAvatarID     = "old-avatar:i0"
+		newAvatarID     = "new-avatar:i0"
+	)
+	stale := &UserProfile{
+		MetaID: canonicalMetaID, GlobalMetaID: globalMetaID, Address: address,
+		Avatar: "/content/" + oldAvatarID, AvatarId: oldAvatarID,
+		Bio: "old bio", BioId: "old-bio:i0", ChainName: "mvc",
+	}
+	if err := agg.saveProfile(stale); err != nil {
+		t.Fatalf("seed canonical profile: %v", err)
+	}
+	if err := agg.saveProfileAtKey(address, stale); err != nil {
+		t.Fatalf("seed stale address alias: %v", err)
+	}
+
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id: newAvatarID, Path: "/info/avatar", Operation: "create",
+		MetaId: address, Address: address, GlobalMetaId: globalMetaID,
+		ChainName: "mvc", ContentType: "image/png", ContentBody: []byte("new"),
+		Timestamp: 2000, GenesisHeight: 200,
+	}); err != nil {
+		t.Fatalf("apply latest avatar: %v", err)
+	}
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id: "new-llm:i0", Path: "/info/llm", Operation: "create",
+		MetaId: address, Address: address, GlobalMetaId: globalMetaID,
+		ChainName: "mvc", ContentBody: []byte(`{"provider":"codex"}`),
+		Timestamp: 3000, GenesisHeight: 300,
+	}); err != nil {
+		t.Fatalf("apply later llm update: %v", err)
+	}
+
+	profile, err := agg.LookupByMetaId(canonicalMetaID)
+	if err != nil {
+		t.Fatalf("lookup canonical profile: %v", err)
+	}
+	if profile == nil || profile.AvatarId != newAvatarID || profile.Avatar != "/content/"+newAvatarID {
+		t.Fatalf("stale address alias restored old avatar: %#v", profile)
+	}
+	viaAddress, err := agg.LookupByMetaId(address)
+	if err != nil {
+		t.Fatalf("lookup address alias: %v", err)
+	}
+	if viaAddress == nil || viaAddress.MetaID != canonicalMetaID || viaAddress.AvatarId != newAvatarID {
+		t.Fatalf("address alias did not resolve canonical profile: %#v", viaAddress)
+	}
+	if _, err := store.Get(namespace, infoRevisionKey(canonicalMetaID, "/info/avatar")); err != nil {
+		t.Fatalf("canonical avatar revision missing: %v", err)
+	}
+}
+
+func TestHandleBlockPin_ReplaysSameRevisionWhenProfileFieldIsStale(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		metaID      = "canonical-repair-metaid"
+		address     = "1RepairAddress"
+		globalID    = "idq1repairprofile"
+		newAvatarID = "repair-avatar:i0"
+	)
+	if err := agg.saveProfile(&UserProfile{
+		MetaID: metaID, GlobalMetaID: globalID, Address: address,
+		Avatar: "/content/old-avatar:i0", AvatarId: "old-avatar:i0", ChainName: "mvc",
+	}); err != nil {
+		t.Fatalf("seed stale profile: %v", err)
+	}
+	pin := &aggregator.PinInscription{
+		Id: newAvatarID, Path: "/info/avatar", Operation: "create",
+		MetaId: address, Address: address, GlobalMetaId: globalID,
+		ChainName: "mvc", ContentType: "image/png", ContentBody: []byte("new"),
+		Timestamp: 2000, GenesisHeight: 200,
+	}
+	if err := agg.saveInfoRevision(address, pin.Path, pin); err != nil {
+		t.Fatalf("seed split revision: %v", err)
+	}
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("replay same revision: %v", err)
+	}
+	profile, err := agg.LookupByMetaId(metaID)
+	if err != nil {
+		t.Fatalf("lookup repaired profile: %v", err)
+	}
+	if profile == nil || profile.AvatarId != newAvatarID {
+		t.Fatalf("same-pin replay did not repair stale profile: %#v", profile)
+	}
+}
+
+func TestHandleBlockPin_SerializesConcurrentProfileFieldUpdates(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		metaID   = "concurrent-profile-metaid"
+		address  = "1ConcurrentProfileAddress"
+		globalID = "idq1concurrentprofile"
+	)
+	if err := agg.saveProfile(&UserProfile{MetaID: metaID, GlobalMetaID: globalID, Address: address, ChainName: "mvc"}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := int64(1); i <= 40; i++ {
+		for _, path := range []string{"/info/avatar", "/info/bio"} {
+			i, path := i, path
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				id := fmt.Sprintf("%s-%02d:i0", strings.TrimPrefix(path, "/info/"), i)
+				_, err := agg.HandleBlockPin(&aggregator.PinInscription{
+					Id: id, Path: path, Operation: "create", MetaId: address,
+					Address: address, GlobalMetaId: globalID, ChainName: "mvc",
+					ContentType: "image/png", ContentBody: []byte(id),
+					Timestamp: 1000 + i, GenesisHeight: 100 + i,
+				})
+				if err != nil {
+					t.Errorf("HandleBlockPin(%s, %d): %v", path, i, err)
+				}
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+
+	profile, err := agg.LookupByMetaId(metaID)
+	if err != nil {
+		t.Fatalf("lookup profile: %v", err)
+	}
+	if profile == nil || profile.AvatarId != "avatar-40:i0" || profile.BioId != "bio-40:i0" {
+		t.Fatalf("concurrent updates lost a latest field: %#v", profile)
 	}
 }
 
@@ -1371,9 +1517,9 @@ func TestHandleMetaIdInfo_RemoteFallbackFillsMissingChatKey(t *testing.T) {
 		t.Fatalf("globalMetaId should be filled from remote fallback: %+v", resp.Data)
 	}
 
-	raw, err := store.Get(namespace, profileKey(providerAddress))
+	raw, err := store.Get(namespace, profileKey(providerMetaID))
 	if err != nil || raw == nil {
-		t.Fatalf("stored merged profile missing: raw=%s err=%v", raw, err)
+		t.Fatalf("stored canonical profile missing: raw=%s err=%v", raw, err)
 	}
 	var stored UserProfile
 	if err := json.Unmarshal(raw, &stored); err != nil {
@@ -1381,6 +1527,10 @@ func TestHandleMetaIdInfo_RemoteFallbackFillsMissingChatKey(t *testing.T) {
 	}
 	if stored.ChatPublicKey != "04remotechatkey" {
 		t.Fatalf("remote chat key was not persisted: %+v", stored)
+	}
+	indexed, err := store.Get(namespace, addressKey(providerAddress))
+	if err != nil || string(indexed) != providerMetaID {
+		t.Fatalf("address index = %q, err=%v, want canonical metaid %q", indexed, err, providerMetaID)
 	}
 }
 

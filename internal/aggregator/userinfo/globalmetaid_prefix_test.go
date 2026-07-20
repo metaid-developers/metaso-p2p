@@ -235,8 +235,15 @@ func TestConfirmedRootIsIndexedButMempoolRootIsExcluded(t *testing.T) {
 	w := performRequest(t, router, http.MethodGet, "/api/info/globalmetaid?prefix="+prefix)
 	assertPrefixResponseCode(t, w.Body.Bytes(), 40400)
 
+	var notifiedGlobalMetaID string
+	agg.SetProfileUpdatedHook(func(globalMetaID string) {
+		notifiedGlobalMetaID = globalMetaID
+	})
 	if _, err := agg.HandleBlockPin(pin); err != nil {
 		t.Fatalf("HandleBlockPin: %v", err)
+	}
+	if notifiedGlobalMetaID != globalMetaID {
+		t.Fatalf("profile update notification = %q, want %q", notifiedGlobalMetaID, globalMetaID)
 	}
 	w = performRequest(t, router, http.MethodGet, "/api/info/globalmetaid?prefix="+prefix)
 	var response struct {
