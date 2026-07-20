@@ -68,7 +68,7 @@ func parseBoolEnvDefault(raw string, fallback bool) bool {
 }
 
 func (a *Aggregator) lookupByMetaId(ctx context.Context, metaid string) (*UserProfile, error) {
-	profile, err := a.getProfile(metaid)
+	profile, err := a.findProfileByMetaID(metaid)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +79,47 @@ func (a *Aggregator) lookupByMetaId(ctx context.Context, metaid string) (*UserPr
 		// the canonical profile and chat key.
 		{kind: remoteLookupByAddress, value: metaid},
 	}, metaid)
+}
+
+func (a *Aggregator) findProfileByMetaID(metaid string) (*UserProfile, error) {
+	metaid = strings.TrimSpace(metaid)
+	if metaid == "" {
+		return nil, nil
+	}
+	for _, candidate := range []struct {
+		key   []byte
+		match func(*UserProfile) bool
+	}{
+		{
+			key: addressKey(metaid),
+			match: func(profile *UserProfile) bool {
+				return strings.EqualFold(strings.TrimSpace(profile.Address), metaid)
+			},
+		},
+		{
+			key: globalMetaIdKey(metaid),
+			match: func(profile *UserProfile) bool {
+				return strings.EqualFold(strings.TrimSpace(profile.GlobalMetaID), metaid)
+			},
+		},
+	} {
+		raw, err := a.store.Get(namespace, candidate.key)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		profile, err := a.getProfile(string(raw))
+		if err != nil {
+			return nil, err
+		}
+		if profile != nil && candidate.match(profile) {
+			return a.loadCanonicalProfile(string(raw), profile)
+		}
+	}
+	profile, err := a.getProfile(metaid)
+	if err != nil || profile == nil {
+		return profile, err
+	}
+	return a.loadCanonicalProfile(metaid, profile)
 }
 
 func (a *Aggregator) lookupByAddress(ctx context.Context, address string) (*UserProfile, error) {
@@ -200,6 +241,8 @@ func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile)
 	if profile == nil {
 		return nil, nil
 	}
+	a.profileWriteMu.Lock()
+	defer a.profileWriteMu.Unlock()
 	profile, err := a.mergeWithStoredProfiles(profile)
 	if err != nil {
 		return nil, err
@@ -207,15 +250,10 @@ func (a *Aggregator) persistMergedProfile(aliasKey string, profile *UserProfile)
 	if err := a.saveProfile(profile); err != nil {
 		return nil, err
 	}
-	if aliasKey = strings.TrimSpace(aliasKey); aliasKey != "" && aliasKey != profile.MetaID {
-		if err := a.saveProfileAtKey(aliasKey, profile); err != nil {
-			return nil, err
-		}
-		a.cache.InvalidateByPrefix("profile:" + aliasKey)
-	}
 	if profile.MetaID != "" {
 		a.cache.InvalidateByPrefix("profile:" + profile.MetaID)
 	}
+	a.notifyProfileUpdated(profile)
 	return profile, nil
 }
 

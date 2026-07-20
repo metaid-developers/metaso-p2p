@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -64,6 +65,8 @@ type Aggregator struct {
 	profileMode         string
 	allowRemoteFallback bool
 	scanProfiles        func(func(*UserProfile) bool) (*UserProfile, error)
+	profileWriteMu      sync.Mutex
+	onProfileUpdated    func(string)
 }
 
 const (
@@ -91,6 +94,12 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 	return a.notifyCh
 }
 
+// SetProfileUpdatedHook registers a callback used by dependent read models to
+// invalidate profile-derived caches after a committed profile change.
+func (a *Aggregator) SetProfileUpdatedHook(hook func(globalMetaID string)) {
+	a.onProfileUpdated = hook
+}
+
 // HandleBlockPin processes /info/* and / (init) paths.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	if pin == nil {
@@ -101,25 +110,38 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	if originalPath := strings.TrimSpace(pin.OriginalPath); originalPath != "" && (path == "" || !strings.HasPrefix(path, "/info/")) {
 		path = normaliseInfoPath(originalPath)
 	}
-	metaid := pin.MetaId
-	if metaid == "" {
-		metaid = pin.CreateMetaId
+	rawMetaID := strings.TrimSpace(pin.MetaId)
+	if rawMetaID == "" {
+		rawMetaID = strings.TrimSpace(pin.CreateMetaId)
 	}
-	address := pin.Address
+	address := strings.TrimSpace(pin.Address)
 	if address == "" {
-		address = pin.CreateAddress
+		address = strings.TrimSpace(pin.CreateAddress)
 	}
-	if metaid == "" {
+	if rawMetaID == "" {
 		// MANAPI may omit metaId for profile pins while still returning the
 		// owning address. The chain indexer uses the same address identity.
-		metaid = address
+		rawMetaID = address
 	}
-	if metaid == "" {
+	if rawMetaID == "" {
 		return nil, nil
 	}
+	globalMetaID := strings.TrimSpace(pin.GlobalMetaId)
+
+	// A profile is a shared read-modify-write snapshot. Serialize all userinfo
+	// writes so concurrent block, mempool, backfill, and remote-completion paths
+	// cannot restore fields from an older snapshot.
+	a.profileWriteMu.Lock()
+	defer a.profileWriteMu.Unlock()
+
+	metaid, profile, err := a.resolveProfileForWrite(rawMetaID, address, globalMetaID)
+	if err != nil {
+		return nil, err
+	}
+	revisionIdentities := uniqueProfileIdentities(metaid, rawMetaID, address, globalMetaID)
 
 	if isLatestProfileInfoPath(path) {
-		apply, err := a.shouldApplyInfoPin(metaid, path, pin)
+		apply, err := a.shouldApplyInfoPin(revisionIdentities, path, pin, profile)
 		if err != nil {
 			return nil, err
 		}
@@ -128,9 +150,8 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		}
 	}
 
-	// Load or create profile
-	profile, err := a.getProfile(metaid)
-	if err != nil || profile == nil {
+	// Load or create the single canonical profile.
+	if profile == nil {
 		profile = &UserProfile{
 			MetaID:    metaid,
 			ChainName: pin.ChainName,
@@ -166,6 +187,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		if err := a.store.Set(namespace, metaidKey(metaid), []byte(address)); err != nil {
 			return nil, err
 		}
+		a.notifyProfileUpdated(profile)
 		return nil, nil
 	}
 
@@ -218,17 +240,17 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		return nil, nil
 	}
 
-	if err := a.saveProfile(profile); err != nil {
-		return nil, err
-	}
 	if isLatestProfileInfoPath(path) {
-		if err := a.saveInfoRevision(metaid, path, pin); err != nil {
+		if err := a.saveProfileWithInfoRevision(profile, metaid, path, pin); err != nil {
 			return nil, err
 		}
+	} else if err := a.saveProfile(profile); err != nil {
+		return nil, err
 	}
 
 	// Invalidate cache for this user
 	a.cache.InvalidateByPrefix("profile:" + metaid)
+	a.notifyProfileUpdated(profile)
 
 	return nil, nil
 }
@@ -256,6 +278,24 @@ func setClearableTextProfileField(pin *aggregator.PinInscription, value *string,
 	}
 	*value = string(pin.ContentBody)
 	*id = pin.Id
+}
+
+func uniqueProfileIdentities(values ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // RegisterRoutes mounts user info HTTP endpoints.
@@ -426,6 +466,54 @@ func (a *Aggregator) LookupLocalByIdentity(identity string) (*UserProfile, error
 
 // --- Profile persistence ---
 
+func (a *Aggregator) resolveProfileForWrite(rawMetaID, address, globalMetaID string) (string, *UserProfile, error) {
+	candidateKeys := make([]string, 0, 3)
+	indexKeys := make([][]byte, 0, 2)
+	if strings.TrimSpace(address) != "" {
+		indexKeys = append(indexKeys, addressKey(address))
+	}
+	if strings.TrimSpace(globalMetaID) != "" {
+		indexKeys = append(indexKeys, globalMetaIdKey(globalMetaID))
+	}
+	for _, indexKey := range indexKeys {
+		raw, err := a.store.Get(namespace, indexKey)
+		if err == nil && len(raw) > 0 {
+			candidateKeys = append(candidateKeys, string(raw))
+		}
+	}
+	candidateKeys = append(candidateKeys, rawMetaID)
+
+	for _, key := range uniqueProfileIdentities(candidateKeys...) {
+		profile, err := a.getProfile(key)
+		if err != nil {
+			return "", nil, err
+		}
+		if profile == nil {
+			continue
+		}
+		canonicalMetaID := strings.TrimSpace(profile.MetaID)
+		if canonicalMetaID == "" {
+			canonicalMetaID = key
+		}
+		if canonicalMetaID != key {
+			canonical, err := a.getProfile(canonicalMetaID)
+			if err != nil {
+				return "", nil, err
+			}
+			if canonical != nil {
+				return canonicalMetaID, canonical, nil
+			}
+		}
+		return canonicalMetaID, profile, nil
+	}
+
+	canonicalMetaID := strings.TrimSpace(rawMetaID)
+	if canonicalMetaID == "" {
+		canonicalMetaID = strings.TrimSpace(address)
+	}
+	return canonicalMetaID, nil, nil
+}
+
 func (a *Aggregator) getProfile(metaid string) (*UserProfile, error) {
 	raw, err := a.store.Get(namespace, profileKey(metaid))
 	if err != nil || raw == nil {
@@ -448,33 +536,44 @@ func (a *Aggregator) saveProfile(profile *UserProfile) error {
 }
 
 func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
-	key = strings.TrimSpace(key)
-	if key == "" || profile == nil {
-		return nil
-	}
-	raw, err := json.Marshal(profile)
+	entries, err := profileStorageEntries(key, profile)
 	if err != nil {
 		return err
 	}
-	if err := a.store.Set(namespace, profileKey(key), raw); err != nil {
-		return err
+	return a.store.SetBatch(namespace, entries)
+}
+
+func profileStorageEntries(key string, profile *UserProfile) ([]storage.KeyValue, error) {
+	key = strings.TrimSpace(key)
+	if key == "" || profile == nil {
+		return nil, nil
 	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		return nil, err
+	}
+	entries := []storage.KeyValue{{Key: profileKey(key), Value: raw}}
 
 	indexMetaID := strings.TrimSpace(profile.MetaID)
 	if indexMetaID == "" {
 		indexMetaID = key
 	}
 	if globalMetaId := strings.TrimSpace(profile.GlobalMetaID); globalMetaId != "" {
-		if err := a.store.Set(namespace, globalMetaIdKey(globalMetaId), []byte(indexMetaID)); err != nil {
-			return err
-		}
+		entries = append(entries, storage.KeyValue{Key: globalMetaIdKey(globalMetaId), Value: []byte(indexMetaID)})
 	}
 	if address := strings.TrimSpace(profile.Address); address != "" {
-		if err := a.store.Set(namespace, addressKey(address), []byte(indexMetaID)); err != nil {
-			return err
-		}
+		entries = append(entries, storage.KeyValue{Key: addressKey(address), Value: []byte(indexMetaID)})
 	}
-	return nil
+	return entries, nil
+}
+
+func (a *Aggregator) notifyProfileUpdated(profile *UserProfile) {
+	if a == nil || profile == nil || a.onProfileUpdated == nil {
+		return
+	}
+	if globalMetaID := strings.TrimSpace(profile.GlobalMetaID); globalMetaID != "" {
+		a.onProfileUpdated(globalMetaID)
+	}
 }
 
 func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) {
@@ -484,15 +583,19 @@ func (a *Aggregator) findProfileByAddress(address string) (*UserProfile, error) 
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale address index %q -> %q: %v", address, indexedMetaID, err)
 		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.Address), address) {
-			return profile, nil
+			return a.loadCanonicalProfile(indexedMetaID, profile)
 		} else if profile != nil {
 			log.Printf("[userinfo] stale address index %q -> %q: profile address %q", address, indexedMetaID, profile.Address)
 		}
 	}
 
-	return a.scanProfiles(func(p *UserProfile) bool {
+	profile, err := a.scanProfiles(func(p *UserProfile) bool {
 		return strings.EqualFold(strings.TrimSpace(p.Address), address)
 	})
+	if err != nil || profile == nil {
+		return profile, err
+	}
+	return a.loadCanonicalProfile("", profile)
 }
 
 func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfile, error) {
@@ -502,15 +605,34 @@ func (a *Aggregator) findProfileByGlobalMetaId(globalMetaId string) (*UserProfil
 		if profile, err := a.getProfile(indexedMetaID); err != nil {
 			log.Printf("[userinfo] stale globalMetaId index %q -> %q: %v", globalMetaId, indexedMetaID, err)
 		} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.GlobalMetaID), globalMetaId) {
-			return profile, nil
+			return a.loadCanonicalProfile(indexedMetaID, profile)
 		} else if profile != nil {
 			log.Printf("[userinfo] stale globalMetaId index %q -> %q: profile globalMetaId %q", globalMetaId, indexedMetaID, profile.GlobalMetaID)
 		}
 	}
 
-	return a.scanProfiles(func(p *UserProfile) bool {
+	profile, err := a.scanProfiles(func(p *UserProfile) bool {
 		return strings.EqualFold(strings.TrimSpace(p.GlobalMetaID), globalMetaId)
 	})
+	if err != nil || profile == nil {
+		return profile, err
+	}
+	return a.loadCanonicalProfile("", profile)
+}
+
+func (a *Aggregator) loadCanonicalProfile(key string, profile *UserProfile) (*UserProfile, error) {
+	if profile == nil {
+		return nil, nil
+	}
+	canonicalMetaID := strings.TrimSpace(profile.MetaID)
+	if canonicalMetaID == "" || strings.EqualFold(canonicalMetaID, strings.TrimSpace(key)) {
+		return profile, nil
+	}
+	canonical, err := a.getProfile(canonicalMetaID)
+	if err != nil || canonical == nil {
+		return profile, err
+	}
+	return canonical, nil
 }
 
 func (a *Aggregator) defaultScanProfiles(match func(*UserProfile) bool) (*UserProfile, error) {

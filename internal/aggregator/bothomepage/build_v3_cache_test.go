@@ -324,3 +324,26 @@ func TestBuildV3CacheExpiresAndFallsBackToReload(t *testing.T) {
 		t.Fatalf("chat interaction calls = %d, want 2 after TTL expiry reload", chats.calls)
 	}
 }
+
+func TestInvalidateProfileRemovesOnlyMatchingV3CacheEntries(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	t.Cleanup(func() { store.Close() })
+	agg := &Aggregator{}
+	if err := agg.Init(store, cache.New(store)); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	const target = "idq1profilecachetarget"
+	targetKey := buildV3CacheKey(target, defaultV3Options())
+	otherKey := buildV3CacheKey("idq1profilecacheother", defaultV3Options())
+	agg.v3ResultCache.Add(targetKey, []byte(`{"data":{}}`))
+	agg.v3ResultCache.Add(otherKey, []byte(`{"data":{}}`))
+
+	agg.InvalidateProfile(target)
+	if _, ok := agg.v3ResultCache.Get(targetKey); ok {
+		t.Fatal("target profile cache entry was not invalidated")
+	}
+	if _, ok := agg.v3ResultCache.Get(otherKey); !ok {
+		t.Fatal("unrelated profile cache entry was invalidated")
+	}
+}

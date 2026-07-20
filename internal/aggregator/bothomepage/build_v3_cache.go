@@ -74,3 +74,19 @@ func (a *Aggregator) storeV3Cache(cacheKey string, data *DataV3, profile *Profil
 
 	a.v3ResultCache.Add(cacheKey, raw)
 }
+
+// InvalidateProfile removes cached v3 responses derived from one profile.
+func (a *Aggregator) InvalidateProfile(globalMetaID string) {
+	if a == nil || a.v3ResultCache == nil {
+		return
+	}
+	prefix := strings.ToLower(strings.TrimSpace(globalMetaID)) + "|"
+	if prefix == "|" {
+		return
+	}
+	for _, key := range a.v3ResultCache.Keys() {
+		if strings.HasPrefix(key, prefix) {
+			a.v3ResultCache.Remove(key)
+		}
+	}
+}
