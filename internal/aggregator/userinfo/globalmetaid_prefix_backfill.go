@@ -68,6 +68,7 @@ func (a *Aggregator) BackfillGlobalMetaIDPrefix(opts GlobalMetaIDPrefixBackfillO
 			return globalMetaIDPrefixBackfillSummary(*state), err
 		}
 
+		pageState := *state
 		records := make([]globalMetaIDCreationRecord, 0, len(page.Pins))
 		for _, sourcePin := range page.Pins {
 			record, reason := globalMetaIDCreationRecordFromPin(nil, sourcePin.toAggregatorPin())
@@ -75,29 +76,22 @@ func (a *Aggregator) BackfillGlobalMetaIDPrefix(opts GlobalMetaIDPrefixBackfillO
 			case "":
 				records = append(records, record)
 			case "missing_timestamp":
-				state.MissingTimeCount++
+				pageState.MissingTimeCount++
 			default:
-				state.InvalidCount++
+				pageState.InvalidCount++
 			}
 		}
-		result, err := a.upsertGlobalMetaIDCreationRecords(records)
-		if err != nil {
-			return globalMetaIDPrefixBackfillSummary(*state), err
-		}
-		state.IndexedCount += result.Inserted
-		state.DuplicateCount += result.Duplicate
-		state.ReplacedCount += result.Replaced
-
 		nextCursor := page.NextCursor
 		if nextCursor == "" {
-			state.Status = globalMetaIDPrefixStateReady
-			state.Cursor = ""
+			pageState.Status = globalMetaIDPrefixStateReady
+			pageState.Cursor = ""
 		} else {
-			state.Cursor = nextCursor
+			pageState.Cursor = nextCursor
 		}
-		if err := a.saveGlobalMetaIDPrefixIndexState(*state); err != nil {
+		if _, err := a.upsertGlobalMetaIDCreationRecordsWithState(records, &pageState); err != nil {
 			return globalMetaIDPrefixBackfillSummary(*state), err
 		}
+		state = &pageState
 		if state.Status == globalMetaIDPrefixStateReady {
 			return globalMetaIDPrefixBackfillSummary(*state), nil
 		}

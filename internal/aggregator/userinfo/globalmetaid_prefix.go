@@ -209,8 +209,12 @@ func (a *Aggregator) lookupGlobalMetaIDPrefix(prefix string) (string, error) {
 }
 
 func (a *Aggregator) upsertGlobalMetaIDCreationRecords(records []globalMetaIDCreationRecord) (globalMetaIDPrefixUpsertResult, error) {
+	return a.upsertGlobalMetaIDCreationRecordsWithState(records, nil)
+}
+
+func (a *Aggregator) upsertGlobalMetaIDCreationRecordsWithState(records []globalMetaIDCreationRecord, state *globalMetaIDPrefixIndexState) (globalMetaIDPrefixUpsertResult, error) {
 	var result globalMetaIDPrefixUpsertResult
-	if a == nil || a.store == nil || len(records) == 0 {
+	if a == nil || a.store == nil || (len(records) == 0 && state == nil) {
 		return result, nil
 	}
 
@@ -267,11 +271,30 @@ func (a *Aggregator) upsertGlobalMetaIDCreationRecords(records []globalMetaIDCre
 		}
 		hasWrites = true
 	}
+	var committedState globalMetaIDPrefixIndexState
+	if state != nil {
+		committedState = *state
+		committedState.IndexedCount += result.Inserted
+		committedState.DuplicateCount += result.Duplicate
+		committedState.ReplacedCount += result.Replaced
+		committedState.UpdatedAt = time.Now().UnixMilli()
+		raw, err := json.Marshal(committedState)
+		if err != nil {
+			return result, err
+		}
+		if err := batch.Set(globalMetaIDPrefixStateKey(), raw, pebble.NoSync); err != nil {
+			return result, err
+		}
+		hasWrites = true
+	}
 	if !hasWrites {
 		return result, nil
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return result, err
+	}
+	if state != nil {
+		*state = committedState
 	}
 	return result, nil
 }
