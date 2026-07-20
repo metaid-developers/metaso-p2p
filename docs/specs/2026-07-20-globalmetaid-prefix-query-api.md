@@ -1,6 +1,6 @@
 # GlobalMetaID Prefix Query API Design
 
-Status: implemented on `codex/globalmetaid-prefix-query`; not deployed.
+Status: implemented on `main`; not deployed.
 
 ## Decision
 
