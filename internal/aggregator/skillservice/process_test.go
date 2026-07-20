@@ -209,6 +209,38 @@ func TestProcessServiceModify_FoldsToSource(t *testing.T) {
 	}
 }
 
+func TestProcessServiceModify_NotifiesProviderHomepageOnce(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	var updatedProviders []string
+	agg.SetServiceUpdatedHook(func(globalMetaID string) {
+		updatedProviders = append(updatedProviders, globalMetaID)
+	})
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_create:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "fortune", DisplayName: "v1",
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	updatedProviders = nil
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "tx_modify:i0", Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA",
+		OriginalId: "tx_create:i0", Timestamp: 2000,
+		ServiceName: "fortune", DisplayName: "v2",
+	})); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	if len(updatedProviders) != 1 || updatedProviders[0] != "idq1-provA" {
+		t.Fatalf("updated providers = %#v, want one provider cache invalidation", updatedProviders)
+	}
+}
+
 // --- AC #3: revoke makes the service hidden by default ---
 
 func TestProcessServiceRevoke_HidesByDefault(t *testing.T) {

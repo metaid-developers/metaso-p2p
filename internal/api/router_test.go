@@ -710,7 +710,7 @@ func TestRouterBotHomepageV2AndV3ExposeProviderVisibleServices(t *testing.T) {
 	}
 }
 
-func TestRouterBotHomepageV3UsesStableSourcePinIdsForModifiedItems(t *testing.T) {
+func TestRouterBotHomepageV3UsesCurrentServiceAndStablePublishedPinIds(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
 	seedBotProfile(t, fixture, "idq-bot")
 	seedBotProfile(t, fixture, "idq-peer")
@@ -878,8 +878,8 @@ func TestRouterBotHomepageV3UsesStableSourcePinIdsForModifiedItems(t *testing.T)
 	if !ok {
 		t.Fatalf("service item = %T %#v, want object", serviceItems[0], serviceItems[0])
 	}
-	if serviceItem["pinId"] != serviceSourcePinID {
-		t.Fatalf("service pinId = %#v, want source pin %q", serviceItem["pinId"], serviceSourcePinID)
+	if serviceItem["pinId"] != serviceModifyPinID {
+		t.Fatalf("service pinId = %#v, want current pin %q", serviceItem["pinId"], serviceModifyPinID)
 	}
 	serviceData, ok := serviceItem["data"].(map[string]interface{})
 	if !ok {

@@ -215,7 +215,28 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 			return err
 		}
 	}
+	a.notifyServiceUpdated(previous, rec)
 	return nil
+}
+
+func (a *Aggregator) notifyServiceUpdated(records ...*ServiceRecord) {
+	if a == nil || a.onServiceUpdated == nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	for _, rec := range records {
+		for _, globalMetaID := range a.homepageProviderGlobalMetaIds(rec) {
+			key := strings.ToLower(strings.TrimSpace(globalMetaID))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			a.onServiceUpdated(globalMetaID)
+		}
+	}
 }
 
 func (a *Aggregator) homepageProviderGlobalMetaIds(rec *ServiceRecord) []string {

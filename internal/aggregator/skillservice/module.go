@@ -20,12 +20,13 @@ import (
 // changes over Socket.IO. The Bot Hub frontend polls the HTTP API and the
 // 30s p95 fresh-view target is met by the indexer scan loop cadence.
 type Aggregator struct {
-	store         *storage.PebbleStore
-	cache         *cache.Cache[[]byte]
-	notifyCh      chan *aggregator.NotifyEvent
-	profileLookup ProfileLookup // nil-safe; see ResolveProvider
-	assetResolver *AssetResolver
-	homepageIndex sync.Mutex
+	store            *storage.PebbleStore
+	cache            *cache.Cache[[]byte]
+	notifyCh         chan *aggregator.NotifyEvent
+	profileLookup    ProfileLookup // nil-safe; see ResolveProvider
+	assetResolver    *AssetResolver
+	homepageIndex    sync.Mutex
+	onServiceUpdated func(globalMetaID string)
 }
 
 const (
@@ -100,6 +101,12 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 // production. main.go wires this from config.BotHubConfig.AssetBaseURL.
 func (a *Aggregator) SetAssetBaseURL(baseURL string) {
 	a.assetResolver = NewAssetResolver(baseURL)
+}
+
+// SetServiceUpdatedHook registers a callback used by dependent read models
+// to invalidate provider-scoped caches after a committed service change.
+func (a *Aggregator) SetServiceUpdatedHook(hook func(globalMetaID string)) {
+	a.onServiceUpdated = hook
 }
 
 // ResolveAsset converts a chain-declared asset reference into a load-ready

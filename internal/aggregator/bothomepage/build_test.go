@@ -1746,8 +1746,8 @@ func TestBuildV3SectionsAreServicesMetaappsChatsBuzzes(t *testing.T) {
 		if len(services.Items) != 1 {
 			t.Fatalf("services.Items length = %d, want 1", len(services.Items))
 		}
-		if services.Items[0].PinId != "service-source:i0" {
-			t.Fatalf("services.Items[0].PinId = %q, want stable source pin id", services.Items[0].PinId)
+		if services.Items[0].PinId != "service-current:i0" {
+			t.Fatalf("services.Items[0].PinId = %q, want current service pin id", services.Items[0].PinId)
 		}
 		if services.Items[0].Timestamp != 1710000002 {
 			t.Fatalf("services.Items[0].Timestamp = %d, want UpdatedAt", services.Items[0].Timestamp)

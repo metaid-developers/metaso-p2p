@@ -112,6 +112,7 @@ func main() {
 		skillserviceAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
 		botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userinfoAgg))
 		userinfoAgg.SetProfileUpdatedHook(botHomepageAgg.InvalidateProfile)
+		skillserviceAgg.SetServiceUpdatedHook(botHomepageAgg.InvalidateProfile)
 		botHomepageAgg.SetServiceLister(skillserviceAgg)
 		botHomepageAgg.SetHomepageServiceLister(skillserviceAgg)
 		if publishedAgg != nil {
