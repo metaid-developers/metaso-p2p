@@ -12,6 +12,9 @@ data/
 .vscode/
 .DS_Store
 
+# Agent instructions
+/AGENTS.md
+
 # Env
 .env
 .env.*
