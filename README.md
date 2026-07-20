@@ -62,6 +62,22 @@ Key sections:
 - `GET /api/info/address/:address` — user profile by address
 - `GET /api/info/metaid/:metaid` — user profile by metaid
 - `GET /api/info/globalmetaid/:globalMetaId` — user profile by globalMetaId
+- `GET /api/info/globalmetaid?prefix=:prefix` — resolve an 8-or-more-character prefix to the earliest created GlobalMetaID
+
+The prefix resolver is local-only and returns `code=50300` until its historical
+root-PIN index has been built. Stop the online service before opening its
+production Pebble directory with the one-time resumable backfill command:
+
+```bash
+go run ./cmd/metaso-p2p-globalmetaid-prefix-backfill \
+  --data-dir /path/to/pebble \
+  --manapi-base-url https://manapi.metaid.io
+```
+
+Re-running the command resumes from its stored MANAPI cursor. Once the index is
+`ready`, later runs exit without rebuilding it. See
+[`docs/specs/2026-07-20-globalmetaid-prefix-query-api.md`](docs/specs/2026-07-20-globalmetaid-prefix-query-api.md)
+for the complete contract, ordering rules, and index layout.
 
 ### Chat Blocking
 - `GET /push-base/v1/push/get_user_blocked_chats?metaId=` — get blocked chats

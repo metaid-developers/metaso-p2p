@@ -58,15 +58,16 @@ type UserProfile struct {
 
 // Aggregator indexes /info/* pins and serves user profile queries.
 type Aggregator struct {
-	store               *storage.PebbleStore
-	cache               *cache.Cache[[]byte]
-	notifyCh            chan *aggregator.NotifyEvent
-	remoteLookup        remoteProfileLookup
-	profileMode         string
-	allowRemoteFallback bool
-	scanProfiles        func(func(*UserProfile) bool) (*UserProfile, error)
-	profileWriteMu      sync.Mutex
-	onProfileUpdated    func(string)
+	store                *storage.PebbleStore
+	cache                *cache.Cache[[]byte]
+	notifyCh             chan *aggregator.NotifyEvent
+	remoteLookup         remoteProfileLookup
+	profileMode          string
+	allowRemoteFallback  bool
+	scanProfiles         func(func(*UserProfile) bool) (*UserProfile, error)
+	profileWriteMu       sync.Mutex
+	globalMetaIDPrefixMu sync.Mutex
+	onProfileUpdated     func(string)
 }
 
 const (
@@ -102,6 +103,10 @@ func (a *Aggregator) SetProfileUpdatedHook(hook func(globalMetaID string)) {
 
 // HandleBlockPin processes /info/* and / (init) paths.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	return a.handlePin(pin, true)
+}
+
+func (a *Aggregator) handlePin(pin *aggregator.PinInscription, confirmed bool) (*aggregator.NotifyEvent, error) {
 	if pin == nil {
 		return nil, nil
 	}
@@ -176,9 +181,10 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		if profile.Address == "" && address != "" {
 			profile.Address = address
 		}
-		// Generate GlobalMetaId from the user's chain address using idaddress encoding.
-		if profile.GlobalMetaID == "" && address != "" {
-			profile.GlobalMetaID = idaddress.EncodeGlobalMetaId(address, pin.ChainName)
+		// Keep the canonical ID-address form even when a chain adapter supplies
+		// the raw owner address in pin.GlobalMetaId.
+		if canonical := canonicalGlobalMetaID(profile.GlobalMetaID, address, pin.ChainName); canonical != "" {
+			profile.GlobalMetaID = canonical
 		}
 		if err := a.saveProfile(profile); err != nil {
 			return nil, err
@@ -186,6 +192,11 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 		// Store metaid→address mapping
 		if err := a.store.Set(namespace, metaidKey(metaid), []byte(address)); err != nil {
 			return nil, err
+		}
+		if confirmed {
+			if err := a.indexConfirmedGlobalMetaIDRoot(profile, pin); err != nil {
+				return nil, err
+			}
 		}
 		a.notifyProfileUpdated(profile)
 		return nil, nil
@@ -256,7 +267,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 }
 
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	return a.HandleBlockPin(pin)
+	return a.handlePin(pin, false)
 }
 
 func normaliseInfoPath(path string) string {
@@ -302,6 +313,7 @@ func uniqueProfileIdentities(values ...string) []string {
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/info/address/:address", a.handleAddressInfo)
 	router.GET("/info/metaid/:metaid", a.handleMetaIdInfo)
+	router.GET("/info/globalmetaid", a.handleGlobalMetaIDPrefix)
 	router.GET("/info/globalmetaid/:globalMetaId", a.handleGlobalMetaIdInfo)
 }
 
