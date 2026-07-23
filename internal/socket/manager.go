@@ -140,6 +140,14 @@ func (m *ConnectionManager) CountByType(metaId string, connType ConnType) int {
 	return count
 }
 
+// Connections returns a snapshot of the active connections for one identity.
+func (m *ConnectionManager) Connections(metaId string) []*TrackedConnection {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return append([]*TrackedConnection(nil), m.connections[metaId]...)
+}
+
 // FindBySocket finds a TrackedConnection by its underlying Socket.IO socket.
 func (m *ConnectionManager) FindBySocket(sock *sio.Socket) *TrackedConnection {
 	m.mu.RLock()
