@@ -2341,7 +2341,7 @@ func TestBuildV3ServicesSectionFallsBackToProviderVisibleServices(t *testing.T) 
 			t.Fatalf("delete legacy homepage index prefix %q: %v", string(prefix), err)
 		}
 	}
-	if err := store.Delete(skillservice.NamespaceService, []byte("homepage_provider_global_index_state:v1")); err != nil {
+	if err := store.Delete(skillservice.NamespaceService, []byte("homepage_provider_global_index_state:v2")); err != nil {
 		t.Fatalf("delete homepage provider index state: %v", err)
 	}
 

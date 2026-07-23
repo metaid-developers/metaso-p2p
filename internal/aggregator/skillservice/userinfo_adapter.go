@@ -18,7 +18,8 @@ type userInfoLookupAdapter struct {
 }
 
 // NewUserInfoLookupAdapter wraps a userinfo.Aggregator as a ProfileLookup.
-// main.go calls this once after both aggregators are registered.
+// main.go wires it before skillservice Init so startup index reconciliation
+// can resolve canonical provider identities.
 func NewUserInfoLookupAdapter(ui *userinfo.Aggregator) ProfileLookup {
 	return &userInfoLookupAdapter{ui: ui}
 }

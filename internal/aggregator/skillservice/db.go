@@ -36,7 +36,7 @@ const (
 	keyServiceByProviderGlobal      = "service_by_provider_global:"
 	keyServiceByProviderGlobalChain = "service_by_provider_global_chain:"
 	keyServiceByUpdated             = "service_by_updated:"
-	keyHomepageProviderGlobalState  = "homepage_provider_global_index_state:v1"
+	keyHomepageProviderGlobalState  = "homepage_provider_global_index_state:v2"
 )
 
 // serviceKey builds the primary Pebble key for a service record.

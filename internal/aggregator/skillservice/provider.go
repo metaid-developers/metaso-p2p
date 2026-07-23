@@ -1,6 +1,9 @@
 package skillservice
 
-import "strings"
+import (
+	"log"
+	"strings"
+)
 
 // ProfileSnapshot is the subset of userinfo data that the Bot Hub API needs
 // to render a service card or detail page. It is intentionally a fresh
@@ -44,13 +47,22 @@ type ProfileLookup interface {
 	LookupByAddress(address string) (*ProfileSnapshot, error)
 }
 
-// SetProfileLookup wires in a ProfileLookup implementation. main.go calls
-// this once after both userinfo and skillservice are registered. It is safe
-// to leave unset: ResolveProvider returns an empty snapshot when there is
-// no lookup, the aggregator keeps building responses with just the chain-
-// declared provider identity fields.
+// SetProfileLookup wires in a ProfileLookup implementation. When the
+// aggregator is already initialized, it rebuilds provider-global homepage
+// indexes so records written before profile resolution became available do
+// not remain invisible under their canonical globalMetaId.
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
+	if lookup == nil || a.store == nil {
+		return
+	}
+	if err := a.invalidateHomepageProviderGlobalIndexState(); err != nil {
+		log.Printf("[skillservice] invalidate homepage provider-global indexes: %v", err)
+		return
+	}
+	if err := a.ensureHomepageProviderGlobalIndexes(); err != nil {
+		log.Printf("[skillservice] rebuild homepage provider-global indexes: %v", err)
+	}
 }
 
 // ResolveProvider looks up the provider profile for a service record using

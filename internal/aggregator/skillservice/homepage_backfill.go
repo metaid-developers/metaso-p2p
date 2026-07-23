@@ -32,6 +32,14 @@ func (a *Aggregator) ensureHomepageProviderGlobalIndexes() error {
 
 	batch := db.NewBatch()
 	defer batch.Close()
+	for _, prefix := range [][]byte{
+		[]byte(keyServiceByProviderGlobal),
+		[]byte(keyServiceByProviderGlobalChain),
+	} {
+		if err := batch.DeleteRange(prefix, homepagePrefixUpperBound(prefix), pebble.Sync); err != nil {
+			return err
+		}
+	}
 
 	if err := a.store.ScanPrefix(NamespaceService, []byte(keyService), func(_, value []byte) error {
 		var rec ServiceRecord
@@ -68,6 +76,15 @@ func (a *Aggregator) ensureHomepageProviderGlobalIndexes() error {
 	return batch.Commit(pebble.Sync)
 }
 
+func (a *Aggregator) invalidateHomepageProviderGlobalIndexState() error {
+	if a == nil || a.store == nil {
+		return nil
+	}
+	a.homepageIndex.Lock()
+	defer a.homepageIndex.Unlock()
+	return a.store.Delete(NamespaceService, homepageProviderGlobalIndexStateKey())
+}
+
 func (a *Aggregator) homepageProviderGlobalIndexStateReady() (bool, error) {
 	if a == nil || a.store == nil {
 		return false, nil
@@ -78,4 +95,15 @@ func (a *Aggregator) homepageProviderGlobalIndexStateReady() (bool, error) {
 		return false, err
 	}
 	return false, nil
+}
+
+func homepagePrefixUpperBound(prefix []byte) []byte {
+	end := append([]byte(nil), prefix...)
+	for i := len(end) - 1; i >= 0; i-- {
+		end[i]++
+		if end[i] != 0 {
+			return end[:i+1]
+		}
+	}
+	return nil
 }

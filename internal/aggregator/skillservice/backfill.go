@@ -58,6 +58,18 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 		return errors.New("skillservice backfill client is required")
 	}
 	paths := normaliseBackfillPaths(opts.Paths)
+	for _, path := range paths {
+		if path == PathSkillService {
+			// The standalone backfill has no userinfo resolver. Mark the
+			// canonical provider indexes stale before mutating records so the
+			// main service rebuilds them with profile resolution on restart,
+			// including when this backfill exits early with an error.
+			if err := a.invalidateHomepageProviderGlobalIndexState(); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	pageSize := opts.PageSize
 	if pageSize <= 0 {
 		pageSize = defaultBackfillPageSize

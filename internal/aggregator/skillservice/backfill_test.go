@@ -76,6 +76,9 @@ func TestBackfillDefaultsToSkillServiceAndUsesContentSummaryFallback(t *testing.
 	if disabled, ok := rec.DeclarationPayload["disabled"].(bool); !ok || disabled {
 		t.Fatalf("DeclarationPayload disabled = %#v, want explicit false", rec.DeclarationPayload["disabled"])
 	}
+	if _, err := store.Get(NamespaceService, homepageProviderGlobalIndexStateKey()); err == nil {
+		t.Fatal("service backfill left homepage provider-global index marked ready")
+	}
 }
 
 func TestBackfillReplaysServicePinsOldestFirstWithinLookback(t *testing.T) {

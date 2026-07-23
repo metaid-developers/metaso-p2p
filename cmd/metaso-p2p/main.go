@@ -86,6 +86,9 @@ func main() {
 			log.Printf("WARNING: privatechat aggregator init failed: %v", err)
 		}
 		skillserviceAgg := &skillservice.Aggregator{}
+		// Wire skillservice -> userinfo before Init so startup index
+		// reconciliation can resolve canonical provider identities.
+		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
 		if err := aggRegistry.Register(skillserviceAgg); err != nil {
 			log.Printf("WARNING: skillservice aggregator init failed: %v", err)
 		}
@@ -100,10 +103,6 @@ func main() {
 		if err := aggRegistry.Register(botHomepageAgg); err != nil {
 			log.Printf("WARNING: bothomepage aggregator init failed: %v", err)
 		}
-		// Wire skillservice → userinfo for provider profile resolution.
-		// skillservice itself stays decoupled from remote profile services;
-		// userinfo owns any configured local-first profile completion.
-		skillserviceAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userinfoAgg))
 		privatechatAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userinfoAgg))
 		// Asset base URL turns chain-declared pin ids / metafile URIs
 		// into HTTP URLs the Bot Hub frontend can load directly. The

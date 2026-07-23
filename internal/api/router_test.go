@@ -79,6 +79,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		t.Fatalf("register social: %v", err)
 	}
 	skillAgg := &skillservice.Aggregator{}
+	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
 	if err := reg.Register(skillAgg); err != nil {
 		t.Fatalf("register skillservice: %v", err)
 	}
@@ -92,7 +93,6 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	}
 
 	socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userAgg))
-	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
 	skillAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
 	botHomepageAgg.SetProfileLookup(bothomepage.NewUserInfoLookupAdapter(userAgg))
 	botHomepageAgg.SetServiceLister(skillAgg)

@@ -680,6 +680,59 @@ func TestListHomepageByProviderLateProfileCanonicalGlobalMetaId(t *testing.T) {
 	}
 }
 
+func TestSetProfileLookupRebuildsCurrentCanonicalHomepageIndexes(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	agg.SetProfileLookup(&fakeProfileLookup{})
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "canonical-rebuild:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 2000,
+		ServiceName: "canonical-rebuild", DisplayName: "Canonical Rebuild",
+	})); err != nil {
+		t.Fatalf("seed service: %v", err)
+	}
+	staleKey := providerGlobalIndexKey("idq-canonical-provA", 1000, "mvc", "canonical-rebuild:i0")
+	if err := store.Set(NamespaceService, staleKey, []byte{}); err != nil {
+		t.Fatalf("seed stale canonical index: %v", err)
+	}
+	staleChainKey := providerGlobalChainIndexKey("idq-canonical-provA", "mvc", 1000, "canonical-rebuild:i0")
+	if err := store.Set(NamespaceService, staleChainKey, []byte{}); err != nil {
+		t.Fatalf("seed stale canonical chain index: %v", err)
+	}
+
+	profile := &ProfileSnapshot{MetaId: "provA", GlobalMetaId: "idq-canonical-provA"}
+	agg.SetProfileLookup(&fakeProfileLookup{
+		byMetaId:     map[string]*ProfileSnapshot{"provA": profile},
+		byGlobalMeta: map[string]*ProfileSnapshot{"idq-canonical-provA": profile},
+	})
+
+	if _, err := store.Get(NamespaceService, staleKey); err == nil {
+		t.Fatal("stale canonical provider-global index survived rebuild")
+	}
+	if _, err := store.Get(NamespaceService, staleChainKey); err == nil {
+		t.Fatal("stale canonical provider-global-chain index survived rebuild")
+	}
+	currentKey := providerGlobalIndexKey("idq-canonical-provA", 2000, "mvc", "canonical-rebuild:i0")
+	if _, err := store.Get(NamespaceService, currentKey); err != nil {
+		t.Fatalf("current canonical provider-global index missing after rebuild: %v", err)
+	}
+	currentChainKey := providerGlobalChainIndexKey("idq-canonical-provA", "mvc", 2000, "canonical-rebuild:i0")
+	if _, err := store.Get(NamespaceService, currentChainKey); err != nil {
+		t.Fatalf("current canonical provider-global-chain index missing after rebuild: %v", err)
+	}
+	res, err := agg.ListHomepageByProvider(HomepageListParams{
+		ProviderGlobalMetaId: "idq-canonical-provA",
+		Size:                 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.List) != 1 || res.List[0].CurrentPinId != "canonical-rebuild:i0" {
+		t.Fatalf("canonical homepage services = %+v, want rebuilt current service", res.List)
+	}
+}
+
 func TestHomepageProviderMetaIndexPrefixIsProviderScopedCrossChain(t *testing.T) {
 	prefix := string(homepageProviderMetaIndexPrefix("1GrqProvider"))
 	if prefix == string(providerIndexPrefix("", "")) {
