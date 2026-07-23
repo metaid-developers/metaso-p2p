@@ -222,9 +222,13 @@ func (s *Server) routeNotifyEvent(evt *aggregator.NotifyEvent) {
 		}
 	case "WS_SERVER_NOTIFY_PRIVATE_CHAT":
 		// Send to all known user identity aliases.
-		for _, targetId := range notifyEventTargetIds(evt) {
-			s.SendToUser(targetId, envelope)
+		targetIds := notifyEventTargetIds(evt)
+		matchedConnections := 0
+		for _, targetId := range targetIds {
+			matchedConnections += s.SendToUser(targetId, envelope)
 		}
+		log.Printf("[socket] private chat notify routed: pinId=%s targets=%d matchedConnections=%d",
+			evt.PinId, len(targetIds), matchedConnections)
 	case "WS_SERVER_NOTIFY_GROUP_ROLE":
 		// Send to user identity aliases AND broadcast to room.
 		for _, targetId := range notifyEventTargetIds(evt) {
@@ -268,21 +272,21 @@ func notifyEventTargetIds(evt *aggregator.NotifyEvent) []string {
 	return targets
 }
 
-// SendToUser sends a push envelope to all connections of a given metaid.
-func (s *Server) SendToUser(metaId string, msg *PushEnvelope) {
+// SendToUser sends a push envelope to all tracked connections of a given metaid.
+func (s *Server) SendToUser(metaId string, msg *PushEnvelope) int {
 	if s.sendToUserHook != nil {
 		s.sendToUserHook(metaId, msg)
 	}
-	// We need to access the internal connection manager to find sockets.
-	// Since we don't expose the manager's internal state, we iterate through
-	// all sockets on the default namespace and check their handshake query.
-	s.ioServer.Of("/", nil).Sockets().Range(func(_ sio.SocketId, sock *sio.Socket) bool {
-		query := sock.Handshake().Query
-		if vals, ok := query["metaid"]; ok && len(vals) > 0 && vals[0] == metaId {
-			sock.Emit("message", msg)
+
+	matched := 0
+	for _, connection := range s.manager.Connections(metaId) {
+		if connection == nil || connection.Socket == nil {
+			continue
 		}
-		return true
-	})
+		connection.Socket.Emit("message", msg)
+		matched++
+	}
+	return matched
 }
 
 // SendToUsers sends a push envelope to all connections for each target metaid.

@@ -140,6 +140,14 @@ func (m *ConnectionManager) CountByType(metaId string, connType ConnType) int {
 	return count
 }
 
+// Connections returns a snapshot of the active connections for one identity.
+func (m *ConnectionManager) Connections(metaId string) []*TrackedConnection {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return append([]*TrackedConnection(nil), m.connections[metaId]...)
+}
+
 // FindBySocket finds a TrackedConnection by its underlying Socket.IO socket.
 func (m *ConnectionManager) FindBySocket(sock *sio.Socket) *TrackedConnection {
 	m.mu.RLock()
@@ -260,13 +268,19 @@ func (m *ConnectionManager) FindStaleConnections(timeout time.Duration) []*Track
 // DisconnectAll disconnects all tracked connections.
 func (m *ConnectionManager) DisconnectAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	connections := make([]*TrackedConnection, 0)
+	for _, conns := range m.connections {
+		connections = append(connections, conns...)
+	}
+	m.connections = make(map[string][]*TrackedConnection)
+	m.mu.Unlock()
 
-	for metaId, conns := range m.connections {
-		for _, c := range conns {
-			c.Socket.Disconnect(true)
+	// Socket.IO invokes the disconnect callback synchronously. Disconnect only
+	// after releasing m.mu so the callback can safely re-enter Remove.
+	for _, connection := range connections {
+		if connection != nil && connection.Socket != nil {
+			connection.Socket.Disconnect(true)
 		}
-		delete(m.connections, metaId)
 	}
 	log.Printf("[socket] all connections disconnected")
 }

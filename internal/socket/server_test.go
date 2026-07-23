@@ -1,10 +1,13 @@
 package socket
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -247,6 +250,41 @@ func TestRouteNotifyEventGroupChatFansOutTargetIds(t *testing.T) {
 	want := []string{"member_local", "member_global", "addr_member"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("routeNotifyEvent sent to %#v, want %#v", got, want)
+	}
+}
+
+func TestRouteNotifyEventPrivateChatTracesPinAndMatchedConnections(t *testing.T) {
+	srv, _ := newTestRouter(t)
+	defer srv.Shutdown()
+
+	var got []string
+	srv.sendToUserHook = func(metaId string, msg *PushEnvelope) {
+		got = append(got, metaId)
+		if msg.M != "WS_SERVER_NOTIFY_PRIVATE_CHAT" {
+			t.Fatalf("message type = %q, want WS_SERVER_NOTIFY_PRIVATE_CHAT", msg.M)
+		}
+	}
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousWriter)
+
+	srv.routeNotifyEvent(&aggregator.NotifyEvent{
+		Type:      "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+		PinId:     "private-pin-i0",
+		TargetIds: []string{"recipient_global", "recipient_meta", "recipient_address"},
+		Payload:   map[string]string{"pinId": "private-pin-i0"},
+	})
+
+	want := []string{"recipient_global", "recipient_meta", "recipient_address"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("routeNotifyEvent sent to %#v, want %#v", got, want)
+	}
+	for _, fragment := range []string{"pinId=private-pin-i0", "targets=3", "matchedConnections=0"} {
+		if !strings.Contains(logs.String(), fragment) {
+			t.Fatalf("route log %q does not contain %q", logs.String(), fragment)
+		}
 	}
 }
 

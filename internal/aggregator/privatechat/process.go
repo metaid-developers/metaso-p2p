@@ -114,19 +114,22 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 		BlockHeight:      pin.GenesisHeight,
 		Index:            -1,
 	}
+	a.canonicalizePrivateMessage(msg)
 
 	if err := a.SavePrivateMessage(msg); err != nil {
 		return nil, err
 	}
 
 	notifyEvent := &aggregator.NotifyEvent{
-		Type:      "WS_SERVER_NOTIFY_PRIVATE_CHAT",
-		MetaId:    toMetaId,
-		TargetIds: a.identityAliases(toMetaId),
-		Payload:   msg,
+		Type:         "WS_SERVER_NOTIFY_PRIVATE_CHAT",
+		MetaId:       toMetaId,
+		GlobalMetaId: msg.ToGlobalMetaId,
+		TargetIds:    a.identityAliases(toMetaId),
+		PinId:        msg.PinId,
+		Payload:      msg,
 	}
 
-	log.Printf("[privatechat] private message saved: pinId=%s from=%s to=%s", msg.PinId, fromMetaId, toMetaId)
+	log.Printf("[privatechat] private message saved: pinId=%s from=%s to=%s", msg.PinId, msg.FromGlobalMetaId, msg.ToGlobalMetaId)
 	return notifyEvent, nil
 }
 
@@ -152,13 +155,39 @@ func (a *Aggregator) handlePrivateBlock(pin *aggregator.PinInscription) (*aggreg
 	return nil, nil
 }
 
-// extractTxId extracts the txId from a pinId (txId:iN format).
+// extractTxId extracts the transaction ID from BTC-style txId:iN and
+// MVC-style 64-hex-txIdiN pin IDs.
 func extractTxId(pinId string) string {
+	pinId = strings.TrimSpace(pinId)
 	idx := strings.LastIndex(pinId, ":i")
-	if idx > 0 {
+	if idx > 0 && isDecimal(pinId[idx+2:]) {
 		return pinId[:idx]
 	}
+	if len(pinId) > 65 && pinId[64] == 'i' && isHex(pinId[:64]) && isDecimal(pinId[65:]) {
+		return pinId[:64]
+	}
 	return pinId
+}
+
+func isDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(value string) bool {
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') && (char < 'A' || char > 'F') {
+			return false
+		}
+	}
+	return value != ""
 }
 
 // sendNotifyEvent sends a notify event on the aggregator's channel if the channel is not full.

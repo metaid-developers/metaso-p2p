@@ -67,12 +67,16 @@ type fakePrivateChatProfileLookup struct {
 
 type localPrivateChatProfileLookup struct {
 	fakePrivateChatProfileLookup
-	profile    *IdentityProfile
-	localCalls int
+	profile      *IdentityProfile
+	profilesByID map[string]*IdentityProfile
+	localCalls   int
 }
 
 func (f *localPrivateChatProfileLookup) LookupLocalByIdentity(identity string) (*IdentityProfile, error) {
 	f.localCalls++
+	if f.profilesByID != nil {
+		return f.profilesByID[identity], nil
+	}
 	return f.profile, nil
 }
 
@@ -440,6 +444,182 @@ func TestPrivateChatNotifyPayloadUsesCanonicalMessageShape(t *testing.T) {
 	}
 	if payload.ContentType != "text/markdown" || payload.Encryption != "ecdh" {
 		t.Fatalf("ContentType/Encryption = %q/%q, want text/markdown/ecdh", payload.ContentType, payload.Encryption)
+	}
+}
+
+func TestMVCPrivateChatCanonicalizesOACSocketPayloadAndHistory(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		pinID           = "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525i0"
+		txID            = "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525"
+		senderMetaID    = "2379692b225136b2b54e83aac52174f622b80181b17254bb7b5cf7b0aa323212"
+		senderGlobalID  = "idq1w8ye5psdkqrn6ugxxwvf5p4kkeuzufa6n9tt47"
+		senderAddress   = "1BNesCuvJeW2DAF42xkyCU1ifZVuNZ61mv"
+		receiverMetaID  = "a5db949fe8d1e90ea4f8c72fd72caec8f3b85602813a0866dbe4db6cc4f8c418"
+		receiverGlobal  = "idq1cv3sua4p0f8qzlerljd6a89wrqquyhh56jg36t"
+		receiverAddress = "1JnnmBA1QbQ7HYTMFc2dK1LzNx23dm9yZw"
+	)
+
+	sender := &IdentityProfile{MetaId: senderMetaID, GlobalMetaId: senderGlobalID, Address: senderAddress}
+	receiver := &IdentityProfile{MetaId: receiverMetaID, GlobalMetaId: receiverGlobal, Address: receiverAddress}
+	agg.SetProfileLookup(&localPrivateChatProfileLookup{
+		profilesByID: map[string]*IdentityProfile{
+			senderAddress:  sender,
+			senderGlobalID: sender,
+			receiverGlobal: receiver,
+		},
+	})
+
+	// The MVC indexer currently exposes the creator address in all three
+	// identity fields. Private chat must resolve the canonical identity before
+	// persisting and broadcasting the message.
+	pin := &aggregator.PinInscription{
+		Id:            pinID,
+		Path:          "/protocols/simplemsg",
+		Operation:     "create",
+		CreateAddress: senderAddress,
+		CreateMetaId:  senderAddress,
+		MetaId:        senderAddress,
+		GlobalMetaId:  senderAddress,
+		Address:       senderAddress,
+		ChainName:     "mvc",
+		Timestamp:     1784797191,
+		GenesisHeight: 182522,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			To:          receiverGlobal,
+			Content:     "encrypted-message",
+			ContentType: "text/plain",
+			Encrypt:     "ecdh",
+		}),
+	}
+
+	evt, err := agg.HandleBlockPin(pin)
+	if err != nil {
+		t.Fatalf("HandleBlockPin failed: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected NotifyEvent")
+	}
+	if evt.PinId != pinID {
+		t.Fatalf("NotifyEvent.PinId = %q, want %q", evt.PinId, pinID)
+	}
+	if evt.GlobalMetaId != receiverGlobal {
+		t.Fatalf("NotifyEvent.GlobalMetaId = %q, want %q", evt.GlobalMetaId, receiverGlobal)
+	}
+	wantTargets := []string{receiverGlobal, receiverMetaID, receiverAddress}
+	if !reflect.DeepEqual(evt.TargetIds, wantTargets) {
+		t.Fatalf("NotifyEvent.TargetIds = %#v, want %#v", evt.TargetIds, wantTargets)
+	}
+
+	payload, ok := evt.Payload.(*PrivateMessage)
+	if !ok {
+		t.Fatalf("NotifyEvent.Payload = %T, want *PrivateMessage", evt.Payload)
+	}
+	assertCanonicalOACMessage(t, payload, senderMetaID, senderGlobalID, senderAddress, receiverGlobal, txID, pinID)
+
+	w := performRequest(t, router, "GET",
+		"/api/group-chat/private-chat-list-by-index?metaId="+senderGlobalID+"&otherMetaId="+receiverGlobal+"&startIndex=0&size=20")
+	var resp struct {
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v raw=%s", err, w.Body.String())
+	}
+	if resp.Code != 0 || len(resp.Data.List) != 1 {
+		t.Fatalf("unexpected history response: code=%d list=%d raw=%s", resp.Code, len(resp.Data.List), w.Body.String())
+	}
+	assertCanonicalOACMessage(t, resp.Data.List[0], senderMetaID, senderGlobalID, senderAddress, receiverGlobal, txID, pinID)
+}
+
+func TestPrivateChatHistoryCanonicalizesLegacyMVCRecord(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		pinID          = "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525i0"
+		txID           = "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525"
+		senderMetaID   = "2379692b225136b2b54e83aac52174f622b80181b17254bb7b5cf7b0aa323212"
+		senderGlobalID = "idq1w8ye5psdkqrn6ugxxwvf5p4kkeuzufa6n9tt47"
+		senderAddress  = "1BNesCuvJeW2DAF42xkyCU1ifZVuNZ61mv"
+		receiverGlobal = "idq1cv3sua4p0f8qzlerljd6a89wrqquyhh56jg36t"
+	)
+
+	sender := &IdentityProfile{MetaId: senderMetaID, GlobalMetaId: senderGlobalID, Address: senderAddress}
+	agg.SetProfileLookup(&localPrivateChatProfileLookup{
+		profilesByID: map[string]*IdentityProfile{
+			senderAddress:  sender,
+			senderGlobalID: sender,
+		},
+	})
+	if err := agg.SavePrivateMessage(&PrivateMessage{
+		FromGlobalMetaId: senderAddress,
+		From:             senderAddress,
+		FromAddress:      senderAddress,
+		ToGlobalMetaId:   receiverGlobal,
+		To:               receiverGlobal,
+		TxId:             pinID,
+		PinId:            pinID,
+		Timestamp:        1784797191,
+		Index:            9,
+	}); err != nil {
+		t.Fatalf("SavePrivateMessage: %v", err)
+	}
+
+	result, err := agg.GetPrivateChatListByIndex(senderGlobalID, receiverGlobal, 0, 20)
+	if err != nil {
+		t.Fatalf("GetPrivateChatListByIndex: %v", err)
+	}
+	if len(result.List) != 1 {
+		t.Fatalf("history list length = %d, want 1", len(result.List))
+	}
+	assertCanonicalOACMessage(t, result.List[0], senderMetaID, senderGlobalID, senderAddress, receiverGlobal, txID, pinID)
+}
+
+func TestExtractTxIdSupportsBTCAndMVCFormats(t *testing.T) {
+	txID := "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525"
+	tests := []struct {
+		name  string
+		pinID string
+		want  string
+	}{
+		{name: "btc", pinID: "priv_tx1:i0", want: "priv_tx1"},
+		{name: "mvc", pinID: txID + "i0", want: txID},
+		{name: "mvc output above nine", pinID: txID + "i12", want: txID},
+		{name: "non transaction suffix", pinID: "messagei0", want: "messagei0"},
+		{name: "malformed btc suffix", pinID: "priv_tx1:iX", want: "priv_tx1:iX"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := extractTxId(test.pinID); got != test.want {
+				t.Fatalf("extractTxId(%q) = %q, want %q", test.pinID, got, test.want)
+			}
+		})
+	}
+}
+
+func assertCanonicalOACMessage(t *testing.T, msg *PrivateMessage, senderMetaID, senderGlobalID, senderAddress, receiverGlobal, txID, pinID string) {
+	t.Helper()
+	if msg.FromGlobalMetaId != senderGlobalID {
+		t.Errorf("FromGlobalMetaId = %q, want %q", msg.FromGlobalMetaId, senderGlobalID)
+	}
+	if msg.From != senderMetaID {
+		t.Errorf("From = %q, want %q", msg.From, senderMetaID)
+	}
+	if msg.FromAddress != senderAddress {
+		t.Errorf("FromAddress = %q, want %q", msg.FromAddress, senderAddress)
+	}
+	if msg.ToGlobalMetaId != receiverGlobal {
+		t.Errorf("ToGlobalMetaId = %q, want %q", msg.ToGlobalMetaId, receiverGlobal)
+	}
+	if msg.TxId != txID {
+		t.Errorf("TxId = %q, want %q", msg.TxId, txID)
+	}
+	if msg.PinId != pinID {
+		t.Errorf("PinId = %q, want %q", msg.PinId, pinID)
 	}
 }
 
