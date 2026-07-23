@@ -73,7 +73,7 @@ func (a *Aggregator) processServicePin(pin *aggregator.PinInscription) error {
 func (a *Aggregator) processServiceCreate(pin *aggregator.PinInscription) error {
 	summary, payload, ok := decodeServiceSummary(pin)
 	if !ok {
-		// contentSummary missing or malformed; cannot build a record.
+		log.Printf("[skillservice] create pin %s: malformed declaration; skipped", pin.Id)
 		return nil
 	}
 
@@ -148,30 +148,34 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 			pin.Id, pin.ChainName, targetPinId)
 		return nil
 	}
-	if !isCurrentVersionTarget(previous, targetPinId) {
-		log.Printf("[skillservice] modify pin %s: target %s is not current version %s for source %s; skipped",
-			pin.Id, targetPinId, previous.CurrentPinId, previous.SourceServicePinId)
+	sourcePinId := previous.SourceServicePinId
+	if err := a.mapPinToSource(pin.ChainName, pin.Id, sourcePinId); err != nil {
+		return err
+	}
+	if !shouldApplyServiceVersion(previous, pin) {
+		log.Printf("[skillservice] modify pin %s: older than current version %s for source %s; skipped",
+			pin.Id, previous.CurrentPinId, previous.SourceServicePinId)
 		return nil
 	}
 
 	summary, payload, ok := decodeServiceSummary(pin)
 	if !ok {
+		log.Printf("[skillservice] modify pin %s: malformed declaration; skipped", pin.Id)
 		return nil
 	}
 
-	sourcePinId := previous.SourceServicePinId
 	updated := newServiceRecord(pin, summary, payload, sourcePinId)
 	// Preserve the original CreatedAt; modifies only move UpdatedAt forward.
 	updated.CreatedAt = previous.CreatedAt
 	// Modify PINs often omit provider identity metadata; keep the create
 	// record's provider keys so list/detail can still resolve profiles.
-	if updated.ProviderMetaId == "" {
+	if previous.ProviderMetaId != "" {
 		updated.ProviderMetaId = previous.ProviderMetaId
 	}
-	if updated.ProviderGlobalMetaId == "" {
+	if previous.ProviderGlobalMetaId != "" {
 		updated.ProviderGlobalMetaId = previous.ProviderGlobalMetaId
 	}
-	if updated.ProviderAddress == "" {
+	if previous.ProviderAddress != "" {
 		updated.ProviderAddress = previous.ProviderAddress
 	}
 	// Modify of an already-revoked service: keep operation=revoke (revoke
@@ -180,10 +184,7 @@ func (a *Aggregator) processServiceModify(pin *aggregator.PinInscription) error 
 		updated.Operation = OperationRevoke
 	}
 
-	if err := a.saveService(updated, previous); err != nil {
-		return err
-	}
-	return a.mapPinToSource(pin.ChainName, pin.Id, sourcePinId)
+	return a.saveService(updated, previous)
 }
 
 // processServiceRevoke flips the persisted record's Operation to "revoke"
@@ -205,24 +206,25 @@ func (a *Aggregator) processServiceRevoke(pin *aggregator.PinInscription) error 
 			pin.Id, pin.ChainName, targetPinId)
 		return nil
 	}
-	if !isCurrentVersionTarget(previous, targetPinId) {
-		log.Printf("[skillservice] revoke pin %s: target %s is not current version %s for source %s; skipped",
-			pin.Id, targetPinId, previous.CurrentPinId, previous.SourceServicePinId)
+	sourcePinId := previous.SourceServicePinId
+	if err := a.mapPinToSource(pin.ChainName, pin.Id, sourcePinId); err != nil {
+		return err
+	}
+	if !shouldApplyServiceVersion(previous, pin) {
+		log.Printf("[skillservice] revoke pin %s: older than current version %s for source %s; skipped",
+			pin.Id, previous.CurrentPinId, previous.SourceServicePinId)
 		return nil
 	}
 
-	sourcePinId := previous.SourceServicePinId
 	updated := *previous // shallow copy
 	updated.Operation = OperationRevoke
 	updated.CurrentPinId = pin.Id
+	updated.CurrentGenesisHeight = pin.GenesisHeight
 	if pin.Timestamp > 0 {
 		updated.UpdatedAt = pin.Timestamp
 	}
 
-	if err := a.saveService(&updated, previous); err != nil {
-		return err
-	}
-	return a.mapPinToSource(pin.ChainName, pin.Id, sourcePinId)
+	return a.saveService(&updated, previous)
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -281,11 +283,51 @@ func pinTargetFromPath(path string) string {
 	return strings.Trim(strings.TrimSpace(path[at+1:]), "/")
 }
 
-func isCurrentVersionTarget(rec *ServiceRecord, targetPinId string) bool {
-	if rec == nil {
+type serviceRevision struct {
+	Timestamp     int64
+	GenesisHeight int64
+	PinID         string
+}
+
+func shouldApplyServiceVersion(rec *ServiceRecord, pin *aggregator.PinInscription) bool {
+	if rec == nil || pin == nil {
 		return false
 	}
-	return targetPinId == rec.CurrentPinId
+	candidate := serviceRevisionForPin(pin)
+	if candidate.Timestamp == 0 && candidate.GenesisHeight <= 0 {
+		return true
+	}
+	current := serviceRevision{
+		Timestamp:     normaliseServiceTimestampMillis(rec.UpdatedAt),
+		GenesisHeight: rec.CurrentGenesisHeight,
+		PinID:         strings.TrimSpace(rec.CurrentPinId),
+	}
+	return serviceRevisionAfter(candidate, current)
+}
+
+func serviceRevisionForPin(pin *aggregator.PinInscription) serviceRevision {
+	return serviceRevision{
+		Timestamp:     normaliseServiceTimestampMillis(pin.Timestamp),
+		GenesisHeight: pin.GenesisHeight,
+		PinID:         strings.TrimSpace(pin.Id),
+	}
+}
+
+func serviceRevisionAfter(candidate, current serviceRevision) bool {
+	if candidate.Timestamp != current.Timestamp {
+		return candidate.Timestamp > current.Timestamp
+	}
+	if candidate.GenesisHeight != current.GenesisHeight {
+		return candidate.GenesisHeight > current.GenesisHeight
+	}
+	return candidate.PinID > current.PinID
+}
+
+func normaliseServiceTimestampMillis(timestamp int64) int64 {
+	if timestamp > 0 && timestamp < 100000000000 {
+		return timestamp * 1000
+	}
+	return timestamp
 }
 
 // decodeServiceSummary unmarshals the JSON content of a skill-service PIN
@@ -301,7 +343,15 @@ func decodeServiceSummary(pin *aggregator.PinInscription) (ServiceContentSummary
 	if err := json.Unmarshal(pin.ContentBody, &payload); err != nil || payload == nil {
 		return s, nil, false
 	}
-	if err := json.Unmarshal(pin.ContentBody, &s); err != nil {
+	normalisedPayload := cloneJSONMap(payload)
+	if providerSkill, ok := firstStringJSONValue(normalisedPayload["providerSkill"]); ok {
+		normalisedPayload["providerSkill"] = providerSkill
+	}
+	normalisedBody, err := json.Marshal(normalisedPayload)
+	if err != nil {
+		return s, nil, false
+	}
+	if err := json.Unmarshal(normalisedBody, &s); err != nil {
 		return s, nil, false
 	}
 	// ServiceName / DisplayName must be present; without them the card has
@@ -312,15 +362,30 @@ func decodeServiceSummary(pin *aggregator.PinInscription) (ServiceContentSummary
 	return s, payload, true
 }
 
+func firstStringJSONValue(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case []any:
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				return text, true
+			}
+		}
+	}
+	return "", false
+}
+
 // newServiceRecord builds a ServiceRecord from a fresh skill-service PIN
 // plus its parsed contentSummary. CreatedAt and UpdatedAt are seeded from
 // pin.Timestamp; later modifies/revokes update them via processServiceModify
 // / processServiceRevoke.
 func newServiceRecord(pin *aggregator.PinInscription, summary ServiceContentSummary, payload map[string]any, sourcePinId string) *ServiceRecord {
 	rec := &ServiceRecord{
-		SourceServicePinId: sourcePinId,
-		CurrentPinId:       pin.Id,
-		ChainName:          pin.ChainName,
+		SourceServicePinId:   sourcePinId,
+		CurrentPinId:         pin.Id,
+		CurrentGenesisHeight: pin.GenesisHeight,
+		ChainName:            pin.ChainName,
 
 		ProviderMetaId:       firstNonEmpty(pin.MetaId, pin.CreateMetaId),
 		ProviderGlobalMetaId: pin.GlobalMetaId,

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,42 +68,199 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	}
 
 	for _, path := range paths {
-		cursor := ""
-		seenCursors := make(map[string]struct{})
-		pinsToReplay := make([]*aggregator.PinInscription, 0, pageSize)
-		for {
-			seenCursors[cursor] = struct{}{}
-			page, err := client.ListPath(ctx, path, cursor, pageSize)
-			if err != nil {
+		if path == PathSkillService {
+			if err := a.backfillServices(ctx, client, opts.Since, pageSize); err != nil {
 				return err
 			}
-			if len(page.Pins) == 0 {
-				break
-			}
-
-			allOlder := true
-			for _, pin := range page.Pins {
-				if manapiTimestampBefore(pin.Timestamp, opts.Since) {
-					continue
-				}
-				allOlder = false
-				pinsToReplay = append(pinsToReplay, pin.toAggregatorPin())
-			}
-			if allOlder {
-				break
-			}
-			if page.NextCursor == "" || len(page.Pins) < pageSize {
-				break
-			}
-			if _, seen := seenCursors[page.NextCursor]; seen {
-				return fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
-			}
-			cursor = page.NextCursor
+			continue
 		}
-		for i := len(pinsToReplay) - 1; i >= 0; i-- {
-			if _, err := a.HandleBlockPin(pinsToReplay[i]); err != nil {
-				return err
+		pins, err := fetchBackfillPins(ctx, client, path, opts.Since, pageSize)
+		if err != nil {
+			return err
+		}
+		if err := a.replayBackfillPins(pins); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fetchBackfillPins(ctx context.Context, client *BackfillClient, path string, since time.Time, pageSize int) ([]manapiPin, error) {
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	pins := make([]manapiPin, 0, pageSize)
+	for {
+		seenCursors[cursor] = struct{}{}
+		page, err := client.ListPath(ctx, path, cursor, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Pins) == 0 {
+			break
+		}
+
+		allOlder := true
+		for _, pin := range page.Pins {
+			if manapiTimestampBefore(pin.Timestamp, since) {
+				continue
 			}
+			allOlder = false
+			pins = append(pins, pin)
+		}
+		if allOlder || page.NextCursor == "" || len(page.Pins) < pageSize {
+			break
+		}
+		if _, seen := seenCursors[page.NextCursor]; seen {
+			return nil, fmt.Errorf("repeated MANAPI cursor %q for path %s", page.NextCursor, path)
+		}
+		cursor = page.NextCursor
+	}
+	return pins, nil
+}
+
+func (a *Aggregator) backfillServices(ctx context.Context, client *BackfillClient, since time.Time, pageSize int) error {
+	// Old service creates can receive a new version years later. Discover all
+	// sources first, then apply the lookback window to each source's versions.
+	basePins, err := fetchBackfillPins(ctx, client, PathSkillService, time.Time{}, pageSize)
+	if err != nil {
+		return err
+	}
+
+	sources := make(map[string]manapiPin)
+	selected := make(map[string]manapiPin)
+	versionSources := make(map[string]string)
+	for _, pin := range basePins {
+		if strings.EqualFold(strings.TrimSpace(pin.Operation), OperationCreate) {
+			sourceID := strings.TrimSpace(pin.ID)
+			sources[sourceID] = pin
+			recordVersionSources(versionSources, sourceID, pin)
+		}
+	}
+
+	for sourceID, source := range sources {
+		versions, err := fetchTargetedServicePins(ctx, client, source, since, pageSize)
+		if err != nil {
+			return err
+		}
+		if manapiTimestampBefore(source.Timestamp, since) && len(versions) == 0 {
+			continue
+		}
+		selected[sourceID] = source
+		for _, version := range versions {
+			selected[strings.TrimSpace(version.ID)] = version
+			recordVersionSources(versionSources, sourceID, version)
+		}
+	}
+
+	// Some MANAPI deployments include version pins in the exact protocol-path
+	// response. Keep accepting those records and pull in their source create.
+	for _, pin := range basePins {
+		if strings.EqualFold(strings.TrimSpace(pin.Operation), OperationCreate) || manapiTimestampBefore(pin.Timestamp, since) {
+			continue
+		}
+		selected[strings.TrimSpace(pin.ID)] = pin
+		targetID := firstNonEmpty(pinTargetFromPath(pin.Path), strings.TrimPrefix(strings.TrimSpace(pin.OriginalId), "@"))
+		sourceID := versionSources[targetID]
+		if sourceID == "" {
+			sourceID = targetID
+		}
+		if source, ok := sources[sourceID]; ok {
+			selected[sourceID] = source
+			recordVersionSources(versionSources, sourceID, pin)
+		}
+	}
+
+	pins := make([]manapiPin, 0, len(selected))
+	for _, pin := range selected {
+		if strings.TrimSpace(pin.ID) != "" {
+			pins = append(pins, pin)
+		}
+	}
+	// Build the complete version-to-source index before replay. Several MVC
+	// versions can share one block timestamp/height, so a chronological sort
+	// alone cannot guarantee that every target version has already replayed.
+	for pinID, sourceID := range versionSources {
+		if pinID == "" || sourceID == "" || pinID == sourceID {
+			continue
+		}
+		if err := a.mapPinToSource(sources[sourceID].ChainName, pinID, sourceID); err != nil {
+			return err
+		}
+	}
+	return a.replayBackfillPins(pins)
+}
+
+func recordVersionSources(index map[string]string, sourceID string, pin manapiPin) {
+	if index == nil || strings.TrimSpace(sourceID) == "" {
+		return
+	}
+	for _, pinID := range append([]string{pin.ID}, pin.ModifyHistory...) {
+		pinID = strings.Trim(strings.TrimSpace(pinID), "@/")
+		if pinID != "" {
+			index[pinID] = sourceID
+		}
+	}
+}
+
+func fetchTargetedServicePins(ctx context.Context, client *BackfillClient, seed manapiPin, since time.Time, pageSize int) ([]manapiPin, error) {
+	queue := make([]string, 0)
+	queued := make(map[string]struct{})
+	enqueue := func(paths ...string) {
+		for _, path := range paths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			if _, ok := queued[path]; ok {
+				continue
+			}
+			queued[path] = struct{}{}
+			queue = append(queue, path)
+		}
+	}
+	enqueue(seed.targetedVersionBackfillPaths()...)
+
+	seenPins := make(map[string]struct{})
+	versions := make([]manapiPin, 0)
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		pins, err := fetchBackfillPins(ctx, client, path, since, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, pin := range pins {
+			pinID := strings.TrimSpace(pin.ID)
+			if pinID == "" {
+				continue
+			}
+			if _, ok := seenPins[pinID]; !ok {
+				seenPins[pinID] = struct{}{}
+				versions = append(versions, pin)
+			}
+			enqueue(pin.targetedVersionBackfillPaths()...)
+		}
+	}
+	return versions, nil
+}
+
+func (a *Aggregator) replayBackfillPins(pins []manapiPin) error {
+	sort.SliceStable(pins, func(i, j int) bool {
+		left := serviceRevision{
+			Timestamp:     normaliseServiceTimestampMillis(pins[i].Timestamp),
+			GenesisHeight: pins[i].GenesisHeight,
+			PinID:         strings.TrimSpace(pins[i].ID),
+		}
+		right := serviceRevision{
+			Timestamp:     normaliseServiceTimestampMillis(pins[j].Timestamp),
+			GenesisHeight: pins[j].GenesisHeight,
+			PinID:         strings.TrimSpace(pins[j].ID),
+		}
+		return serviceRevisionAfter(right, left)
+	})
+	for _, pin := range pins {
+		if _, err := a.HandleBlockPin(pin.toAggregatorPin()); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -234,6 +392,28 @@ type manapiPin struct {
 	Timestamp      int64              `json:"timestamp"`
 	GenesisHeight  int64              `json:"genesisHeight"`
 	OriginalId     string             `json:"originalId"`
+	ModifyHistory  []string           `json:"modify_history"`
+}
+
+func (p manapiPin) targetedVersionBackfillPaths() []string {
+	ids := make([]string, 0, len(p.ModifyHistory)+1)
+	ids = append(ids, p.ID)
+	ids = append(ids, p.ModifyHistory...)
+	paths := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.Trim(strings.TrimSpace(id), "@/")
+		if id == "" {
+			continue
+		}
+		path := "@" + id
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func (p manapiPin) toAggregatorPin() *aggregator.PinInscription {

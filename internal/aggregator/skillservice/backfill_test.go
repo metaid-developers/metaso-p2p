@@ -135,6 +135,63 @@ func TestBackfillReplaysServicePinsOldestFirstWithinLookback(t *testing.T) {
 	}
 }
 
+func TestBackfillDiscoversRecentSourceTargetVersionsAndUnlistedRevoke(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	weatherSource := skillBackfillServicePin("weather-source:i0", PathSkillService, OperationCreate, "", "旧天气服务", 1000)
+	postSource := skillBackfillServicePin("post-source:i0", PathSkillService, OperationCreate, "", "旧发布服务", 1100)
+	weatherFirst := skillBackfillServicePin("weather-first:i0", "@weather-source:i0", OperationModify, "weather-source:i0", "Weather v2", 4100)
+	// Path results can reveal history that the source-list response omitted.
+	weatherFirst["modify_history"] = []string{"weather-source:i0", "weather-first:i0", "weather-old:i0"}
+	weatherLatest := skillBackfillServicePin("weather-en:i0", "@weather-old:i0", OperationModify, "weather-old:i0", "Free Weather Service", 5000)
+	weatherLatest["contentBody"].(map[string]any)["providerSkill"] = []string{"weather"}
+	// MANAPI's modify_history can omit revoke pins, so @source must always be queried.
+	postRevoke := skillBackfillServicePin("post-revoke:i0", "@post-source:i0", OperationRevoke, "post-source:i0", "Publish Buzz", 4500)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var pins []map[string]any
+		switch r.URL.Query().Get("path") {
+		case PathSkillService:
+			pins = []map[string]any{postSource, weatherSource}
+		case "@weather-source:i0":
+			pins = []map[string]any{weatherFirst}
+		case "@weather-old:i0":
+			pins = []map[string]any{weatherLatest}
+		case "@post-source:i0":
+			pins = []map[string]any{postRevoke}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 1,
+			"data": map[string]any{"list": pins, "nextCursor": "", "cursor": ""},
+		})
+	}))
+	defer server.Close()
+
+	if err := agg.Backfill(BackfillOptions{
+		Context: context.Background(), Client: NewBackfillClient(server.URL, server.Client()),
+		Paths: []string{PathSkillService}, Since: time.Unix(4000, 0), PageSize: 100,
+	}); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+
+	weather, err := agg.loadService("mvc", "weather-source:i0")
+	if err != nil || weather == nil {
+		t.Fatalf("weather service = %#v err=%v", weather, err)
+	}
+	if weather.CurrentPinId != "weather-en:i0" || weather.DisplayName != "Free Weather Service" || weather.ProviderSkill != "weather" {
+		t.Fatalf("weather latest projection = %+v", weather)
+	}
+	post, err := agg.loadService("mvc", "post-source:i0")
+	if err != nil || post == nil {
+		t.Fatalf("post service = %#v err=%v", post, err)
+	}
+	if post.CurrentPinId != "post-revoke:i0" || post.Operation != OperationRevoke || post.IsVisibleDefault() {
+		t.Fatalf("post revoke projection = %+v", post)
+	}
+}
+
 func TestBackfillRefreshesLegacyCreateDeclarationPayload(t *testing.T) {
 	agg, store := setupAggregator(t)
 	defer store.Close()

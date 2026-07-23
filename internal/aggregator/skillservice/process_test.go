@@ -80,6 +80,7 @@ func makeServicePin(t *testing.T, opts servicePinOpts) *aggregator.PinInscriptio
 		CreateAddress: "addr-prov-" + opts.ProviderMetaId,
 		GlobalMetaId:  "idq1-" + opts.ProviderMetaId,
 		Timestamp:     opts.Timestamp,
+		GenesisHeight: opts.GenesisHeight,
 		OriginalId:    opts.OriginalId,
 	}
 }
@@ -92,6 +93,7 @@ type servicePinOpts struct {
 	ProviderMetaId string
 	OriginalId     string // empty for create
 	Timestamp      int64
+	GenesisHeight  int64
 	Disabled       bool
 	ServiceName    string
 	DisplayName    string
@@ -467,7 +469,7 @@ func TestProcessServiceRevoke_PathAtCurrentPinHidesDefaultList(t *testing.T) {
 	}
 }
 
-func TestProcessServiceModify_StaleTargetIgnored(t *testing.T) {
+func TestProcessServiceModify_OlderSourceTargetRevisionIgnored(t *testing.T) {
 	agg, store := setupAggregator(t)
 	defer store.Close()
 
@@ -487,10 +489,10 @@ func TestProcessServiceModify_StaleTargetIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
-		PinId: "mod_stale:i0", Path: "@src:i0",
+		PinId: "mod_older:i0", Path: "@src:i0",
 		Operation: OperationModify,
-		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 3000,
-		ServiceName: "svc", DisplayName: "stale overwrite",
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1500,
+		ServiceName: "svc", DisplayName: "older overwrite",
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -504,6 +506,86 @@ func TestProcessServiceModify_StaleTargetIgnored(t *testing.T) {
 	}
 	if rec.CurrentPinId != "mod_current:i0" {
 		t.Errorf("currentPinId changed after stale modify: %s", rec.CurrentPinId)
+	}
+}
+
+func TestProcessServiceVersions_CanKeepTargetingSourcePin(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "src:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000, GenesisHeight: 100,
+		ServiceName: "svc", DisplayName: "v1",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []struct {
+		id      string
+		op      string
+		ts      int64
+		height  int64
+		display string
+	}{
+		{id: "mod_v2:i0", op: OperationModify, ts: 2000, height: 200, display: "English v2"},
+		{id: "mod_v3:i0", op: OperationModify, ts: 3000, height: 300, display: "English v3"},
+		{id: "revoke_v4:i0", op: OperationRevoke, ts: 4000, height: 400, display: "English v3"},
+	} {
+		if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+			PinId: version.id, Path: "@src:i0", Operation: version.op,
+			ChainName: "mvc", ProviderMetaId: "provA", Timestamp: version.ts, GenesisHeight: version.height,
+			ServiceName: "svc", DisplayName: version.display,
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec, _ := agg.loadService("mvc", "src:i0")
+	if rec == nil {
+		t.Fatal("record missing")
+	}
+	if rec.CurrentPinId != "revoke_v4:i0" || rec.CurrentGenesisHeight != 400 {
+		t.Fatalf("current revision = %s/%d, want revoke_v4:i0/400", rec.CurrentPinId, rec.CurrentGenesisHeight)
+	}
+	if rec.Operation != OperationRevoke || rec.IsVisibleDefault() {
+		t.Fatalf("record should be revoked and hidden: %+v", rec)
+	}
+	if rec.DisplayName != "English v3" {
+		t.Fatalf("last declaration = %q, want English v3", rec.DisplayName)
+	}
+}
+
+func TestProcessServiceModify_AcceptsProviderSkillArray(t *testing.T) {
+	agg, store := setupAggregator(t)
+	defer store.Close()
+
+	if _, err := agg.HandleBlockPin(makeServicePin(t, servicePinOpts{
+		PinId: "src:i0", Operation: OperationCreate,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 1000,
+		ServiceName: "weather", DisplayName: "旧天气服务",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	modify := makeServicePin(t, servicePinOpts{
+		PinId: "weather_en:i0", Path: "@src:i0", Operation: OperationModify,
+		ChainName: "mvc", ProviderMetaId: "provA", Timestamp: 2000,
+		ServiceName: "weather", DisplayName: "Free Weather Service",
+	})
+	modify.ContentBody = []byte(`{"serviceName":"weather","displayName":"Free Weather Service","providerSkill":["weather"],"price":"0","currency":"SPACE"}`)
+	if _, err := agg.HandleBlockPin(modify); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := agg.loadService("mvc", "src:i0")
+	if rec == nil || rec.CurrentPinId != "weather_en:i0" {
+		t.Fatalf("array declaration was not folded: %+v", rec)
+	}
+	if rec.ProviderSkill != "weather" {
+		t.Fatalf("ProviderSkill = %q, want weather", rec.ProviderSkill)
+	}
+	providerSkills, ok := rec.DeclarationPayload["providerSkill"].([]any)
+	if !ok || len(providerSkills) != 1 || providerSkills[0] != "weather" {
+		t.Fatalf("raw providerSkill payload = %#v, want preserved array", rec.DeclarationPayload["providerSkill"])
 	}
 }
 

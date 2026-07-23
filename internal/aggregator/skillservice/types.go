@@ -69,9 +69,10 @@ type RatingContentSummary struct {
 // single chainName.
 type ServiceRecord struct {
 	// Identity
-	SourceServicePinId string `json:"sourceServicePinId"`
-	CurrentPinId       string `json:"currentPinId"`
-	ChainName          string `json:"chainName"`
+	SourceServicePinId   string `json:"sourceServicePinId"`
+	CurrentPinId         string `json:"currentPinId"`
+	CurrentGenesisHeight int64  `json:"currentGenesisHeight,omitempty"`
+	ChainName            string `json:"chainName"`
 
 	// Provider chain identity (from PIN metadata, not contentSummary)
 	ProviderMetaId       string `json:"providerMetaId"`
