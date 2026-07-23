@@ -293,6 +293,7 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*Pri
 				if e := json.Unmarshal(value, &msg); e != nil {
 					return nil
 				}
+				a.canonicalizePrivateMessage(&msg)
 				keyID := privateMessageDedupeKey(&msg)
 				if seen[keyID] {
 					return nil

@@ -50,6 +50,7 @@ type NotifyEvent struct {
 	GlobalMetaId string      // target user GlobalMetaId
 	TargetIds    []string    // all known target identities/aliases for user-directed pushes
 	GroupId      string      // target group (for room broadcast)
+	PinId        string      // source pin for delivery tracing
 	Payload      interface{} // notification body
 }
 
