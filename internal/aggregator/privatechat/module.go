@@ -2,12 +2,14 @@ package privatechat
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	privatechatread "github.com/metaid-developers/metaso-p2p/internal/readmodel/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
@@ -21,6 +23,7 @@ type Aggregator struct {
 	homepageIndex            sync.RWMutex
 	privateMessageLocks      sync.Map
 	homepageMaterializedLock sync.Map
+	readModelReady           atomic.Bool
 }
 
 const (
@@ -35,7 +38,11 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
-	return a.ensureHomepageSenderIndexes()
+	if err := a.ensureHomepageSenderIndexes(); err != nil {
+		return err
+	}
+	a.readModelReady.Store(privatechatread.IsReady(store, namespace))
+	return nil
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
