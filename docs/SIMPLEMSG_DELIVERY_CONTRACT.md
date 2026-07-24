@@ -8,6 +8,9 @@ consumers. It applies to the IDChat-compatible history and Socket.IO routes.
 - The indexer routes a simplemsg as soon as the transaction appears in the
   configured chain node's mempool. The default mempool polling interval is 10
   seconds.
+- An incrementally fetched transaction is marked as seen only after PIN parsing
+  succeeds. A transient fetch or parse failure is retried on the next poll
+  instead of being suppressed by the mempool deduplication TTL.
 - The pending message is immediately visible through
   `private-chat-list-by-index` and is pushed to connected recipients with
   `confirmed: false` and `blockHeight: 0`.

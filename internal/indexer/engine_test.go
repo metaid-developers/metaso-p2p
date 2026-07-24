@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -401,6 +402,45 @@ func TestEngineMempoolPollFetchesOnlyUnseenRawTransactions(t *testing.T) {
 	}
 	if idx.mempoolCalls != 2 {
 		t.Fatalf("mempool parse calls = %d, want 2 successful incremental batches", idx.mempoolCalls)
+	}
+}
+
+func TestEngineMempoolPollRetriesFetchedTransactionAfterParseFailure(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+
+	registry := aggregator.NewRegistry(store, nil)
+	recorder := &recordingRegistryAggregator{}
+	if err := registry.Register(recorder); err != nil {
+		t.Fatalf("Register recorder failed: %v", err)
+	}
+	engine := NewEngine(store, registry)
+	chain := &incrementalMockChain{
+		mockChain:    mockChain{name: "mvc"},
+		txIDs:        []string{"retry-tx"},
+		transactions: map[string]any{"retry-tx": "raw-retry-tx"},
+	}
+	pin := &aggregator.PinInscription{Id: "retry-txi0", ChainName: "mvc", Path: "/protocols/simplemsg"}
+	idx := &mockIndexer{name: "mvc", mempoolErr: errors.New("temporary parse failure")}
+	if err := engine.RegisterChain(chain, idx, 0); err != nil {
+		t.Fatalf("RegisterChain failed: %v", err)
+	}
+
+	engine.pollMempoolOnce()
+	idx.mempoolErr = nil
+	idx.mempoolPins = []*aggregator.PinInscription{pin}
+	idx.mempoolTxIDs = []string{"retry-tx"}
+	engine.pollMempoolOnce()
+
+	if len(chain.fetchRequests) != 2 {
+		t.Fatalf("raw transaction fetch calls = %d, want retry after parse failure", len(chain.fetchRequests))
+	}
+	if idx.mempoolCalls != 2 {
+		t.Fatalf("mempool parse calls = %d, want 2", idx.mempoolCalls)
+	}
+	got := recorder.MempoolPins()
+	if len(got) != 1 || got[0] != pin {
+		t.Fatalf("routed mempool pins = %#v, want retry pin", got)
 	}
 }
 
