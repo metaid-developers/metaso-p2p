@@ -578,6 +578,76 @@ func TestPrivateChatHistoryCanonicalizesLegacyMVCRecord(t *testing.T) {
 	assertCanonicalOACMessage(t, result.List[0], senderMetaID, senderGlobalID, senderAddress, receiverGlobal, txID, pinID)
 }
 
+func TestPrivateChatHistoryCanonicalizationBoundsIdentityLookupsToConversation(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const (
+		senderMetaID    = "sender-metaid"
+		senderGlobalID  = "idq1sender"
+		senderAddress   = "1SenderAddress"
+		receiverMetaID  = "receiver-metaid"
+		receiverGlobal  = "idq1receiver"
+		receiverAddress = "1ReceiverAddress"
+		messageCount    = 200
+		pageSize        = 20
+	)
+
+	sender := &IdentityProfile{MetaId: senderMetaID, GlobalMetaId: senderGlobalID, Address: senderAddress}
+	receiver := &IdentityProfile{MetaId: receiverMetaID, GlobalMetaId: receiverGlobal, Address: receiverAddress}
+	lookup := &localPrivateChatProfileLookup{
+		profilesByID: map[string]*IdentityProfile{
+			senderMetaID:    sender,
+			senderGlobalID:  sender,
+			senderAddress:   sender,
+			receiverMetaID:  receiver,
+			receiverGlobal:  receiver,
+			receiverAddress: receiver,
+		},
+	}
+	agg.SetProfileLookup(lookup)
+
+	// Write legacy records directly so the read path must normalize their
+	// address-shaped identity fields. The lookup count must stay tied to the
+	// two conversation participants, not the number of scanned messages.
+	for i := 0; i < messageCount; i++ {
+		msg := &PrivateMessage{
+			FromGlobalMetaId: senderAddress,
+			From:             senderAddress,
+			FromAddress:      senderAddress,
+			ToGlobalMetaId:   receiverGlobal,
+			To:               receiverGlobal,
+			TxId:             fmt.Sprintf("legacy-tx-%03d", i),
+			PinId:            fmt.Sprintf("legacy-tx-%03d:i0", i),
+			Timestamp:        1784797191 + int64(i),
+			Index:            int64(i),
+		}
+		raw := mustMarshal(t, msg)
+		if err := store.Set(namespace, pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId), raw); err != nil {
+			t.Fatalf("store legacy message %d: %v", i, err)
+		}
+	}
+
+	result, err := agg.GetPrivateChatListByIndex(senderGlobalID, receiverGlobal, messageCount-pageSize, pageSize)
+	if err != nil {
+		t.Fatalf("GetPrivateChatListByIndex: %v", err)
+	}
+	if len(result.List) != pageSize {
+		t.Fatalf("history list length = %d, want %d", len(result.List), pageSize)
+	}
+	if lookup.localCalls != 2 {
+		t.Fatalf("local identity lookup calls = %d, want 2 for two conversation participants", lookup.localCalls)
+	}
+	for _, msg := range result.List {
+		if msg.FromGlobalMetaId != senderGlobalID || msg.From != senderMetaID || msg.FromAddress != senderAddress {
+			t.Fatalf("sender identity was not canonicalized: %+v", msg)
+		}
+		if msg.ToGlobalMetaId != receiverGlobal || msg.To != receiverMetaID || msg.ToAddress != receiverAddress {
+			t.Fatalf("receiver identity was not canonicalized: %+v", msg)
+		}
+	}
+}
+
 func TestExtractTxIdSupportsBTCAndMVCFormats(t *testing.T) {
 	txID := "2e9ff38e092ff5bf1b565bfa9091bc4197b682e34be8c2dc01c514dfe37ed525"
 	tests := []struct {
