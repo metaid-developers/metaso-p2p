@@ -90,6 +90,41 @@ func TestPrivateChatReadModelBackfillServesBoundedIndexPages(t *testing.T) {
 	}
 }
 
+func TestPrivateChatReadModelHTTPByIndexServesRawSnapshots(t *testing.T) {
+	agg, store, router := setupTestAggregator(t)
+	defer store.Close()
+	keys := seedPrivateChatMessages(t, agg, 100)
+	if _, err := agg.BackfillPrivateChatReadModel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	db, _ := store.OpenDB(namespace)
+	batch := db.NewBatch()
+	for i, key := range keys {
+		if i >= 40 && i < 50 {
+			continue
+		}
+		if err := batch.Set(key, []byte("not-json"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	batch.Close()
+
+	response := performRequest(t, router, "GET", "/api/private-chat/messages/by-index?metaId=alice&otherMetaId=bob&startIndex=40&size=10")
+	var body struct {
+		Code int                   `json:"code"`
+		Data PrivateChatListResult `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != 0 || body.Data.Total != 100 || len(body.Data.List) != 10 || body.Data.List[0].Index != 40 || body.Data.List[9].Index != 49 {
+		t.Fatalf("unexpected raw HTTP response: code=%d data=%+v", body.Code, body.Data)
+	}
+}
+
 func TestPrivateChatReadyWriteUsesMetadataInsteadOfHistory(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()
@@ -262,6 +297,27 @@ func BenchmarkPrivateChatIndexedListByIndex100K(b *testing.B) {
 		result, err := agg.GetPrivateChatListByIndex("alice", "bob", 50_000, 100)
 		if err != nil || len(result.List) != 100 {
 			b.Fatalf("query failed: len=%d err=%v", len(result.List), err)
+		}
+	}
+}
+
+func BenchmarkPrivateChatIndexedRawHTTPPayload100K(b *testing.B) {
+	store := storage.NewPebbleStore(b.TempDir())
+	defer store.Close()
+	agg := &Aggregator{}
+	if err := agg.Init(store, cache.New(store)); err != nil {
+		b.Fatal(err)
+	}
+	seedPrivateChatMessages(b, agg, 100_000)
+	if _, err := agg.BackfillPrivateChatReadModel(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := agg.getPrivateChatListByIndexRawJSON("alice", "bob", 50_000, 100)
+		if err != nil || len(result) == 0 {
+			b.Fatalf("query failed: bytes=%d err=%v", len(result), err)
 		}
 	}
 }

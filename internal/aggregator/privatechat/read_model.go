@@ -612,6 +612,64 @@ func (a *Aggregator) getPrivateChatListByIndexReadModel(myMetaID, otherMetaID st
 	return &PrivateChatListResult{Total: meta.Count, NextCursor: nextCursor, NextTimestamp: lastIndex, List: messages}, nil
 }
 
+// getPrivateChatListByIndexRaw returns the already-flattened message snapshots
+// for the HTTP hot path. It avoids decoding and then re-encoding large nested
+// userInfo objects while preserving the exact JSON response shape.
+func (a *Aggregator) getPrivateChatListByIndexRawJSON(myMetaID, otherMetaID string, startIndex, size int64) ([]byte, error) {
+	profiles := make(identityProfileCache)
+	conversation := a.conversationForQuery(myMetaID, otherMetaID, profiles)
+	meta, err := a.loadConversationMeta(conversation)
+	if err != nil {
+		return nil, err
+	}
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if size < 1 {
+		size = 20
+	}
+	db, err := a.store.OpenDB(namespace)
+	if err != nil {
+		return nil, err
+	}
+	prefix := privatechatread.IndexPrefix(conversation)
+	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: privatechatread.PrefixUpperBound(prefix)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	result := make([]byte, 0, int(size)*2048)
+	result = append(result, `{"total":`...)
+	result = strconv.AppendInt(result, meta.Count, 10)
+	result = append(result, `,"list":[`...)
+	messageCount := int64(0)
+	lastIndex := int64(0)
+	for valid := iter.SeekGE(privatechatread.IndexKey(conversation, startIndex)); valid && messageCount < size; valid = iter.Next() {
+		index, err := indexFromReadModelKey(iter.Key())
+		if err != nil {
+			return nil, err
+		}
+		if messageCount > 0 {
+			result = append(result, ',')
+		}
+		lastIndex = index
+		result = append(result, iter.Value()...)
+		messageCount++
+	}
+	result = append(result, ']')
+	nextCursor := ""
+	if messageCount > 0 && lastIndex+1 < meta.Count {
+		nextCursor = strconv.FormatInt(lastIndex+1, 10)
+	}
+	result = append(result, `,"nextCursor":`...)
+	nextCursorRaw, _ := json.Marshal(nextCursor)
+	result = append(result, nextCursorRaw...)
+	result = append(result, `,"nextTimestamp":`...)
+	result = strconv.AppendInt(result, lastIndex, 10)
+	result = append(result, '}')
+	return result, nil
+}
+
 func decodePrivateChatOffset(cursor string) int64 {
 	if cursor == "" || cursor == "null" {
 		return 0

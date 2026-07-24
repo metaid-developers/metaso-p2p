@@ -76,6 +76,16 @@ func (a *Aggregator) handlePrivateChatListByIndex(c *gin.Context) {
 		size = 20
 	}
 
+	if a.readModelReady.Load() {
+		result, err := a.getPrivateChatListByIndexRawJSON(metaId, otherMetaId, startIndex, size)
+		if err != nil {
+			api.RespErr(c, 1, "failed to get private chat list by index")
+			return
+		}
+		api.RespSuccessRawData(c, result)
+		return
+	}
+
 	result, err := a.GetPrivateChatListByIndex(metaId, otherMetaId, startIndex, size)
 	if err != nil {
 		api.RespErr(c, 1, "failed to get private chat list by index")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +25,19 @@ func RespSuccess(c *gin.Context, data interface{}) {
 		"message":        "",
 		"processingTime": processingTimeMillis(c),
 	})
+}
+
+// RespSuccessRawData writes an already-encoded JSON data object without a
+// decode/encode round trip. Callers must only pass JSON produced by a trusted
+// materialized read model.
+func RespSuccessRawData(c *gin.Context, data []byte) {
+	c.Header("Content-Type", "application/json; charset=utf-8")
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.WriteString(`{"code":0,"data":`)
+	_, _ = c.Writer.Write(data)
+	_, _ = c.Writer.WriteString(`,"message":"","processingTime":`)
+	_, _ = c.Writer.WriteString(strconv.FormatInt(processingTimeMillis(c), 10))
+	_, _ = c.Writer.WriteString("}")
 }
 
 // RespSuccessCode sends a successful JSON response with a caller-specified
