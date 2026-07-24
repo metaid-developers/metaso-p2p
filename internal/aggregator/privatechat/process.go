@@ -112,12 +112,24 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 		Timestamp:        pin.Timestamp,
 		Chain:            pin.ChainName,
 		BlockHeight:      pin.GenesisHeight,
+		Confirmed:        pin.GenesisHeight > 0,
 		Index:            -1,
 	}
-	a.canonicalizePrivateMessage(msg)
+	if !a.canonicalizePrivateMessageForDelivery(msg) {
+		log.Printf("[privatechat] skipped unresolved private message identities: pinId=%s from=%s to=%s", pin.Id, fromGlobalMetaId, toGlobalMetaId)
+		return nil, nil
+	}
+	normalizePrivateMessageConfirmation(msg)
 
-	if err := a.SavePrivateMessage(msg); err != nil {
+	writeResult, err := a.UpsertPrivateMessage(msg)
+	if err != nil {
 		return nil, err
+	}
+	if !writeResult.Created {
+		if writeResult.ConfirmationUpdated {
+			log.Printf("[privatechat] private message confirmed: pinId=%s height=%d", msg.PinId, msg.BlockHeight)
+		}
+		return nil, nil
 	}
 
 	notifyEvent := &aggregator.NotifyEvent{

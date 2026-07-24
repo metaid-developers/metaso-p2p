@@ -1,12 +1,14 @@
 package privatechat
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -32,7 +34,24 @@ type PrivateMessage struct {
 	Timestamp        int64       `json:"timestamp"`
 	Chain            string      `json:"chain"`
 	BlockHeight      int64       `json:"blockHeight"`
+	Confirmed        bool        `json:"confirmed"`
 	Index            int64       `json:"index"`
+}
+
+// PrivateMessageUserInfo is the identity material needed to consume a private
+// message without an additional profile lookup.
+type PrivateMessageUserInfo struct {
+	GlobalMetaId  string `json:"globalMetaId,omitempty"`
+	MetaId        string `json:"metaid,omitempty"`
+	Address       string `json:"address,omitempty"`
+	ChatPublicKey string `json:"chatPublicKey,omitempty"`
+}
+
+// PrivateMessageWriteResult describes whether an upsert created a delivery
+// or only upgraded an already-delivered mempool message to confirmed state.
+type PrivateMessageWriteResult struct {
+	Created             bool
+	ConfirmationUpdated bool
 }
 
 // PrivateChatListResult is the response format for private chat list queries.
@@ -60,6 +79,7 @@ type PrivateGroupPath struct {
 
 const (
 	pchatKeyConst                     = "pchat:"
+	pchatPinIndexKeyConst             = "pchat-pin:v1:"
 	homepageSenderIndexKeyConst       = "hpchat:from:"
 	homepageSenderIndexStateKeyConst  = "hpchat:index-state:"
 	homepageSenderIndexVersion        = "v2"
@@ -93,26 +113,36 @@ func pchatPrefix(metaId1, metaId2 string) []byte {
 	return []byte(fmt.Sprintf("%s%s:%s:", pchatKeyConst, lo, hi))
 }
 
+func pchatPinIndexKey(pinID string) []byte {
+	return []byte(pchatPinIndexKeyConst + strings.ToLower(strings.TrimSpace(pinID)))
+}
+
 // SavePrivateMessage persists a private chat message to PebbleDB.
 func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
+	_, err := a.UpsertPrivateMessage(msg)
+	return err
+}
+
+// UpsertPrivateMessage persists a message once by pin ID. A later confirmed
+// observation upgrades the original mempool row without creating or pushing a
+// second logical message.
+func (a *Aggregator) UpsertPrivateMessage(msg *PrivateMessage) (PrivateMessageWriteResult, error) {
 	if msg == nil {
-		return nil
+		return PrivateMessageWriteResult{}, nil
 	}
+	normalizePrivateMessageConfirmation(msg)
 
 	a.homepageIndex.RLock()
 	ready, err := a.homepageMaterializedStateDone()
 	if err != nil {
 		a.homepageIndex.RUnlock()
-		return err
+		return PrivateMessageWriteResult{}, err
 	}
 	if !ready {
 		a.homepageIndex.RUnlock()
 		a.homepageIndex.Lock()
 		defer a.homepageIndex.Unlock()
-		if msg.Index < 0 {
-			msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
-		}
-		return a.savePrivateMessageUnlocked(msg)
+		return a.upsertPrivateMessageUnlocked(msg)
 	}
 	defer a.homepageIndex.RUnlock()
 
@@ -126,14 +156,105 @@ func (a *Aggregator) SavePrivateMessage(msg *PrivateMessage) error {
 	lockSyncMutexes(aliasLocks)
 	defer unlockSyncMutexes(aliasLocks)
 
+	return a.upsertPrivateMessageUnlocked(msg)
+}
+
+func (a *Aggregator) upsertPrivateMessageUnlocked(msg *PrivateMessage) (PrivateMessageWriteResult, error) {
+	if a == nil || msg == nil {
+		return PrivateMessageWriteResult{}, nil
+	}
+
+	existing, existingKey, err := a.privateMessageByPin(msg.PinId)
+	if err != nil {
+		return PrivateMessageWriteResult{}, err
+	}
+	if existing == nil {
+		candidateKey := pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId)
+		candidate, candidateErr := a.privateMessageAtKey(candidateKey)
+		if candidateErr != nil {
+			return PrivateMessageWriteResult{}, candidateErr
+		}
+		if candidate != nil && privateMessageDedupeKey(candidate) == privateMessageDedupeKey(msg) {
+			existing = candidate
+			existingKey = candidateKey
+		}
+	}
+
+	if existing != nil {
+		normalizePrivateMessageConfirmation(existing)
+		if existing.Confirmed || !msg.Confirmed {
+			if err := a.savePrivateMessageUnlocked(existing, existingKey); err != nil {
+				return PrivateMessageWriteResult{}, err
+			}
+			return PrivateMessageWriteResult{}, nil
+		}
+
+		msg.Index = existing.Index
+		if existing.Timestamp > 0 {
+			msg.Timestamp = existing.Timestamp
+		}
+		if err := a.savePrivateMessageUnlocked(msg, existingKey); err != nil {
+			return PrivateMessageWriteResult{}, err
+		}
+		return PrivateMessageWriteResult{ConfirmationUpdated: true}, nil
+	}
+
 	if msg.Index < 0 {
 		msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
 	}
-
-	return a.savePrivateMessageUnlocked(msg)
+	if err := a.savePrivateMessageUnlocked(msg, nil); err != nil {
+		return PrivateMessageWriteResult{}, err
+	}
+	return PrivateMessageWriteResult{Created: true}, nil
 }
 
-func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage) error {
+func (a *Aggregator) privateMessageByPin(pinID string) (*PrivateMessage, []byte, error) {
+	if a == nil || a.store == nil || strings.TrimSpace(pinID) == "" {
+		return nil, nil, nil
+	}
+	storageKey, err := a.store.Get(namespace, pchatPinIndexKey(pinID))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	msg, err := a.privateMessageAtKey(storageKey)
+	return msg, storageKey, err
+}
+
+func (a *Aggregator) privateMessageAtKey(storageKey []byte) (*PrivateMessage, error) {
+	if a == nil || a.store == nil || len(storageKey) == 0 {
+		return nil, nil
+	}
+	raw, err := a.store.Get(namespace, storageKey)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var msg PrivateMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	normalizePrivateMessageConfirmation(&msg)
+	return &msg, nil
+}
+
+func normalizePrivateMessageConfirmation(msg *PrivateMessage) {
+	if msg == nil {
+		return
+	}
+	if msg.BlockHeight > 0 {
+		msg.Confirmed = true
+	}
+	if !msg.Confirmed && msg.BlockHeight < 0 {
+		msg.BlockHeight = 0
+	}
+}
+
+func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey []byte) error {
 	if a == nil || msg == nil {
 		return nil
 	}
@@ -151,8 +272,19 @@ func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage) error {
 	batch := db.NewBatch()
 	defer batch.Close()
 
-	if err := batch.Set(pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId), raw, pebble.Sync); err != nil {
+	storageKey := pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId)
+	if len(previousKey) > 0 && !bytes.Equal(previousKey, storageKey) {
+		if err := batch.Delete(previousKey, pebble.Sync); err != nil {
+			return err
+		}
+	}
+	if err := batch.Set(storageKey, raw, pebble.Sync); err != nil {
 		return err
+	}
+	if strings.TrimSpace(msg.PinId) != "" {
+		if err := batch.Set(pchatPinIndexKey(msg.PinId), storageKey, pebble.Sync); err != nil {
+			return err
+		}
 	}
 	if err := writeHomepageSenderIndexEntries(batch, msg, raw); err != nil {
 		return err
@@ -231,16 +363,6 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
 	allMessages, profiles := a.collectPrivateMessages(myMetaId, otherMetaId)
 
-	sort.SliceStable(allMessages, func(i, j int) bool {
-		if allMessages[i].Index != allMessages[j].Index {
-			return allMessages[i].Index < allMessages[j].Index
-		}
-		if allMessages[i].Timestamp != allMessages[j].Timestamp {
-			return allMessages[i].Timestamp < allMessages[j].Timestamp
-		}
-		return privateMessageDedupeKey(allMessages[i]) < privateMessageDedupeKey(allMessages[j])
-	})
-
 	var messages []*PrivateMessage
 	lastIndex := int64(0)
 	for _, msg := range allMessages {
@@ -259,9 +381,14 @@ func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, sta
 		messages = []*PrivateMessage{}
 	}
 	a.canonicalizePrivateMessages(messages, profiles)
+	nextCursor := ""
+	if len(messages) > 0 && lastIndex+1 < int64(len(allMessages)) {
+		nextCursor = strconv.FormatInt(lastIndex+1, 10)
+	}
 
 	return &PrivateChatListResult{
-		Total:         int64(len(messages)),
+		Total:         int64(len(allMessages)),
+		NextCursor:    nextCursor,
 		NextTimestamp: lastIndex,
 		List:          messages,
 	}, nil
@@ -286,7 +413,7 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) ([]*Pr
 		return nil, profiles
 	}
 
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	var allMessages []*PrivateMessage
 	for _, my := range myAliases {
 		for _, other := range otherAliases {
@@ -297,10 +424,14 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) ([]*Pr
 					return nil
 				}
 				keyID := privateMessageDedupeKey(&msg)
-				if seen[keyID] {
+				normalizePrivateMessageConfirmation(&msg)
+				if position, ok := seen[keyID]; ok {
+					if msg.Confirmed && !allMessages[position].Confirmed {
+						allMessages[position] = &msg
+					}
 					return nil
 				}
-				seen[keyID] = true
+				seen[keyID] = len(allMessages)
 				allMessages = append(allMessages, &msg)
 				return nil
 			})
@@ -313,6 +444,9 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) ([]*Pr
 		}
 		return privateMessageDedupeKey(allMessages[i]) < privateMessageDedupeKey(allMessages[j])
 	})
+	for i := range allMessages {
+		allMessages[i].Index = int64(i)
+	}
 
 	return allMessages, profiles
 }

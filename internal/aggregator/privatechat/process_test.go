@@ -14,6 +14,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 // setupTestAggregator creates a test-ready privatechat aggregator.
@@ -274,6 +275,9 @@ func TestPrivateChatList_ResolvesCanonicalPeerAlias(t *testing.T) {
 	agg.SetProfileLookup(&fakePrivateChatProfileLookup{
 		byGlobalMetaId: map[string]*IdentityProfile{
 			"idq14provider": {MetaId: "1GrqProvider", GlobalMetaId: "idq14provider", Address: "1GrqProvider"},
+		},
+		byAddress: map[string]*IdentityProfile{
+			"1GrqProvider": {MetaId: "1GrqProvider", GlobalMetaId: "idq14provider", Address: "1GrqProvider"},
 		},
 	})
 
@@ -1424,6 +1428,235 @@ func TestHandleMempoolPin(t *testing.T) {
 	}
 	if evt.Type != "WS_SERVER_NOTIFY_PRIVATE_CHAT" {
 		t.Errorf("expected Type='WS_SERVER_NOTIFY_PRIVATE_CHAT', got %q", evt.Type)
+	}
+	payload := evt.Payload.(*PrivateMessage)
+	if payload.Confirmed || payload.BlockHeight != 0 {
+		t.Fatalf("mempool payload finality = confirmed:%v height:%d, want false/0", payload.Confirmed, payload.BlockHeight)
+	}
+}
+
+func TestMempoolPrivateMessageIsUpgradedWithoutDuplicateDelivery(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	mempool := &aggregator.PinInscription{
+		Id:            "zero_conf_tx:i0",
+		Path:          "/private/chat/simplemsg",
+		CreateAddress: "1Alice",
+		CreateMetaId:  "alice_zero",
+		GlobalMetaId:  "global_alice_zero",
+		ChainName:     "btc",
+		GenesisHeight: -1,
+		Timestamp:     2000,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			From:        "alice_zero",
+			To:          "bob_zero",
+			Content:     "deliver before confirmation",
+			ContentType: "text/plain",
+		}),
+	}
+
+	first, err := agg.HandleMempoolPin(mempool)
+	if err != nil || first == nil {
+		t.Fatalf("HandleMempoolPin: event=%v err=%v", first, err)
+	}
+	select {
+	case <-agg.NotifyChannel():
+	default:
+		t.Fatal("mempool delivery was not queued")
+	}
+
+	confirmed := *mempool
+	confirmed.GenesisHeight = 321
+	confirmed.Timestamp = 1900
+	second, err := agg.HandleBlockPin(&confirmed)
+	if err != nil {
+		t.Fatalf("HandleBlockPin: %v", err)
+	}
+	if second != nil {
+		t.Fatalf("confirmation emitted duplicate event: %#v", second)
+	}
+	select {
+	case duplicate := <-agg.NotifyChannel():
+		t.Fatalf("confirmation queued duplicate delivery: %#v", duplicate)
+	default:
+	}
+
+	result, err := agg.GetPrivateChatListByIndex("alice_zero", "bob_zero", 0, 20)
+	if err != nil {
+		t.Fatalf("GetPrivateChatListByIndex: %v", err)
+	}
+	if len(result.List) != 1 {
+		t.Fatalf("history rows = %d, want 1", len(result.List))
+	}
+	row := result.List[0]
+	if !row.Confirmed || row.BlockHeight != 321 {
+		t.Fatalf("confirmed row finality = confirmed:%v height:%d", row.Confirmed, row.BlockHeight)
+	}
+	if row.Timestamp != 2000 || row.Index != 0 {
+		t.Fatalf("confirmation changed delivery ordering: timestamp=%d index=%d", row.Timestamp, row.Index)
+	}
+}
+
+func TestMVCPrivateMessageSkipsUnresolvedChainIdentities(t *testing.T) {
+	tests := []struct {
+		name string
+		pin  *aggregator.PinInscription
+	}{
+		{
+			name: "sender metaid cannot be resolved without an address",
+			pin: &aggregator.PinInscription{
+				Id:            "unresolved_senderi0",
+				Path:          "/protocols/simplemsg",
+				CreateMetaId:  "2379692b225136b2b54e83aac52174f622b80181b17254bb7b5cf7b0aa323212",
+				GlobalMetaId:  "2379692b225136b2b54e83aac52174f622b80181b17254bb7b5cf7b0aa323212",
+				ChainName:     "mvc",
+				GenesisHeight: -1,
+				Timestamp:     2000,
+				ContentBody: mustMarshal(t, SimpleMsg{
+					To:      "idq1cv3sua4p0f8qzlerljd6a89wrqquyhh56jg36t",
+					Content: "unresolved sender",
+				}),
+			},
+		},
+		{
+			name: "recipient metaid is not a global metaid",
+			pin: &aggregator.PinInscription{
+				Id:            "unresolved_recipienti0",
+				Path:          "/protocols/simplemsg",
+				CreateAddress: "1BNesCuvJeW2DAF42xkyCU1ifZVuNZ61mv",
+				CreateMetaId:  "2379692b225136b2b54e83aac52174f622b80181b17254bb7b5cf7b0aa323212",
+				GlobalMetaId:  "idq1w8ye5psdkqrn6ugxxwvf5p4kkeuzufa6n9tt47",
+				ChainName:     "mvc",
+				GenesisHeight: -1,
+				Timestamp:     2001,
+				ContentBody: mustMarshal(t, SimpleMsg{
+					To:      "a5db949fe8d1e90ea4f8c72fd72caec8f3b85602813a0866dbe4db6cc4f8c418",
+					Content: "unresolved recipient",
+				}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agg, store, _ := setupTestAggregator(t)
+			defer store.Close()
+			event, err := agg.HandleMempoolPin(tt.pin)
+			if err != nil {
+				t.Fatalf("HandleMempoolPin: %v", err)
+			}
+			if event != nil {
+				t.Fatalf("unresolved identity emitted event: %#v", event)
+			}
+			stored, _, err := agg.privateMessageByPin(tt.pin.Id)
+			if err != nil {
+				t.Fatalf("privateMessageByPin: %v", err)
+			}
+			if stored != nil {
+				t.Fatalf("unresolved identity was stored: %#v", stored)
+			}
+		})
+	}
+}
+
+func TestMVCPrivateMessageDerivesCanonicalGlobalMetaIDFromAddress(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	const senderAddress = "1BNesCuvJeW2DAF42xkyCU1ifZVuNZ61mv"
+	wantGlobalMetaID := idaddress.EncodeGlobalMetaId(senderAddress, "mvc")
+	event, err := agg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:            "derived_senderi0",
+		Path:          "/protocols/simplemsg",
+		CreateAddress: senderAddress,
+		CreateMetaId:  senderAddress,
+		GlobalMetaId:  senderAddress,
+		ChainName:     "mvc",
+		GenesisHeight: -1,
+		Timestamp:     2100,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			To:      "idq1cv3sua4p0f8qzlerljd6a89wrqquyhh56jg36t",
+			Content: "derive sender identity",
+		}),
+	})
+	if err != nil || event == nil {
+		t.Fatalf("HandleMempoolPin: event=%v err=%v", event, err)
+	}
+	payload := event.Payload.(*PrivateMessage)
+	if payload.FromGlobalMetaId != wantGlobalMetaID || payload.FromAddress != senderAddress {
+		t.Fatalf("derived sender identity = global:%q address:%q, want %q/%q", payload.FromGlobalMetaId, payload.FromAddress, wantGlobalMetaID, senderAddress)
+	}
+}
+
+func TestPrivateMessageIncludesSenderChatPublicKey(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	sender := &IdentityProfile{
+		MetaId:        "sender-metaid",
+		GlobalMetaId:  "idq1sender",
+		Address:       "1SenderAddress",
+		ChatPublicKey: "04sender-chat-key",
+	}
+	receiver := &IdentityProfile{MetaId: "receiver-metaid", GlobalMetaId: "idq1receiver", Address: "1ReceiverAddress"}
+	agg.SetProfileLookup(&localPrivateChatProfileLookup{profilesByID: map[string]*IdentityProfile{
+		sender.Address:        sender,
+		sender.GlobalMetaId:   sender,
+		receiver.GlobalMetaId: receiver,
+		receiver.MetaId:       receiver,
+	}})
+
+	event, err := agg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:            "chat_key_tx:i0",
+		Path:          "/protocols/simplemsg",
+		CreateAddress: sender.Address,
+		CreateMetaId:  sender.Address,
+		GlobalMetaId:  sender.Address,
+		ChainName:     "mvc",
+		GenesisHeight: -1,
+		Timestamp:     3000,
+		ContentBody: mustMarshal(t, SimpleMsg{
+			To:      receiver.GlobalMetaId,
+			Content: "decrypt me",
+		}),
+	})
+	if err != nil || event == nil {
+		t.Fatalf("HandleMempoolPin: event=%v err=%v", event, err)
+	}
+	payload := event.Payload.(*PrivateMessage)
+	fromUserInfo, ok := payload.FromUserInfo.(*PrivateMessageUserInfo)
+	if !ok || fromUserInfo.ChatPublicKey != sender.ChatPublicKey {
+		t.Fatalf("fromUserInfo = %#v, want chatPublicKey %q", payload.FromUserInfo, sender.ChatPublicKey)
+	}
+}
+
+func TestPrivateChatListByIndexNormalizesLegacyDirectionalCollisions(t *testing.T) {
+	agg, store, _ := setupTestAggregator(t)
+	defer store.Close()
+
+	for _, msg := range []*PrivateMessage{
+		{FromGlobalMetaId: "global-a", From: "alice", ToGlobalMetaId: "global-b", To: "bob", TxId: "a-to-b", PinId: "a-to-bi0", Timestamp: 1000, Index: 0},
+		{FromGlobalMetaId: "global-b", From: "bob", ToGlobalMetaId: "global-a", To: "alice", TxId: "b-to-a", PinId: "b-to-ai0", Timestamp: 2000, Index: 0},
+	} {
+		if err := agg.SavePrivateMessage(msg); err != nil {
+			t.Fatalf("SavePrivateMessage: %v", err)
+		}
+	}
+
+	page1, err := agg.GetPrivateChatListByIndex("alice", "bob", 0, 1)
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	page2, err := agg.GetPrivateChatListByIndex("alice", "bob", 1, 1)
+	if err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	if page1.Total != 2 || len(page1.List) != 1 || page1.List[0].Index != 0 || page1.NextCursor != "1" {
+		t.Fatalf("unexpected page 1: %#v", page1)
+	}
+	if page2.Total != 2 || len(page2.List) != 1 || page2.List[0].Index != 1 || page2.NextCursor != "" {
+		t.Fatalf("unexpected page 2: %#v", page2)
 	}
 }
 
