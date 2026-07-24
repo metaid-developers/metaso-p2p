@@ -26,6 +26,14 @@ type globalPresenceStatus struct {
 	Connections   int      `json:"connections,omitempty"`
 }
 
+type idchatOnlineRow struct {
+	GlobalMetaId       string           `json:"globalMetaId"`
+	LastSeenAt         int64            `json:"lastSeenAt"`
+	LastSeenAgoSeconds int64            `json:"lastSeenAgoSeconds"`
+	DeviceCount        int              `json:"deviceCount"`
+	UserInfo           *ProfileSnapshot `json:"userInfo,omitempty"`
+}
+
 // HandleOnlineStats returns the total number of active connections.
 func (s *Server) HandleOnlineStats(c *gin.Context) {
 	scope := s.resolvePresenceScope(c)
@@ -102,40 +110,36 @@ func (s *Server) HandleIdchatOnlineUsers(c *gin.Context) {
 	if size > 100 {
 		size = 100
 	}
-	cursor := c.DefaultQuery("cursor", "")
+	cursor := strings.TrimSpace(c.DefaultQuery("cursor", ""))
+	offset, err := strconv.Atoi(cursor)
+	if err != nil || offset < 0 {
+		offset = 0
+	}
 
-	items := s.onlineItemsForIDChat(size)
-	rows := make([]gin.H, 0, len(items))
-	now := time.Now().UnixMilli()
-	for _, item := range items {
-		lastSeenAt := item.LastSeenAt
-		if lastSeenAt == 0 {
-			lastSeenAt = item.ConnectedAt
-		}
-		agoSeconds := int64(0)
-		if lastSeenAt > 0 && now > lastSeenAt {
-			agoSeconds = (now - lastSeenAt) / 1000
-		}
-		globalMetaId := item.MetaId
-		if item.UserInfo != nil && item.UserInfo.GlobalMetaId != "" {
-			globalMetaId = item.UserInfo.GlobalMetaId
-		}
-		rows = append(rows, gin.H{
-			"globalMetaId":       globalMetaId,
-			"lastSeenAt":         lastSeenAt,
-			"lastSeenAgoSeconds": agoSeconds,
-			"deviceCount":        1,
-			"userInfo":           item.UserInfo,
-		})
+	allRows := s.onlineRowsForIDChat()
+	total := len(allRows)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + size
+	if end > total {
+		end = total
+	}
+	rows := allRows[start:end]
+	nextCursor := ""
+	if end < total {
+		nextCursor = strconv.Itoa(end)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": gin.H{
-			"total":               len(rows),
+			"total":               total,
 			"cursor":              cursor,
+			"nextCursor":          nextCursor,
 			"size":                size,
-			"onlineWindowSeconds": 35,
+			"onlineWindowSeconds": int64(s.heartbeatTimeout() / time.Second),
 			"list":                rows,
 		},
 		"message":        "",
@@ -200,7 +204,7 @@ func (s *Server) HandleGlobalPresenceByGlobalMetaId(c *gin.Context) {
 	})
 }
 
-func (s *Server) onlineItemsForIDChat(size int) []OnlineEntry {
+func (s *Server) onlineItemsForIDChat() []OnlineEntry {
 	scope := "local"
 	reader := s.presenceGlobalReader()
 	if reader != nil && reader.Enabled() && strings.ToLower(strings.TrimSpace(reader.DefaultScope())) == "global" {
@@ -208,14 +212,64 @@ func (s *Server) onlineItemsForIDChat(size int) []OnlineEntry {
 	}
 	var items []OnlineEntry
 	if scope == "global" && reader != nil && reader.Enabled() {
-		items = onlineEntriesFromPresence(reader.OnlineList(s.manager.OnlineEntries(), 1, size))
+		items = onlineEntriesFromPresence(s.globalPresenceEntries(reader, s.manager.OnlineEntries()))
 	} else {
-		items = s.manager.OnlineList(1, size)
+		items = s.manager.OnlineList(1, s.manager.TotalConnections())
 	}
 	if items == nil {
 		items = []OnlineEntry{}
 	}
 	return s.hydrateOnlineEntries(items)
+}
+
+func (s *Server) onlineRowsForIDChat() []idchatOnlineRow {
+	items := s.onlineItemsForIDChat()
+	now := time.Now().UnixMilli()
+	rowsByIdentity := make(map[string]*idchatOnlineRow, len(items))
+
+	for _, item := range items {
+		lastSeenAt := item.LastSeenAt
+		if lastSeenAt == 0 {
+			lastSeenAt = item.ConnectedAt
+		}
+		globalMetaId := strings.TrimSpace(item.MetaId)
+		if item.UserInfo != nil && strings.TrimSpace(item.UserInfo.GlobalMetaId) != "" {
+			globalMetaId = strings.TrimSpace(item.UserInfo.GlobalMetaId)
+		}
+		if globalMetaId == "" {
+			continue
+		}
+
+		deviceCount := item.Sources
+		if deviceCount < 1 {
+			deviceCount = 1
+		}
+		key := strings.ToLower(globalMetaId)
+		row := rowsByIdentity[key]
+		if row == nil {
+			row = &idchatOnlineRow{GlobalMetaId: globalMetaId}
+			rowsByIdentity[key] = row
+		}
+		row.DeviceCount += deviceCount
+		if lastSeenAt > row.LastSeenAt {
+			row.LastSeenAt = lastSeenAt
+		}
+		if row.UserInfo == nil && item.UserInfo != nil {
+			row.UserInfo = item.UserInfo
+		}
+	}
+
+	rows := make([]idchatOnlineRow, 0, len(rowsByIdentity))
+	for _, row := range rowsByIdentity {
+		if row.LastSeenAt > 0 && now > row.LastSeenAt {
+			row.LastSeenAgoSeconds = (now - row.LastSeenAt) / 1000
+		}
+		rows = append(rows, *row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return strings.ToLower(rows[i].GlobalMetaId) < strings.ToLower(rows[j].GlobalMetaId)
+	})
+	return rows
 }
 
 // HandlePresenceSnapshot returns the local federated presence snapshot.
