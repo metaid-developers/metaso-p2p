@@ -20,11 +20,17 @@ type localIdentityLookup interface {
 	LookupLocalByIdentity(identity string) (*IdentityProfile, error)
 }
 
+type identityProfileCache map[string]*IdentityProfile
+
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
 }
 
 func (a *Aggregator) identityAliases(id string) []string {
+	return a.identityAliasesCached(id, make(identityProfileCache))
+}
+
+func (a *Aggregator) identityAliasesCached(id string, profiles identityProfileCache) []string {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
@@ -49,7 +55,7 @@ func (a *Aggregator) identityAliases(id string) []string {
 	if a == nil || a.profileLookup == nil {
 		return aliases
 	}
-	if profile := a.identityProfile(id); profile != nil {
+	if profile := a.identityProfileCached(profiles, id); profile != nil {
 		add(profile.MetaId)
 		add(profile.GlobalMetaId)
 		add(profile.Address)
@@ -59,8 +65,15 @@ func (a *Aggregator) identityAliases(id string) []string {
 }
 
 func (a *Aggregator) identityProfile(ids ...string) *IdentityProfile {
+	return a.identityProfileCached(make(identityProfileCache), ids...)
+}
+
+func (a *Aggregator) identityProfileCached(profiles identityProfileCache, ids ...string) *IdentityProfile {
 	if a == nil || a.profileLookup == nil {
 		return nil
+	}
+	if profiles == nil {
+		profiles = make(identityProfileCache)
 	}
 
 	seen := make(map[string]bool)
@@ -74,12 +87,20 @@ func (a *Aggregator) identityProfile(ids ...string) *IdentityProfile {
 			continue
 		}
 		seen[key] = true
+		if profile, ok := profiles[key]; ok {
+			if profile != nil {
+				return profile
+			}
+			continue
+		}
 
 		if lookup, ok := a.profileLookup.(localIdentityLookup); ok {
 			profile, err := lookup.LookupLocalByIdentity(id)
 			if err == nil && profile != nil {
+				cacheIdentityProfile(profiles, profile)
 				return profile
 			}
+			profiles[key] = nil
 			continue
 		}
 
@@ -90,20 +111,47 @@ func (a *Aggregator) identityProfile(ids ...string) *IdentityProfile {
 		} {
 			profile, err := lookup(id)
 			if err == nil && profile != nil {
+				cacheIdentityProfile(profiles, profile)
 				return profile
 			}
 		}
+		profiles[key] = nil
 	}
 
 	return nil
 }
 
+func cacheIdentityProfile(profiles identityProfileCache, profile *IdentityProfile) {
+	if profiles == nil || profile == nil {
+		return
+	}
+	for _, id := range []string{profile.MetaId, profile.GlobalMetaId, profile.Address} {
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key != "" {
+			profiles[key] = profile
+		}
+	}
+}
+
 func (a *Aggregator) canonicalizePrivateMessage(msg *PrivateMessage) {
+	a.canonicalizePrivateMessageCached(msg, make(identityProfileCache))
+}
+
+func (a *Aggregator) canonicalizePrivateMessages(messages []*PrivateMessage, profiles identityProfileCache) {
+	if profiles == nil {
+		profiles = make(identityProfileCache)
+	}
+	for _, msg := range messages {
+		a.canonicalizePrivateMessageCached(msg, profiles)
+	}
+}
+
+func (a *Aggregator) canonicalizePrivateMessageCached(msg *PrivateMessage, profiles identityProfileCache) {
 	if msg == nil {
 		return
 	}
 
-	if profile := a.identityProfile(msg.FromGlobalMetaId, msg.From, msg.FromAddress); profile != nil {
+	if profile := a.identityProfileCached(profiles, msg.FromGlobalMetaId, msg.From, msg.FromAddress); profile != nil {
 		if profile.GlobalMetaId != "" {
 			msg.FromGlobalMetaId = profile.GlobalMetaId
 		}
@@ -114,7 +162,7 @@ func (a *Aggregator) canonicalizePrivateMessage(msg *PrivateMessage) {
 			msg.FromAddress = profile.Address
 		}
 	}
-	if profile := a.identityProfile(msg.ToGlobalMetaId, msg.To, msg.ToAddress); profile != nil {
+	if profile := a.identityProfileCached(profiles, msg.ToGlobalMetaId, msg.To, msg.ToAddress); profile != nil {
 		if profile.GlobalMetaId != "" {
 			msg.ToGlobalMetaId = profile.GlobalMetaId
 		}

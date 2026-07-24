@@ -169,7 +169,7 @@ func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage) error {
 // The cursor is a base64-encoded offset. When beforeTimestamp is positive,
 // only messages older than that timestamp are considered.
 func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64, beforeTimestamp int64) (*PrivateChatListResult, error) {
-	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
+	allMessages, profiles := a.collectPrivateMessages(myMetaId, otherMetaId)
 	if beforeTimestamp > 0 {
 		filtered := make([]*PrivateMessage, 0, len(allMessages))
 		for _, msg := range allMessages {
@@ -205,6 +205,7 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 	for i := startIdx; i >= 0 && int64(len(messages)) < size; i-- {
 		messages = append(messages, allMessages[i])
 	}
+	a.canonicalizePrivateMessages(messages, profiles)
 
 	// Calculate next cursor
 	nextCursor := ""
@@ -228,7 +229,7 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 
 // GetPrivateChatListByIndex returns messages by their continuous conversation index.
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
-	allMessages := a.collectPrivateMessages(myMetaId, otherMetaId)
+	allMessages, profiles := a.collectPrivateMessages(myMetaId, otherMetaId)
 
 	sort.SliceStable(allMessages, func(i, j int) bool {
 		if allMessages[i].Index != allMessages[j].Index {
@@ -257,6 +258,7 @@ func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, sta
 	if messages == nil {
 		messages = []*PrivateMessage{}
 	}
+	a.canonicalizePrivateMessages(messages, profiles)
 
 	return &PrivateChatListResult{
 		Total:         int64(len(messages)),
@@ -266,7 +268,7 @@ func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, sta
 }
 
 func (a *Aggregator) nextPrivateMessageIndex(from, to string) int64 {
-	messages := a.collectPrivateMessages(from, to)
+	messages, _ := a.collectPrivateMessages(from, to)
 	maxIndex := int64(-1)
 	for _, msg := range messages {
 		if msg.Index > maxIndex {
@@ -276,11 +278,12 @@ func (a *Aggregator) nextPrivateMessageIndex(from, to string) int64 {
 	return maxIndex + 1
 }
 
-func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*PrivateMessage {
-	myAliases := a.identityAliases(myMetaId)
-	otherAliases := a.identityAliases(otherMetaId)
+func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) ([]*PrivateMessage, identityProfileCache) {
+	profiles := make(identityProfileCache)
+	myAliases := a.identityAliasesCached(myMetaId, profiles)
+	otherAliases := a.identityAliasesCached(otherMetaId, profiles)
 	if len(myAliases) == 0 || len(otherAliases) == 0 {
-		return nil
+		return nil, profiles
 	}
 
 	seen := make(map[string]bool)
@@ -293,7 +296,6 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*Pri
 				if e := json.Unmarshal(value, &msg); e != nil {
 					return nil
 				}
-				a.canonicalizePrivateMessage(&msg)
 				keyID := privateMessageDedupeKey(&msg)
 				if seen[keyID] {
 					return nil
@@ -312,7 +314,7 @@ func (a *Aggregator) collectPrivateMessages(myMetaId, otherMetaId string) []*Pri
 		return privateMessageDedupeKey(allMessages[i]) < privateMessageDedupeKey(allMessages[j])
 	})
 
-	return allMessages
+	return allMessages, profiles
 }
 
 func privateMessageDedupeKey(msg *PrivateMessage) string {
