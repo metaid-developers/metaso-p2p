@@ -62,6 +62,7 @@ func main() {
 	var userinfoAgg *userinfo.Aggregator
 	var botHomepageAgg *bothomepage.Aggregator
 	var socialAgg *social.Aggregator
+	var groupChatAgg *groupchat.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -79,8 +80,11 @@ func main() {
 			socialAgg = socialCandidate
 			socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
 		}
-		if err := aggRegistry.Register(&groupchat.Aggregator{}); err != nil {
+		groupChatCandidate := &groupchat.Aggregator{}
+		if err := aggRegistry.Register(groupChatCandidate); err != nil {
 			log.Printf("WARNING: groupchat aggregator init failed: %v", err)
+		} else {
+			groupChatAgg = groupChatCandidate
 		}
 		privatechatAgg := &privatechat.Aggregator{}
 		if err := aggRegistry.Register(privatechatAgg); err != nil {
@@ -105,6 +109,9 @@ func main() {
 			log.Printf("WARNING: bothomepage aggregator init failed: %v", err)
 		}
 		privatechatAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userinfoAgg))
+		if groupChatAgg != nil {
+			groupChatAgg.SetProfileLookup(groupchat.NewUserInfoLookupAdapter(userinfoAgg))
+		}
 		// Asset base URL turns chain-declared pin ids / metafile URIs
 		// into HTTP URLs the Bot Hub frontend can load directly. The
 		// value comes from METASO_P2P_ASSET_BASE_URL (default in

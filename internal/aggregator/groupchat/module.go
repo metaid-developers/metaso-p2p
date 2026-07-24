@@ -17,6 +17,7 @@ type Aggregator struct {
 	store                     *storage.PebbleStore
 	cache                     *cache.Cache[[]byte]
 	notifyCh                  chan *aggregator.NotifyEvent
+	profileLookup             ProfileLookup
 	privateChatReadModelReady bool
 }
 
@@ -27,6 +28,10 @@ const (
 )
 
 func (a *Aggregator) Name() string { return "groupchat" }
+
+func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
+	a.profileLookup = lookup
+}
 
 func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.CacheProvider) error {
 	a.store = store

@@ -958,6 +958,98 @@ func TestLookupLocalByIdentityUsesExactIndexesWithoutScanning(t *testing.T) {
 	}
 }
 
+func TestLookupLocalByIdentityUsesWarmProfileCache(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+	profile := &UserProfile{
+		MetaID:        "warm-metaid",
+		GlobalMetaID:  "idq1warmprofile",
+		Address:       "1WarmAddress",
+		ChatPublicKey: "warm-chat-key",
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(namespace, profileKey(profile.MetaID), raw); err != nil {
+		t.Fatal(err)
+	}
+
+	agg := &Aggregator{}
+	if err := agg.Init(store, cache.New(store)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(namespace, profileKey(profile.MetaID)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, identity := range []string{profile.MetaID, profile.GlobalMetaID, profile.Address} {
+		got, err := agg.LookupLocalByIdentity(identity)
+		if err != nil {
+			t.Fatalf("LookupLocalByIdentity(%q): %v", identity, err)
+		}
+		if got == nil || got.MetaID != profile.MetaID || got.ChatPublicKey != profile.ChatPublicKey {
+			t.Fatalf("LookupLocalByIdentity(%q) = %#v", identity, got)
+		}
+	}
+}
+
+func BenchmarkLookupLocalByIdentityWarmCache(b *testing.B) {
+	store := storage.NewPebbleStore(b.TempDir())
+	defer store.Close()
+	agg := &Aggregator{store: store}
+	agg.cacheLocalProfile(&UserProfile{
+		MetaID:        "benchmark-metaid",
+		GlobalMetaID:  "idq1benchmarkprofile",
+		Address:       "1BenchmarkAddress",
+		ChatPublicKey: "benchmark-chat-key",
+	})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		profile, err := agg.LookupLocalByIdentity("idq1benchmarkprofile")
+		if err != nil || profile == nil {
+			b.Fatalf("warm identity lookup failed: profile=%#v err=%v", profile, err)
+		}
+	}
+}
+
+func TestCacheLocalProfileRemovesChangedIdentityAliases(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer store.Close()
+	agg := &Aggregator{store: store}
+	agg.cacheLocalProfile(&UserProfile{
+		MetaID:       "stable-metaid",
+		GlobalMetaID: "idq1oldidentity",
+		Address:      "1OldAddress",
+	})
+	agg.cacheLocalProfile(&UserProfile{
+		MetaID:       "stable-metaid",
+		GlobalMetaID: "idq1newidentity",
+		Address:      "1NewAddress",
+	})
+
+	for _, stale := range []string{"idq1oldidentity", "1OldAddress"} {
+		profile, err := agg.LookupLocalByIdentity(stale)
+		if err != nil {
+			t.Fatalf("LookupLocalByIdentity(%q): %v", stale, err)
+		}
+		if profile != nil {
+			t.Fatalf("LookupLocalByIdentity(%q) = %#v, want nil", stale, profile)
+		}
+	}
+	for _, current := range []string{"stable-metaid", "idq1newidentity", "1NewAddress"} {
+		profile, err := agg.LookupLocalByIdentity(current)
+		if err != nil {
+			t.Fatalf("LookupLocalByIdentity(%q): %v", current, err)
+		}
+		if profile == nil || profile.GlobalMetaID != "idq1newidentity" {
+			t.Fatalf("LookupLocalByIdentity(%q) = %#v, want current profile", current, profile)
+		}
+	}
+}
+
 func TestLookupByGlobalMetaId_FallsBackToScanWhenIndexedProfileMismatches(t *testing.T) {
 	agg, store, _ := setupTestAggregator(t)
 	defer store.Close()

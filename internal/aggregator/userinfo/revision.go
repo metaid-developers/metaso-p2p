@@ -109,7 +109,11 @@ func (a *Aggregator) saveProfileWithInfoRevision(profile *UserProfile, metaid, p
 		return err
 	}
 	entries = append(entries, storageKeyValue(infoRevisionKey(canonicalMetaID, path), rawRevision))
-	return a.store.SetBatch(namespace, entries)
+	if err := a.store.SetBatch(namespace, entries); err != nil {
+		return err
+	}
+	a.cacheLocalProfile(profile)
+	return nil
 }
 
 func storageKeyValue(key, value []byte) storage.KeyValue {

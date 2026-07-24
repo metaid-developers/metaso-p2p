@@ -3,6 +3,7 @@ package userinfo
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -67,6 +68,7 @@ type Aggregator struct {
 	scanProfiles         func(func(*UserProfile) bool) (*UserProfile, error)
 	profileWriteMu       sync.Mutex
 	globalMetaIDPrefixMu sync.Mutex
+	profilesByIdentity   sync.Map
 	onProfileUpdated     func(string)
 }
 
@@ -87,6 +89,9 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, defaultTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
 	a.scanProfiles = a.defaultScanProfiles
+	if err := a.warmLocalProfileCache(); err != nil {
+		return fmt.Errorf("warm local user profile cache: %w", err)
+	}
 	a.configureRemoteProfileLookupFromEnv()
 	return nil
 }
@@ -436,10 +441,19 @@ func (a *Aggregator) LookupLocalByIdentity(identity string) (*UserProfile, error
 	if a == nil || a.store == nil || identity == "" {
 		return nil, nil
 	}
+	cacheKey := strings.ToLower(identity)
+	if cached, ok := a.profilesByIdentity.Load(cacheKey); ok {
+		if profile, ok := cached.(*UserProfile); ok && profileMatchesIdentity(profile, identity) {
+			copyProfile := *profile
+			return &copyProfile, nil
+		}
+		a.profilesByIdentity.Delete(cacheKey)
+	}
 
 	if profile, err := a.getProfile(identity); err != nil {
 		return nil, err
 	} else if profile != nil && strings.EqualFold(strings.TrimSpace(profile.MetaID), identity) {
+		a.cacheLocalProfile(profile)
 		return profile, nil
 	}
 
@@ -469,6 +483,7 @@ func (a *Aggregator) LookupLocalByIdentity(identity string) (*UserProfile, error
 			return nil, err
 		}
 		if profile != nil && candidate.match(profile) {
+			a.cacheLocalProfile(profile)
 			return profile, nil
 		}
 	}
@@ -552,7 +567,63 @@ func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
 	if err != nil {
 		return err
 	}
-	return a.store.SetBatch(namespace, entries)
+	if err := a.store.SetBatch(namespace, entries); err != nil {
+		return err
+	}
+	a.cacheLocalProfile(profile)
+	return nil
+}
+
+func (a *Aggregator) warmLocalProfileCache() error {
+	if a == nil || a.store == nil {
+		return nil
+	}
+	return a.store.ScanPrefix(namespace, profileKey(""), func(_, value []byte) error {
+		var profile UserProfile
+		if err := json.Unmarshal(value, &profile); err != nil {
+			return nil
+		}
+		a.cacheLocalProfile(&profile)
+		return nil
+	})
+}
+
+func (a *Aggregator) cacheLocalProfile(profile *UserProfile) {
+	if a == nil || profile == nil {
+		return
+	}
+	copyProfile := *profile
+	if canonicalKey := strings.ToLower(strings.TrimSpace(profile.MetaID)); canonicalKey != "" {
+		if cached, ok := a.profilesByIdentity.Load(canonicalKey); ok {
+			if previous, ok := cached.(*UserProfile); ok {
+				for _, identity := range []string{previous.MetaID, previous.GlobalMetaID, previous.Address} {
+					key := strings.ToLower(strings.TrimSpace(identity))
+					if key != "" {
+						a.profilesByIdentity.CompareAndDelete(key, previous)
+					}
+				}
+			}
+		}
+	}
+	for _, identity := range []string{profile.MetaID, profile.GlobalMetaID, profile.Address} {
+		key := strings.ToLower(strings.TrimSpace(identity))
+		if key != "" {
+			a.profilesByIdentity.Store(key, &copyProfile)
+		}
+	}
+}
+
+func profileMatchesIdentity(profile *UserProfile, identity string) bool {
+	if profile == nil {
+		return false
+	}
+	identity = strings.TrimSpace(identity)
+	for _, candidate := range []string{profile.MetaID, profile.GlobalMetaID, profile.Address} {
+		if strings.EqualFold(strings.TrimSpace(candidate), identity) {
+			return true
+		}
+	}
+	return false
 }
 
 func profileStorageEntries(key string, profile *UserProfile) ([]storage.KeyValue, error) {

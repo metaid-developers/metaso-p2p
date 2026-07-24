@@ -760,6 +760,15 @@ func (a *Aggregator) lookupPrivateUserInfo(aliases ...string) interface{} {
 	if len(wanted) == 0 {
 		return nil
 	}
+	if a.profileLookup != nil {
+		for _, alias := range wanted {
+			profile, err := a.profileLookup.LookupLocalByIdentity(alias)
+			if err == nil && profile != nil {
+				return profile
+			}
+		}
+		return nil
+	}
 
 	for _, alias := range wanted {
 		raw, err := a.store.Get("userinfo", []byte("profile:"+alias))
@@ -772,37 +781,13 @@ func (a *Aggregator) lookupPrivateUserInfo(aliases ...string) interface{} {
 		}
 		return normalizePrivateUserInfo(profile)
 	}
-
-	var found interface{}
-	_ = a.store.ScanPrefix("userinfo", []byte("profile:"), func(key, value []byte) error {
-		if found != nil {
-			return nil
-		}
-		var profile map[string]interface{}
-		if e := json.Unmarshal(value, &profile); e != nil {
-			return nil
-		}
-		if profileMatchesAnyAlias(profile, wanted) {
-			found = normalizePrivateUserInfo(profile)
-		}
-		return nil
-	})
-	return found
-}
-
-func profileMatchesAnyAlias(profile map[string]interface{}, aliases []string) bool {
-	for _, key := range []string{"metaid", "metaId", "globalMetaId", "address"} {
-		value, _ := profile[key].(string)
-		for _, alias := range aliases {
-			if identityEqual(value, alias) {
-				return true
-			}
-		}
-	}
-	return false
+	return nil
 }
 
 func privateUserInfoHasChatPublicKey(info interface{}) bool {
+	if profile, ok := info.(*ProfileSnapshot); ok {
+		return profile != nil && strings.TrimSpace(profile.ChatPublicKey) != ""
+	}
 	m, ok := info.(map[string]interface{})
 	if !ok {
 		return false
