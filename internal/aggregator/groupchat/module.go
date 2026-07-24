@@ -7,15 +7,17 @@ import (
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
+	privatechatread "github.com/metaid-developers/metaso-p2p/internal/readmodel/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 // Aggregator implements the aggregator.Aggregator interface for group chat.
 // It provides PebbleDB persistence, HTTP query APIs, and Socket.IO push integration.
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
+	store                     *storage.PebbleStore
+	cache                     *cache.Cache[[]byte]
+	notifyCh                  chan *aggregator.NotifyEvent
+	privateChatReadModelReady bool
 }
 
 const (
@@ -30,6 +32,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	a.privateChatReadModelReady = privatechatread.IsReady(store, "privatechat")
 	return nil
 }
 

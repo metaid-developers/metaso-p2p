@@ -146,12 +146,22 @@ func (a *Aggregator) UpsertPrivateMessage(msg *PrivateMessage) (PrivateMessageWr
 	}
 	defer a.homepageIndex.RUnlock()
 
-	conversationLockKey := privateMessageConversationLockKey(msg)
-	if conversationLockKey != "" {
-		lock := a.privateMessageMutex(conversationLockKey)
-		lock.Lock()
-		defer lock.Unlock()
+	conversationKeys := []string{privateMessageConversationLockKey(msg)}
+	if conversation, _, _ := a.conversationForMessage(msg, make(identityProfileCache)); conversation != "" {
+		conversationKeys = append(conversationKeys, "read-model:"+conversation)
 	}
+	sort.Strings(conversationKeys)
+	conversationLocks := make([]*sync.Mutex, 0, len(conversationKeys))
+	lastKey := ""
+	for _, key := range conversationKeys {
+		if key == "" || key == lastKey {
+			continue
+		}
+		conversationLocks = append(conversationLocks, a.privateMessageMutex(key))
+		lastKey = key
+	}
+	lockSyncMutexes(conversationLocks)
+	defer unlockSyncMutexes(conversationLocks)
 	aliasLocks := a.homepageMaterializedMutexes(homepageSenderIndexAliases(msg))
 	lockSyncMutexes(aliasLocks)
 	defer unlockSyncMutexes(aliasLocks)
@@ -183,7 +193,7 @@ func (a *Aggregator) upsertPrivateMessageUnlocked(msg *PrivateMessage) (PrivateM
 	if existing != nil {
 		normalizePrivateMessageConfirmation(existing)
 		if existing.Confirmed || !msg.Confirmed {
-			if err := a.savePrivateMessageUnlocked(existing, existingKey); err != nil {
+			if err := a.savePrivateMessageUnlocked(existing, existingKey, existing, false); err != nil {
 				return PrivateMessageWriteResult{}, err
 			}
 			return PrivateMessageWriteResult{}, nil
@@ -193,16 +203,16 @@ func (a *Aggregator) upsertPrivateMessageUnlocked(msg *PrivateMessage) (PrivateM
 		if existing.Timestamp > 0 {
 			msg.Timestamp = existing.Timestamp
 		}
-		if err := a.savePrivateMessageUnlocked(msg, existingKey); err != nil {
+		if err := a.savePrivateMessageUnlocked(msg, existingKey, existing, false); err != nil {
 			return PrivateMessageWriteResult{}, err
 		}
 		return PrivateMessageWriteResult{ConfirmationUpdated: true}, nil
 	}
 
-	if msg.Index < 0 {
+	if msg.Index < 0 && !a.readModelReady.Load() {
 		msg.Index = a.nextPrivateMessageIndex(msg.From, msg.To)
 	}
-	if err := a.savePrivateMessageUnlocked(msg, nil); err != nil {
+	if err := a.savePrivateMessageUnlocked(msg, nil, nil, true); err != nil {
 		return PrivateMessageWriteResult{}, err
 	}
 	return PrivateMessageWriteResult{Created: true}, nil
@@ -212,7 +222,22 @@ func (a *Aggregator) privateMessageByPin(pinID string) (*PrivateMessage, []byte,
 	if a == nil || a.store == nil || strings.TrimSpace(pinID) == "" {
 		return nil, nil, nil
 	}
-	storageKey, err := a.store.Get(namespace, pchatPinIndexKey(pinID))
+	var locatorIndex int64 = -1
+	var storageKey []byte
+	if a.readModelReady.Load() {
+		locator, locatorErr := a.loadReadModelLocator(pinID)
+		if locatorErr != nil {
+			return nil, nil, locatorErr
+		}
+		if locator != nil {
+			storageKey = []byte(locator.StorageKey)
+			locatorIndex = locator.Index
+		}
+	}
+	var err error
+	if len(storageKey) == 0 {
+		storageKey, err = a.store.Get(namespace, pchatPinIndexKey(pinID))
+	}
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, nil, nil
 	}
@@ -220,6 +245,9 @@ func (a *Aggregator) privateMessageByPin(pinID string) (*PrivateMessage, []byte,
 		return nil, nil, err
 	}
 	msg, err := a.privateMessageAtKey(storageKey)
+	if msg != nil && locatorIndex >= 0 {
+		msg.Index = locatorIndex
+	}
 	return msg, storageKey, err
 }
 
@@ -254,14 +282,9 @@ func normalizePrivateMessageConfirmation(msg *PrivateMessage) {
 	}
 }
 
-func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey []byte) error {
+func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey []byte, previous *PrivateMessage, created bool) error {
 	if a == nil || msg == nil {
 		return nil
-	}
-
-	raw, err := json.Marshal(msg)
-	if err != nil {
-		return err
 	}
 
 	db, err := a.store.OpenDB(namespace)
@@ -273,6 +296,10 @@ func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey
 	defer batch.Close()
 
 	storageKey := pchatKey(msg.From, msg.To, msg.Timestamp, msg.TxId)
+	raw, err := a.writeReadModelEntries(batch, msg, storageKey, previous, created)
+	if err != nil {
+		return err
+	}
 	if len(previousKey) > 0 && !bytes.Equal(previousKey, storageKey) {
 		if err := batch.Delete(previousKey, pebble.Sync); err != nil {
 			return err
@@ -301,6 +328,9 @@ func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey
 // The cursor is a base64-encoded offset. When beforeTimestamp is positive,
 // only messages older than that timestamp are considered.
 func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64, beforeTimestamp int64) (*PrivateChatListResult, error) {
+	if a.readModelReady.Load() {
+		return a.getPrivateChatListByReadModel(myMetaId, otherMetaId, cursorStr, size, beforeTimestamp)
+	}
 	allMessages, profiles := a.collectPrivateMessages(myMetaId, otherMetaId)
 	if beforeTimestamp > 0 {
 		filtered := make([]*PrivateMessage, 0, len(allMessages))
@@ -361,6 +391,9 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 
 // GetPrivateChatListByIndex returns messages by their continuous conversation index.
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
+	if a.readModelReady.Load() {
+		return a.getPrivateChatListByIndexReadModel(myMetaId, otherMetaId, startIndex, size)
+	}
 	allMessages, profiles := a.collectPrivateMessages(myMetaId, otherMetaId)
 
 	var messages []*PrivateMessage
@@ -706,6 +739,9 @@ func unlockSyncMutexes(locks []*sync.Mutex) {
 // GetPrivateChatHomes returns a list of conversation partners with last message preview.
 // Scans all pchat keys to find unique conversation partners of the given metaId.
 func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, error) {
+	if a.readModelReady.Load() {
+		return a.getPrivateChatHomesByReadModel(metaid)
+	}
 	// Scan the global pchat prefix to find all conversations involving this user.
 	partnerMap := make(map[string]*PrivateMessage)
 
@@ -757,6 +793,9 @@ func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, err
 
 // GetPrivateGroupPaths returns the list of paths where the given metaId has private chat messages.
 func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]*PrivateGroupPath, error) {
+	if a.readModelReady.Load() {
+		return a.getPrivateGroupPathsByReadModel(metaid)
+	}
 	pathMap := make(map[string]*PrivateGroupPath)
 
 	prefix := []byte(pchatKeyConst)

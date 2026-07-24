@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/pebble"
+
+	privatechatread "github.com/metaid-developers/metaso-p2p/internal/readmodel/privatechat"
 )
 
 // ChatMessage represents a group chat message, matching IDCHAT_API_CONTRACT.md exactly.
@@ -634,6 +636,14 @@ type latestPrivateMessage struct {
 }
 
 func (a *Aggregator) getPrivateLatestChatInfoList(metaId string) []*UserLatestChatInfo {
+	if a.privateChatReadModelReady {
+		result, err := a.getPrivateLatestChatInfoListByReadModel(metaId)
+		if err != nil {
+			log.Printf("private chat read model query failed for %q: %v", metaId, err)
+			return []*UserLatestChatInfo{}
+		}
+		return result
+	}
 	latestByPeer := make(map[string]*latestPrivateMessage)
 
 	a.store.ScanPrefix("privatechat", []byte("pchat:"), func(key, value []byte) error {
@@ -695,6 +705,50 @@ func (a *Aggregator) getPrivateLatestChatInfoList(metaId string) []*UserLatestCh
 		result = []*UserLatestChatInfo{}
 	}
 	return result
+}
+
+func (a *Aggregator) getPrivateLatestChatInfoListByReadModel(metaID string) ([]*UserLatestChatInfo, error) {
+	records, err := privatechatread.ListHomes(a.store, "privatechat", metaID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*UserLatestChatInfo, 0, len(records))
+	for _, record := range records {
+		var msg latestPrivateMessage
+		if err := json.Unmarshal(record.Message, &msg); err != nil {
+			return nil, err
+		}
+		msg.Index = record.Index
+		userInfo := msg.FromUserInfo
+		if msg.From == record.PeerMetaID || msg.FromGlobalMetaId == record.PeerGlobalMetaID || msg.FromAddress == record.PeerAddress {
+			userInfo = msg.FromUserInfo
+		} else {
+			userInfo = msg.ToUserInfo
+		}
+		userInfo = normalizePrivateUserInfo(userInfo)
+		if !privateUserInfoHasChatPublicKey(userInfo) {
+			if hydrated := a.lookupPrivateUserInfo(record.PeerMetaID, record.PeerGlobalMetaID, record.PeerAddress); hydrated != nil {
+				userInfo = hydrated
+			}
+		}
+		result = append(result, &UserLatestChatInfo{
+			Type:             "2",
+			GlobalMetaId:     record.PeerGlobalMetaID,
+			MetaId:           record.PeerMetaID,
+			Address:          record.PeerAddress,
+			Timestamp:        msg.Timestamp,
+			ChatType:         "msg",
+			Content:          msg.Content,
+			LastMessagePinId: msg.PinId,
+			BlockHeight:      msg.BlockHeight,
+			Chain:            msg.Chain,
+			Index:            record.Index,
+			UserInfo:         userInfo,
+			LastMessage:      &msg,
+			Path:             msg.Protocol,
+		})
+	}
+	return result, nil
 }
 
 func (a *Aggregator) lookupPrivateUserInfo(aliases ...string) interface{} {
