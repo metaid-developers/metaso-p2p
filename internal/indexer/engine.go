@@ -253,7 +253,7 @@ func (e *Engine) pollMempoolOnce() {
 	now := time.Now()
 	for _, entry := range entries {
 		chainName := entry.chain.Name()
-		txList, err := e.getMempoolTransactionList(entry.chain, chainName, now)
+		txList, fetchedTxIDs, err := e.getMempoolTransactionList(entry.chain, chainName, now)
 		if err != nil {
 			log.Printf("[indexer] %s mempool: GetMempoolTransactionList error: %v", chainName, err)
 			continue
@@ -272,26 +272,28 @@ func (e *Engine) pollMempoolOnce() {
 		for _, pin := range pins {
 			e.registry.RouteMempoolPin(pin)
 		}
+		e.markMempoolTxIDsSeen(chainName, fetchedTxIDs, now)
 	}
 }
 
-func (e *Engine) getMempoolTransactionList(c chain.Chain, chainName string, now time.Time) ([]any, error) {
+func (e *Engine) getMempoolTransactionList(c chain.Chain, chainName string, now time.Time) ([]any, []string, error) {
 	source, ok := c.(chain.IncrementalMempoolChain)
 	if !ok {
-		return c.GetMempoolTransactionList()
+		list, err := c.GetMempoolTransactionList()
+		return list, nil, err
 	}
 
 	txIDs, err := source.GetMempoolTransactionIDs()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pending := e.filterUnseenMempoolTxIDs(chainName, txIDs, now)
 	if len(pending) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	transactions, err := source.GetMempoolTransactions(pending)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	list := make([]any, 0, len(transactions))
@@ -302,8 +304,7 @@ func (e *Engine) getMempoolTransactionList(c chain.Chain, chainName string, now 
 			succeeded = append(succeeded, txID)
 		}
 	}
-	e.markMempoolTxIDsSeen(chainName, succeeded, now)
-	return list, nil
+	return list, succeeded, nil
 }
 
 func (e *Engine) filterUnseenMempoolTxIDs(chainName string, txIDs []string, now time.Time) []string {

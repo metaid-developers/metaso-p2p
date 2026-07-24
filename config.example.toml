@@ -66,6 +66,11 @@ pingInterval = "2s"
 # Env: METASO_P2P_SOCKET_PING_TIMEOUT
 pingTimeout = "5s"
 
+# Maximum age of the application-level client heartbeat before a connection
+# is removed from presence. Keep this at least 3x the client heartbeat interval.
+# Env: METASO_P2P_SOCKET_HEARTBEAT_TIMEOUT
+heartbeatTimeout = "90s"
+
 # Allow Engine.IO v3 clients to connect (needed by idchat).
 # Env: METASO_P2P_SOCKET_ALLOW_EIO3
 allowEio3 = true

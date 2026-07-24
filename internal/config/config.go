@@ -113,6 +113,7 @@ type SocketConfig struct {
 	MaxAppPerUser        int           `json:"maxAppPerUser"`
 	PingInterval         time.Duration `json:"pingInterval"`
 	PingTimeout          time.Duration `json:"pingTimeout"`
+	HeartbeatTimeout     time.Duration `json:"heartbeatTimeout"`
 	AllowEIO3            bool          `json:"allowEio3"`
 	ExtraPushAuthKey     string        `json:"extraPushAuthKey"`
 }
@@ -178,6 +179,7 @@ func Default() Config {
 			MaxAppPerUser:        3,
 			PingInterval:         2 * time.Second,
 			PingTimeout:          5 * time.Second,
+			HeartbeatTimeout:     90 * time.Second,
 			AllowEIO3:            true,
 			ExtraPushAuthKey:     "",
 		},
@@ -314,6 +316,7 @@ func Load() (Config, error) {
 	applyIntEnv("METASO_P2P_SOCKET_MAX_APP_PER_USER", &cfg.Socket.MaxAppPerUser)
 	applyDurationEnv("METASO_P2P_SOCKET_PING_INTERVAL", &cfg.Socket.PingInterval)
 	applyDurationEnv("METASO_P2P_SOCKET_PING_TIMEOUT", &cfg.Socket.PingTimeout)
+	applyDurationEnv("METASO_P2P_SOCKET_HEARTBEAT_TIMEOUT", &cfg.Socket.HeartbeatTimeout)
 	applyBoolEnv("METASO_P2P_SOCKET_ALLOW_EIO3", &cfg.Socket.AllowEIO3)
 	applyStringEnv("METASO_P2P_SOCKET_EXTRA_PUSH_AUTH_KEY", &cfg.Socket.ExtraPushAuthKey)
 
@@ -440,6 +443,9 @@ func (c Config) Validate() error {
 	}
 	if c.Socket.PingTimeout <= 0 {
 		return errors.New("socket.pingTimeout must be greater than zero")
+	}
+	if c.Socket.HeartbeatTimeout <= 0 {
+		return errors.New("socket.heartbeatTimeout must be greater than zero")
 	}
 	if c.Service.ShutdownTimeout <= 0 {
 		return errors.New("service.shutdownTimeout must be greater than zero")

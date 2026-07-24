@@ -47,8 +47,9 @@ func identityFromUserInfo(p *userinfo.UserProfile) *IdentityProfile {
 		return nil
 	}
 	return &IdentityProfile{
-		MetaId:       p.MetaID,
-		GlobalMetaId: p.GlobalMetaID,
-		Address:      p.Address,
+		MetaId:        p.MetaID,
+		GlobalMetaId:  p.GlobalMetaID,
+		Address:       p.Address,
+		ChatPublicKey: p.ChatPublicKey,
 	}
 }

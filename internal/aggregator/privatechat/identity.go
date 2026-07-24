@@ -1,13 +1,18 @@
 package privatechat
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
+)
 
 // IdentityProfile is the small identity slice private-chat needs from
 // userinfo to bridge chain-address MetaID keys and canonical globalMetaIds.
 type IdentityProfile struct {
-	MetaId       string
-	GlobalMetaId string
-	Address      string
+	MetaId        string
+	GlobalMetaId  string
+	Address       string
+	ChatPublicKey string
 }
 
 type ProfileLookup interface {
@@ -161,6 +166,7 @@ func (a *Aggregator) canonicalizePrivateMessageCached(msg *PrivateMessage, profi
 		if profile.Address != "" {
 			msg.FromAddress = profile.Address
 		}
+		msg.FromUserInfo = privateMessageUserInfo(profile)
 	}
 	if profile := a.identityProfileCached(profiles, msg.ToGlobalMetaId, msg.To, msg.ToAddress); profile != nil {
 		if profile.GlobalMetaId != "" {
@@ -172,6 +178,7 @@ func (a *Aggregator) canonicalizePrivateMessageCached(msg *PrivateMessage, profi
 		if profile.Address != "" {
 			msg.ToAddress = profile.Address
 		}
+		msg.ToUserInfo = privateMessageUserInfo(profile)
 	}
 
 	if msg.PinId != "" {
@@ -179,4 +186,74 @@ func (a *Aggregator) canonicalizePrivateMessageCached(msg *PrivateMessage, profi
 	} else {
 		msg.TxId = extractTxId(msg.TxId)
 	}
+}
+
+func privateMessageUserInfo(profile *IdentityProfile) *PrivateMessageUserInfo {
+	if profile == nil {
+		return nil
+	}
+	return &PrivateMessageUserInfo{
+		GlobalMetaId:  profile.GlobalMetaId,
+		MetaId:        profile.MetaId,
+		Address:       profile.Address,
+		ChatPublicKey: profile.ChatPublicKey,
+	}
+}
+
+// canonicalizePrivateMessageForDelivery rejects unresolved MVC chain identities
+// instead of exposing an address or 64-hex MetaID as a globalMetaId.
+func (a *Aggregator) canonicalizePrivateMessageForDelivery(msg *PrivateMessage) bool {
+	a.canonicalizePrivateMessage(msg)
+	if msg == nil || !strings.EqualFold(strings.TrimSpace(msg.Chain), "mvc") {
+		return msg != nil && strings.TrimSpace(msg.FromGlobalMetaId) != "" && strings.TrimSpace(msg.ToGlobalMetaId) != ""
+	}
+	if !isResolvedGlobalIdentity(msg.FromGlobalMetaId, msg.From, msg.FromAddress) {
+		if globalMetaID := idaddress.EncodeGlobalMetaId(strings.TrimSpace(msg.FromAddress), msg.Chain); globalMetaID != "" {
+			msg.FromGlobalMetaId = globalMetaID
+		}
+	}
+	if !isResolvedGlobalIdentity(msg.ToGlobalMetaId, msg.To, msg.ToAddress) {
+		toAddress := strings.TrimSpace(msg.ToAddress)
+		if toAddress == "" && isBase58ChainAddress(msg.ToGlobalMetaId) {
+			toAddress = strings.TrimSpace(msg.ToGlobalMetaId)
+			msg.ToAddress = toAddress
+		}
+		if globalMetaID := idaddress.EncodeGlobalMetaId(toAddress, msg.Chain); globalMetaID != "" {
+			msg.ToGlobalMetaId = globalMetaID
+		}
+	}
+	return isResolvedGlobalIdentity(msg.FromGlobalMetaId, msg.From, msg.FromAddress) &&
+		isResolvedGlobalIdentity(msg.ToGlobalMetaId, msg.To, msg.ToAddress)
+}
+
+func isResolvedGlobalIdentity(globalMetaID, metaID, address string) bool {
+	globalMetaID = strings.TrimSpace(globalMetaID)
+	if globalMetaID == "" {
+		return false
+	}
+	if strings.EqualFold(globalMetaID, strings.TrimSpace(address)) && strings.TrimSpace(address) != "" {
+		return false
+	}
+	if strings.EqualFold(globalMetaID, strings.TrimSpace(metaID)) && isOnChainIdentity(globalMetaID) {
+		return false
+	}
+	return !isOnChainIdentity(globalMetaID)
+}
+
+func isOnChainIdentity(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) == 64 && isHex(value) {
+		return true
+	}
+	_, _, err := idaddress.DecodeGlobalMetaId(value)
+	if err == nil {
+		return false
+	}
+	_, _, err = idaddress.Base58CheckDecode(value)
+	return err == nil
+}
+
+func isBase58ChainAddress(value string) bool {
+	_, _, err := idaddress.Base58CheckDecode(strings.TrimSpace(value))
+	return err == nil
 }

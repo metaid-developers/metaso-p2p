@@ -13,6 +13,30 @@ func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
 	}
 }
 
+func TestSocketHeartbeatTimeoutDefaultsAndLoadsFromEnv(t *testing.T) {
+	cfg := Default()
+	if cfg.Socket.HeartbeatTimeout != 90*time.Second {
+		t.Fatalf("default heartbeat timeout: got %s want 90s", cfg.Socket.HeartbeatTimeout)
+	}
+
+	t.Setenv("METASO_P2P_SOCKET_HEARTBEAT_TIMEOUT", "2m")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Socket.HeartbeatTimeout != 2*time.Minute {
+		t.Fatalf("heartbeat timeout from env: got %s want 2m", loaded.Socket.HeartbeatTimeout)
+	}
+}
+
+func TestValidateRejectsNonPositiveSocketHeartbeatTimeout(t *testing.T) {
+	cfg := Default()
+	cfg.Socket.HeartbeatTimeout = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for zero heartbeat timeout")
+	}
+}
+
 func TestDefaultBotHomepageV2BackfillConfigDisabled(t *testing.T) {
 	cfg := Default()
 

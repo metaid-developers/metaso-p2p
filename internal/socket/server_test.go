@@ -3,6 +3,7 @@ package socket
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -1095,6 +1096,54 @@ func TestServerShutdownCleanup(t *testing.T) {
 		t.Log("shutdown completed successfully")
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown timed out")
+	}
+}
+
+func TestIdchatOnlineUsersHonorsCursorAndGroupsDevices(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	router.GET("/chat-api/group-chat/socket/online-users", srv.HandleIdchatOnlineUsers)
+
+	now := time.Now().UnixMilli()
+	for i := 0; i < 125; i++ {
+		metaID := fmt.Sprintf("idq1user%03d", i)
+		addServerTestConnection(srv, metaID, ConnTypeApp, now-1000, now-500)
+	}
+	addServerTestConnection(srv, "idq1user000", ConnTypePC, now-900, now-100)
+
+	first := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?cursor=0&size=100")
+	second := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?cursor=100&size=100")
+
+	type response struct {
+		Data struct {
+			Total               int               `json:"total"`
+			Cursor              string            `json:"cursor"`
+			NextCursor          string            `json:"nextCursor"`
+			OnlineWindowSeconds int64             `json:"onlineWindowSeconds"`
+			List                []idchatOnlineRow `json:"list"`
+		} `json:"data"`
+	}
+	var page1, page2 response
+	if err := json.Unmarshal(first.Body.Bytes(), &page1); err != nil {
+		t.Fatalf("decode first page: %v body=%s", err, first.Body.String())
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &page2); err != nil {
+		t.Fatalf("decode second page: %v body=%s", err, second.Body.String())
+	}
+	if page1.Data.Total != 125 || len(page1.Data.List) != 100 || page1.Data.NextCursor != "100" {
+		t.Fatalf("unexpected first page: total=%d list=%d next=%q", page1.Data.Total, len(page1.Data.List), page1.Data.NextCursor)
+	}
+	if page2.Data.Total != 125 || page2.Data.Cursor != "100" || len(page2.Data.List) != 25 || page2.Data.NextCursor != "" {
+		t.Fatalf("unexpected second page: total=%d cursor=%q list=%d next=%q", page2.Data.Total, page2.Data.Cursor, len(page2.Data.List), page2.Data.NextCursor)
+	}
+	if page1.Data.List[0].GlobalMetaId != "idq1user000" || page1.Data.List[0].DeviceCount != 2 {
+		t.Fatalf("first identity was not stable/grouped: %#v", page1.Data.List[0])
+	}
+	if page1.Data.OnlineWindowSeconds != 90 {
+		t.Fatalf("online window: got %d want 90", page1.Data.OnlineWindowSeconds)
+	}
+	if page1.Data.List[99].GlobalMetaId == page2.Data.List[0].GlobalMetaId {
+		t.Fatalf("cursor pages overlap at %q", page2.Data.List[0].GlobalMetaId)
 	}
 }
 

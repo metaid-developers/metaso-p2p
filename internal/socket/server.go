@@ -14,6 +14,8 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
+const defaultHeartbeatTimeout = 90 * time.Second
+
 // Server wraps the Socket.IO server with connection management and push capabilities.
 type Server struct {
 	ioServer            *sio.Server
@@ -147,7 +149,7 @@ func (s *Server) onConnection(args ...any) {
 }
 
 // StartTimeoutCleanup starts a background goroutine that disconnects clients
-// that haven't sent a ping within the timeout period (35s per idchat spec).
+// that haven't sent an application-level heartbeat within the configured timeout.
 func (s *Server) StartTimeoutCleanup() {
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -156,7 +158,7 @@ func (s *Server) StartTimeoutCleanup() {
 		for {
 			select {
 			case <-ticker.C:
-				stale := s.manager.FindStaleConnections(35 * time.Second)
+				stale := s.manager.FindStaleConnections(s.heartbeatTimeout())
 				for _, tc := range stale {
 					log.Printf("[socket] heartbeat timeout: disconnecting metaid=%s socket=%s",
 						tc.MetaId, tc.Socket.Id())
@@ -167,6 +169,13 @@ func (s *Server) StartTimeoutCleanup() {
 			}
 		}
 	}()
+}
+
+func (s *Server) heartbeatTimeout() time.Duration {
+	if s != nil && s.cfg.HeartbeatTimeout > 0 {
+		return s.cfg.HeartbeatTimeout
+	}
+	return defaultHeartbeatTimeout
 }
 
 // StartPushConsumer starts the goroutine that reads from aggregator NotifyChannels
