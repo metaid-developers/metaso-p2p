@@ -13,6 +13,9 @@
 # Address the HTTP server listens on.
 # Env: METASO_P2P_HTTP_ADDR
 httpAddr = ":8080"
+# Optional Go runtime diagnostics. Only loopback addresses are accepted.
+# Env: METASO_P2P_PPROF_ADDR
+pprofAddr = ""
 
 # Health check endpoint path (must start with "/").
 # Env: METASO_P2P_HEALTH_PATH

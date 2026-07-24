@@ -13,6 +13,34 @@ func TestDefaultBotHubAssetBaseURLUsesFileIndexer(t *testing.T) {
 	}
 }
 
+func TestPprofAddrDefaultsDisabledAndLoadsLoopback(t *testing.T) {
+	cfg := Default()
+	if cfg.Service.PprofAddr != "" {
+		t.Fatalf("default pprof address: got %q want disabled", cfg.Service.PprofAddr)
+	}
+
+	t.Setenv("METASO_P2P_PPROF_ADDR", "127.0.0.1:6060")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Service.PprofAddr != "127.0.0.1:6060" {
+		t.Fatalf("pprof address from env: got %q", loaded.Service.PprofAddr)
+	}
+}
+
+func TestValidatePprofAddrRejectsNonLoopback(t *testing.T) {
+	for _, addr := range []string{":6060", "0.0.0.0:6060", "192.0.2.1:6060", "invalid"} {
+		t.Run(addr, func(t *testing.T) {
+			cfg := Default()
+			cfg.Service.PprofAddr = addr
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error for %q", addr)
+			}
+		})
+	}
+}
+
 func TestSocketHeartbeatTimeoutDefaultsAndLoadsFromEnv(t *testing.T) {
 	cfg := Default()
 	if cfg.Socket.HeartbeatTimeout != 90*time.Second {

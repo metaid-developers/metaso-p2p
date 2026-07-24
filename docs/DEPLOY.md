@@ -100,6 +100,7 @@ See `config.example.toml` for the complete reference. The most important ones:
 | Variable | Default | Description |
 |---|---|---|
 | `METASO_P2P_HTTP_ADDR` | `:8080` | Listen address |
+| `METASO_P2P_PPROF_ADDR` | disabled | Optional loopback-only Go runtime diagnostics address, for example `127.0.0.1:6060` |
 | `METASO_P2P_HEALTH_PATH` | `/healthz` | Health check path |
 | `METASO_P2P_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
 | `METASO_P2P_PEBBLE_ENABLED` | `true` | Enable persistent storage |

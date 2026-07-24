@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -268,6 +269,20 @@ func main() {
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	var pprofServer *http.Server
+	if addr := strings.TrimSpace(cfg.Service.PprofAddr); addr != "" {
+		pprofServer = &http.Server{
+			Addr:              addr,
+			Handler:           http.DefaultServeMux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			log.Printf("pprof server listening on %s", addr)
+			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("pprof server error: %v", err)
+			}
+		}()
+	}
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -308,6 +323,11 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown error: %v", err)
+	}
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(ctx); err != nil {
+			log.Printf("pprof shutdown error: %v", err)
+		}
 	}
 	if store != nil {
 		store.Close()

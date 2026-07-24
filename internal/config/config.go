@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -99,6 +100,7 @@ type CacheConfig struct {
 
 type ServiceConfig struct {
 	HTTPAddr        string        `json:"httpAddr"`
+	PprofAddr       string        `json:"pprofAddr"`
 	HealthPath      string        `json:"healthPath"`
 	ShutdownTimeout time.Duration `json:"shutdownTimeout"`
 }
@@ -166,6 +168,7 @@ func Default() Config {
 	return Config{
 		Service: ServiceConfig{
 			HTTPAddr:        ":8080",
+			PprofAddr:       "",
 			HealthPath:      "/healthz",
 			ShutdownTimeout: 10 * time.Second,
 		},
@@ -304,6 +307,7 @@ func Load() (Config, error) {
 	cfg := Default()
 
 	applyStringEnv("METASO_P2P_HTTP_ADDR", &cfg.Service.HTTPAddr)
+	applyStringEnv("METASO_P2P_PPROF_ADDR", &cfg.Service.PprofAddr)
 	applyStringEnv("METASO_P2P_HEALTH_PATH", &cfg.Service.HealthPath)
 	applyDurationEnv("METASO_P2P_SHUTDOWN_TIMEOUT", &cfg.Service.ShutdownTimeout)
 
@@ -420,6 +424,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Service.HTTPAddr) == "" {
 		return errors.New("service.httpAddr is required")
 	}
+	if err := validateLoopbackAddr(c.Service.PprofAddr); err != nil {
+		return fmt.Errorf("service.pprofAddr: %w", err)
+	}
 	if !strings.HasPrefix(c.Service.HealthPath, "/") {
 		return errors.New("service.healthPath must start with '/'")
 	}
@@ -458,6 +465,25 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateBotHomepageV2Backfill(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateLoopbackAddr(addr string) error {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("must use a loopback host")
 	}
 	return nil
 }
@@ -618,8 +644,9 @@ func applyChainRPCEnv(prefix string, target *ChainRPCConfig) {
 
 func (c Config) Summary() string {
 	return fmt.Sprintf(
-		"listen=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t block_index_enabled=%t pebble_enabled=%t profile_enabled=%t groupchat_migration_enabled=%t groupchat_backup_enabled=%t",
+		"listen=%s pprof=%s health=%s socket_enabled=%t socket_path=%s socket_legacy_path=%s socket_room_broadcast_enabled=%t socket_max_connections=%d socket_pc_limit=%d socket_app_limit=%d zmq_enabled=%t block_index_enabled=%t pebble_enabled=%t profile_enabled=%t groupchat_migration_enabled=%t groupchat_backup_enabled=%t",
 		c.Service.HTTPAddr,
+		c.Service.PprofAddr,
 		c.Service.HealthPath,
 		c.Socket.Enabled,
 		c.Socket.PrimaryPath,
