@@ -74,6 +74,25 @@ handler 侧建议：
 - `icon/coverImg/content` 返回 `metafile://` URI，经宿主既有 metafile 链路（file.metaid.io 等）解析下载。
 - 列表最多返回 100 条/页；意图检索建议 `size=5~10`。
 
+## 联调自检（可直连生产验证）
+
+```bash
+# 最新应用（看真实返回结构）
+curl -sS 'https://so.metaid.io/api/metaapp/list?size=5'
+
+# 关键词检索
+curl -sS 'https://so.metaid.io/api/metaapp/list?keyword=番茄钟&size=5'
+
+# detail（任意版本 pinId 均可）
+curl -sS 'https://so.metaid.io/api/metaapp/detail/52ccbd7389ad6ead653290c34e851f4fe901fdac6e31cc089778a5abe39f1629i0'
+
+# forks：该父应用的子代里应包含 Loop AI Homepage
+curl -sS 'https://so.metaid.io/api/metaapp/forks/1cf945a9a33d29fb25de4422c32cc0dc178aa21b26936af06e60a9879e4084e9i0'
+
+# 404 形态
+curl -sS 'https://so.metaid.io/api/metaapp/detail/0000000000000000000000000000000000000000000000000000000000000000i0'
+```
+
 ## 能力标签约定（发布侧配合）
 
 「能显示 simplebuzz」「能发布链上笔记」这类能力检索依赖发布时在 payload `tags` 里声明能力标签（建议直接用协议名，如 `simplebuzz`、`simplenote`）。未声明的应用只能靠 intro 文本兜底命中。IDBots 的发布工具（`bot_browser_publish_app` 链路）生成 metaapp payload 时应把应用支持的协议写进 `tags`。
