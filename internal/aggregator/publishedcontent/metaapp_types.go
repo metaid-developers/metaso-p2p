@@ -9,10 +9,16 @@ import (
 // On-chain payloads use several field-name conventions, so extraction is
 // tolerant: see docs/specs/2026-07-26-metaapp-query-api.md for the key
 // priority table.
+//
+// PinID semantics follow the Bot Homepage v3 section-item rule: `pinId` is
+// the stable source/root PIN of the version chain — the identifier MetaID
+// modify/revoke operations anchor to, and the one clients use to build
+// metaapp:// URIs. `currentPinId` exposes the latest version PIN.
 type MetaAppItem struct {
-	PinID       string `json:"pinId"`
-	SourcePinID string `json:"sourcePinId"`
-	ChainName   string `json:"chainName"`
+	PinID        string `json:"pinId"`
+	SourcePinID  string `json:"sourcePinId"`
+	CurrentPinID string `json:"currentPinId"`
+	ChainName    string `json:"chainName"`
 
 	Title      string   `json:"title"`
 	AppName    string   `json:"appName"`
@@ -75,9 +81,10 @@ func metaAppItemFromRecord(rec *Record) MetaAppItem {
 		indexFile = "index.html"
 	}
 	return MetaAppItem{
-		PinID:       rec.CurrentPinId,
-		SourcePinID: rec.SourcePinId,
-		ChainName:   rec.ChainName,
+		PinID:        rec.SourcePinId,
+		SourcePinID:  rec.SourcePinId,
+		CurrentPinID: rec.CurrentPinId,
+		ChainName:    rec.ChainName,
 
 		Title:      payloadString(payload, "title", "name", "displayName"),
 		AppName:    payloadString(payload, "appName", "appname"),

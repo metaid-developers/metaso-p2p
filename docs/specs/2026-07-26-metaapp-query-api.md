@@ -56,8 +56,9 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
   "data": {
     "items": [
       {
-        "pinId": "current-pin-id",
+        "pinId": "source-pin-id",
         "sourcePinId": "source-pin-id",
+        "currentPinId": "current-pin-id",
         "chainName": "mvc",
         "title": "番茄钟",
         "appName": "pomodoro",
@@ -84,7 +85,8 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
 }
 ```
 
-- `pinId` 为当前最新版本 pinId（`currentPinId`），`sourcePinId` 为版本链根。宿主构造打开地址使用 `metaapp://<pinId>`。
+- `pinId` 为版本链的**稳定根 pin**（source pin，与 `sourcePinId` 相同）——MetaID 的 modify/revoke 都锚定在原始 pin 上，宿主构造打开地址应使用 `metaapp://<pinId>`（即原始 pin）。该语义与 Bot Homepage v3 section item 的 `pinId` 规则一致。`currentPinId` 为版本链最新 pin，可用于判断应用是否有更新；从未修改的应用三者相同。
+- 列表项的 title/intro/tags 等 payload 字段取自版本链**最新**记录，与稳定 pinId 组合返回。
 - `icon/coverImg/content` 原样返回 `metafile://` URI，由调用方按既有 metafile 链路自行解析下载。
 - `createdAt/updatedAt` 为 unix 秒。
 

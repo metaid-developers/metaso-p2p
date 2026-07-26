@@ -10,7 +10,7 @@
   - `GET /api/metaapp/list` — 列表 / 检索（核心）
   - `GET /api/metaapp/detail/:pinId` — 完整 manifest（含 `prompt` 与原始 `payload`）
   - `GET /api/metaapp/forks/:pinId` — 直接子代派生列表
-- 打开应用：用返回的 `pinId` 构造 `metaapp://<pinId>`，走宿主现有 MetaApp 打开链路（IDBots 内即 `bot_browser_open_uri`）；`content`（`metafile://....zip`）+ `indexFile` 也可自行下载渲染
+- 打开应用：用返回的 `pinId` 构造 `metaapp://<pinId>`，走宿主现有 MetaApp 打开链路（IDBots 内即 `bot_browser_open_uri`）；`content`（`metafile://....zip`）+ `indexFile` 也可自行下载渲染。**`pinId` 是版本链的稳定根 pin（source pin）**——MetaID 的 modify/revoke 锚定在原始 pin 上，与 Bot Homepage v3 的 `pinId` 语义一致；`currentPinId` 是最新版本 pin，可用于检测应用是否有新版本。从未修改的应用两者相同。
 - 时间字段为 unix 秒；游标分页用返回的 `nextCursor` 原样回传
 
 ## 典型意图 → 参数速查

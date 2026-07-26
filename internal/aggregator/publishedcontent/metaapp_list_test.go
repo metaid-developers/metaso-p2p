@@ -219,8 +219,8 @@ func TestMetaAppListModifyCollapsesToLatest(t *testing.T) {
 		t.Fatalf("modify should collapse to one item: %+v", result.Items)
 	}
 	item := result.Items[0]
-	if item.PinID != "app-1-b:i0" || item.SourcePinID != "app-1:i0" {
-		t.Fatalf("version fields: %+v", item)
+	if item.PinID != "app-1:i0" || item.CurrentPinID != "app-1-b:i0" || item.SourcePinID != "app-1:i0" {
+		t.Fatalf("pinId should be the stable source pin, currentPinId the latest version: %+v", item)
 	}
 	if item.Title != "New Title" || item.UpdatedAt != 2000 || item.CreatedAt != 1000 {
 		t.Fatalf("payload/timestamps: %+v", item)
@@ -284,7 +284,7 @@ func TestMetaAppDetailResolvesAnyVersion(t *testing.T) {
 		if detail == nil {
 			t.Fatalf("MetaAppDetail(%s): not found", pinID)
 		}
-		if detail.PinID != "app-1-b:i0" || detail.Title != "New" || detail.Prompt != "make it better" {
+		if detail.PinID != "app-1:i0" || detail.CurrentPinID != "app-1-b:i0" || detail.Title != "New" || detail.Prompt != "make it better" {
 			t.Fatalf("MetaAppDetail(%s): %+v", pinID, detail)
 		}
 		if detail.Payload["title"] != "New" {
