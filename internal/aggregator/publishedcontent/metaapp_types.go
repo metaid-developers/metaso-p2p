@@ -36,6 +36,8 @@ type MetaAppItem struct {
 	PublisherGlobalMetaId string `json:"publisherGlobalMetaId"`
 	PublisherMetaId       string `json:"publisherMetaId"`
 	PublisherAddress      string `json:"publisherAddress"`
+	PublisherName         string `json:"publisherName,omitempty"`
+	PublisherAvatarId     string `json:"publisherAvatarId,omitempty"`
 
 	CreatedAt int64 `json:"createdAt"`
 	UpdatedAt int64 `json:"updatedAt"`

@@ -92,7 +92,11 @@ func (a *Aggregator) ListMetaApps(params MetaAppListParams) (*MetaAppListResult,
 		return matches[i].rec.SourcePinId < matches[j].rec.SourcePinId
 	})
 
-	return sliceMetaAppMatches(matches, offset, params.Size, func(s scoredItem) MetaAppItem { return s.item }), nil
+	result := sliceMetaAppMatches(matches, offset, params.Size, func(s scoredItem) MetaAppItem { return s.item })
+	for i := range result.Items {
+		a.enrichMetaAppPublisher(&result.Items[i])
+	}
+	return result, nil
 }
 
 // MetaAppDetail resolves any version pinId to its latest record. Without a
@@ -103,7 +107,9 @@ func (a *Aggregator) MetaAppDetail(pinID, chainName string) (*MetaAppDetail, err
 	if err != nil || rec == nil || rec.Hidden {
 		return nil, err
 	}
-	return metaAppDetailFromRecord(rec), nil
+	detail := metaAppDetailFromRecord(rec)
+	a.enrichMetaAppPublisher(&detail.MetaAppItem)
+	return detail, nil
 }
 
 func (a *Aggregator) findMetaAppRecord(pinID, chainName string) (*Record, error) {
@@ -213,6 +219,9 @@ func (a *Aggregator) ListMetaAppForks(pinID, chainName string, size int, cursor 
 	})
 
 	result := sliceMetaAppMatches(children, offset, size, func(rec *Record) MetaAppItem { return metaAppItemFromRecord(rec) })
+	for i := range result.Items {
+		a.enrichMetaAppPublisher(&result.Items[i])
+	}
 	return result, true, nil
 }
 

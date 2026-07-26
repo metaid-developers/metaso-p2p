@@ -12,10 +12,11 @@ import (
 )
 
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
-	indexMu  sync.Mutex
+	store         *storage.PebbleStore
+	cache         *cache.Cache[[]byte]
+	notifyCh      chan *aggregator.NotifyEvent
+	indexMu       sync.Mutex
+	profileLookup MetaAppProfileLookup
 }
 
 const (

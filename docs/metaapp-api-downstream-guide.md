@@ -60,7 +60,7 @@ tool(
 
 handler 侧建议：
 
-- **裁剪后再喂回 LLM**。完整 item 字段较多，工具返回时建议每条只保留 `pinId / title / appName / intro / tags / runtime / version / updatedAt / publisherGlobalMetaId / forkedFrom`，纯文本或紧凑 JSON 列表（仿 `formatBotBrowserTabs` 风格），控制上下文体积。
+- **裁剪后再喂回 LLM**。完整 item 字段较多，工具返回时建议每条只保留 `pinId / title / appName / intro / tags / runtime / version / updatedAt / publisherName / publisherAvatarId / forkedFrom`（展示发布者时用名字而非 globalMetaId，人类可读性更好），纯文本或紧凑 JSON 列表（仿 `formatBotBrowserTabs` 风格），控制上下文体积。
 - **空结果降级**：`keyword` 无结果时，去掉分词中较弱的一个重试一次；仍无则回报「链上暂无匹配应用」，不要编造。
 - **路由提示词**：在 system prompt 加一条——「用户想找/发现某类应用（而非打开已知应用）时，先调 `search_metaapps`；从候选中选一个后用 `bot_browser_open_uri` 以 `metaapp://<pinId>` 打开；用户问某应用的派生/二创时用 `search_metaapps` 的 forks 模式」。
 - 「最近 N 天」类意图由工具实现把 `sinceDays` 换算成 `since = now - N*86400`。
@@ -72,6 +72,7 @@ handler 侧建议：
 - `40400`：detail/forks 目标不存在（或已被 revoke），按「应用不存在或已删除」处理。
 - forks 只返直接子代，不递归整棵树。
 - `icon/coverImg/content` 返回 `metafile://` URI，经宿主既有 metafile 链路（file.metaid.io 等）解析下载。
+- 发布者信息除三个身份字段外还带 `publisherName`（名字）和 `publisherAvatarId`（头像 pinId，同样走 metafile 链路取内容），可直接用于面向人类用户的展示；发布者无资料时字段缺省。
 - 列表最多返回 100 条/页；意图检索建议 `size=5~10`。
 
 ## 联调自检（可直连生产验证）

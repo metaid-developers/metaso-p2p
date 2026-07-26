@@ -384,3 +384,70 @@ func TestMetaAppTimeIndexBackfillOnInit(t *testing.T) {
 		t.Fatalf("backfilled record should be listed: %+v", result.Items)
 	}
 }
+
+type fakeMetaAppProfileLookup struct {
+	byGlobal map[string]*MetaAppProfileSnapshot
+}
+
+func (f *fakeMetaAppProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*MetaAppProfileSnapshot, error) {
+	return f.byGlobal[globalMetaId], nil
+}
+
+func (f *fakeMetaAppProfileLookup) LookupByMetaId(string) (*MetaAppProfileSnapshot, error) {
+	return nil, nil
+}
+
+func (f *fakeMetaAppProfileLookup) LookupByAddress(string) (*MetaAppProfileSnapshot, error) {
+	return nil, nil
+}
+
+func TestMetaAppListEnrichesPublisherProfile(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+	agg.SetProfileLookup(&fakeMetaAppProfileLookup{byGlobal: map[string]*MetaAppProfileSnapshot{
+		"gid-app-1:i0": {Name: "Alice", AvatarId: "avatar-1:i0"},
+	}})
+
+	mustProcessMetaApp(t, agg, "app-1:i0", 1000, `{"title":"A1"}`)
+	mustProcessMetaApp(t, agg, "app-2:i0", 2000, `{"title":"A2"}`)
+
+	result, err := agg.ListMetaApps(MetaAppListParams{})
+	if err != nil {
+		t.Fatalf("ListMetaApps: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("len: got %d want 2", len(result.Items))
+	}
+	byPin := map[string]MetaAppItem{}
+	for _, item := range result.Items {
+		byPin[item.PinID] = item
+	}
+	if got := byPin["app-1:i0"].PublisherName; got != "Alice" {
+		t.Fatalf("PublisherName: got %q want Alice", got)
+	}
+	if got := byPin["app-1:i0"].PublisherAvatarId; got != "avatar-1:i0" {
+		t.Fatalf("PublisherAvatarId: got %q want avatar-1:i0", got)
+	}
+	// Unknown publisher: identity fields present, profile fields empty, no error.
+	if got := byPin["app-2:i0"].PublisherName; got != "" {
+		t.Fatalf("unknown publisher should have empty name, got %q", got)
+	}
+}
+
+func TestMetaAppDetailEnrichesPublisherProfile(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+	agg.SetProfileLookup(&fakeMetaAppProfileLookup{byGlobal: map[string]*MetaAppProfileSnapshot{
+		"gid-app-1:i0": {Name: "Alice", AvatarId: "avatar-1:i0"},
+	}})
+
+	mustProcessMetaApp(t, agg, "app-1:i0", 1000, `{"title":"A1"}`)
+
+	detail, err := agg.MetaAppDetail("app-1:i0", "")
+	if err != nil || detail == nil {
+		t.Fatalf("MetaAppDetail: %v %+v", err, detail)
+	}
+	if detail.PublisherName != "Alice" || detail.PublisherAvatarId != "avatar-1:i0" {
+		t.Fatalf("detail publisher enrichment: %+v", detail)
+	}
+}

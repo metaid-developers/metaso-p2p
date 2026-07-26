@@ -99,6 +99,7 @@ func main() {
 		}
 		var publishedAgg *publishedcontent.Aggregator
 		publishedCandidate := &publishedcontent.Aggregator{}
+		publishedCandidate.SetProfileLookup(publishedcontent.NewUserInfoLookupAdapter(userinfoAgg))
 		if err := aggRegistry.Register(publishedCandidate); err != nil {
 			log.Printf("WARNING: publishedcontent aggregator init failed: %v", err)
 		} else {

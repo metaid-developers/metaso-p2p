@@ -75,6 +75,8 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
         "publisherGlobalMetaId": "...",
         "publisherMetaId": "...",
         "publisherAddress": "...",
+        "publisherName": "Alice",
+        "publisherAvatarId": "<avatar-pin-id>i0",
         "createdAt": 1768284841,
         "updatedAt": 1768284841
       }
@@ -88,6 +90,7 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
 - `pinId` 为版本链的**稳定根 pin**（source pin，与 `sourcePinId` 相同）——MetaID 的 modify/revoke 都锚定在原始 pin 上，宿主构造打开地址应使用 `metaapp://<pinId>`（即原始 pin）。该语义与 Bot Homepage v3 section item 的 `pinId` 规则一致。`currentPinId` 为版本链最新 pin，可用于判断应用是否有更新；从未修改的应用三者相同。
 - 列表项的 title/intro/tags 等 payload 字段取自版本链**最新**记录，与稳定 pinId 组合返回。
 - `icon/coverImg/content` 原样返回 `metafile://` URI，由调用方按既有 metafile 链路自行解析下载。
+- `publisherName` / `publisherAvatarId` 来自 userinfo 聚合的发布者资料补全（头像 pinId，可经 metafile 链路取内容）；发布者无资料时两个字段缺省。
 - `createdAt/updatedAt` 为 unix 秒。
 
 ## API 2: MetaAPP 详情
