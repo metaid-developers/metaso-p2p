@@ -29,7 +29,10 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(Namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 1)
-	return a.ensureHomepageMetaAppGlobalIndexes()
+	if err := a.ensureHomepageMetaAppGlobalIndexes(); err != nil {
+		return err
+	}
+	return a.ensureMetaAppTimeIndexes()
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
@@ -50,9 +53,8 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 	return nil, nil
 }
 
-func (a *Aggregator) RegisterRoutes(_ *gin.RouterGroup) {
-	// Task 3 only builds the internal aggregation surface. Task 7 wires public
-	// router exposure.
+func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
+	registerMetaAppRoutes(a, router)
 }
 
 func (a *Aggregator) HomepageMetaAppsCanonicalGlobalReady() (bool, error) {

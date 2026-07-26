@@ -14,7 +14,9 @@ const (
 	keyByGlobal                            = "by_global:"
 	keyByMetaId                            = "by_metaid:"
 	keyByAddress                           = "by_address:"
+	keyByTime                              = "by_time:"
 	keyHomepageMetaAppsGlobalIdentityState = "homepage_metaapps_global_identity_state:v1"
+	keyMetaAppTimeIndexState               = "metaapp_time_index_state:v1"
 )
 
 func recordKey(chainName, protocolPath, sourcePinId string) []byte {
@@ -43,6 +45,31 @@ func identityIndexKey(prefix, protocolPath, identity string, sortKey int64, chai
 
 func identityIndexPrefix(prefix, protocolPath, identity string) []byte {
 	return []byte(prefix + protocolPath + ":" + identity + ":")
+}
+
+// byTimeKey builds the metaapp-only reverse-time index key. Byte order is
+// newest-first so ScanPrefix over byTimeProtocolPrefix yields records in
+// descending sortTimestamp order without an in-memory sort for the common
+// no-keyword feed.
+func byTimeKey(protocolPath string, sortKey int64, chainName, sourcePinId string) []byte {
+	return []byte(keyByTime + protocolPath + ":" + invertedTimestamp(sortKey) + ":" + chainName + ":" + sourcePinId)
+}
+
+func byTimeProtocolPrefix(protocolPath string) []byte {
+	return []byte(keyByTime + protocolPath + ":")
+}
+
+func parseByTimeIndexKey(key, prefix []byte) (chainName, sourcePinId string, ok bool) {
+	rest := strings.TrimPrefix(string(key), string(prefix))
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
+func metaAppTimeIndexStateKey() []byte {
+	return []byte(keyMetaAppTimeIndexState)
 }
 
 func homepageMetaAppsGlobalIdentityStateKey() []byte {
@@ -123,6 +150,7 @@ func (a *Aggregator) saveRecord(rec *Record, previous *Record) error {
 	}
 	if previous != nil {
 		a.deleteIdentityIndexes(previous)
+		a.deleteTimeIndex(previous)
 	}
 	raw, err := json.Marshal(rec)
 	if err != nil {
@@ -134,7 +162,10 @@ func (a *Aggregator) saveRecord(rec *Record, previous *Record) error {
 	if err := a.mapPinToSource(rec.ChainName, rec.CurrentPinId, rec.SourcePinId); err != nil {
 		return err
 	}
-	return a.writeIdentityIndexes(rec)
+	if err := a.writeIdentityIndexes(rec); err != nil {
+		return err
+	}
+	return a.writeTimeIndex(rec)
 }
 
 func (a *Aggregator) mapPinToSource(chainName, pinId, sourcePinId string) error {
@@ -175,6 +206,24 @@ func (a *Aggregator) deleteIdentityIndexes(rec *Record) {
 	if rec.PublisherAddress != "" {
 		_ = a.store.Delete(Namespace, byAddressKey(rec.ProtocolPath, rec.PublisherAddress, sortKey, rec.ChainName, rec.SourcePinId))
 	}
+}
+
+// writeTimeIndex maintains the metaapp-only reverse-time index. Hidden
+// (revoked) records are excluded so the index only covers listable apps;
+// deleteTimeIndex is always attempted for metaapp records because the
+// previous version may have been visible.
+func (a *Aggregator) writeTimeIndex(rec *Record) error {
+	if rec.ProtocolPath != PathMetaApp || rec.Hidden {
+		return nil
+	}
+	return a.store.Set(Namespace, byTimeKey(rec.ProtocolPath, rec.sortTimestamp(), rec.ChainName, rec.SourcePinId), []byte{})
+}
+
+func (a *Aggregator) deleteTimeIndex(rec *Record) {
+	if rec.ProtocolPath != PathMetaApp {
+		return
+	}
+	_ = a.store.Delete(Namespace, byTimeKey(rec.ProtocolPath, rec.sortTimestamp(), rec.ChainName, rec.SourcePinId))
 }
 
 func (r *Record) sortTimestamp() int64 {
