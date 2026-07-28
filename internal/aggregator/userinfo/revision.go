@@ -113,6 +113,9 @@ func (a *Aggregator) saveProfileWithInfoRevision(profile *UserProfile, metaid, p
 		return err
 	}
 	a.cacheLocalProfile(profile)
+	// Same persistence-funnel contract as saveProfileAtKey: keep the MetaID
+	// search corpus in sync with the stored profile.
+	a.upsertSearchDoc(profile)
 	return nil
 }
 

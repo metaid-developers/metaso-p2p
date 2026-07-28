@@ -70,6 +70,8 @@ type Aggregator struct {
 	globalMetaIDPrefixMu sync.Mutex
 	profilesByIdentity   sync.Map
 	onProfileUpdated     func(string)
+	searchDocsMu         sync.RWMutex
+	searchDocs           map[string]*metaIDSearchDoc
 }
 
 const (
@@ -91,6 +93,9 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.scanProfiles = a.defaultScanProfiles
 	if err := a.warmLocalProfileCache(); err != nil {
 		return fmt.Errorf("warm local user profile cache: %w", err)
+	}
+	if err := a.warmSearchDocs(); err != nil {
+		return fmt.Errorf("warm metaid search docs: %w", err)
 	}
 	a.configureRemoteProfileLookupFromEnv()
 	return nil
@@ -202,6 +207,7 @@ func (a *Aggregator) handlePin(pin *aggregator.PinInscription, confirmed bool) (
 			if err := a.indexConfirmedGlobalMetaIDRoot(profile, pin); err != nil {
 				return nil, err
 			}
+			a.noteSearchDocCreated(profile.MetaID, normalisePinTimestampMillis(pin.Timestamp)/1000)
 		}
 		a.notifyProfileUpdated(profile)
 		return nil, nil
@@ -263,6 +269,8 @@ func (a *Aggregator) handlePin(pin *aggregator.PinInscription, confirmed bool) (
 	} else if err := a.saveProfile(profile); err != nil {
 		return nil, err
 	}
+	a.noteSearchDocRevision(profile.MetaID, normalisePinTimestampMillis(pin.Timestamp))
+	a.backfillSearchDocCreated(profile.MetaID, profile.GlobalMetaID)
 
 	// Invalidate cache for this user
 	a.cache.InvalidateByPrefix("profile:" + metaid)
@@ -320,6 +328,7 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/info/metaid/:metaid", a.handleMetaIdInfo)
 	router.GET("/info/globalmetaid", a.handleGlobalMetaIDPrefix)
 	router.GET("/info/globalmetaid/:globalMetaId", a.handleGlobalMetaIdInfo)
+	registerMetaIDSearchRoutes(a, router)
 }
 
 // The /info/* endpoints use code=1 for success and code=40400/40000 for errors
@@ -571,6 +580,10 @@ func (a *Aggregator) saveProfileAtKey(key string, profile *UserProfile) error {
 		return err
 	}
 	a.cacheLocalProfile(profile)
+	// Single persistence funnel: every write path (block pins, mempool,
+	// backfill, remote completion) lands here, so the MetaID search corpus
+	// stays in sync with the stored profile.
+	a.upsertSearchDoc(profile)
 	return nil
 }
 
