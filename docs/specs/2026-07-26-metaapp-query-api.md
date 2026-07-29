@@ -1,51 +1,51 @@
-# MetaAPP 聚合查询 API 需求
+# MetaApp Aggregated Query API Requirements
 
-## 背景
+## Background
 
-AI Agent 浏览器（宿主 IDBots）需要在左侧 AI 对话条中支持"用自然语言找链上 MetaAPP"：用户说"帮我找最近七天的小游戏""打开某个 MetaID 最新的 MetaAPP""展示基于某个应用派生出的其他应用"，宿主 LLM 把意图翻译成结构化检索参数，调用聚合 API 拿到 5~10 个候选，再由 LLM 从中选择一个以 `metaapp://<pinId>` 打开。
+The AI agent browser (host: IDBots) needs to support "finding on-chain MetaApps in natural language" in its left-hand AI chat rail: a user says "find mini-games from the last seven days", "open the latest MetaApp by a given MetaID", or "show the apps derived from this one". The host LLM translates the intent into structured query parameters, calls the aggregated API to get 5–10 candidates, then picks one and opens it as `metaapp://<pinId>`.
 
-metaso-p2p 的 `publishedcontent` 聚合器已经对 `/protocols/metaapp` 完成实时索引（四链扫链 + MAN 历史回填 + create/modify/revoke 版本折叠 + 发布者身份索引），payload 完整存于 `Record.PayloadJSON`。本需求是在其上补齐公开查询 API（即 publishedcontent 规划中的 "Task 7 wires public router exposure"）。索引层零改动，不新增任何配置项。
+metaso-p2p's `publishedcontent` aggregator already indexes `/protocols/metaapp` in real time (four-chain scanning + MAN historical backfill + create/modify/revoke version folding + publisher identity indexes), with the full payload stored in `Record.PayloadJSON`. This requirement adds the public query API on top of it (the "Task 7 wires public router exposure" item in the publishedcontent plan). Zero indexing-layer changes; no new configuration items.
 
-接口风格遵循 metaso-p2p 主体约定：`{code, data, message, processingTime}` 外层包裹，成功 `code=0`，业务错误码只用 `40000/40400/50000`，HTTP 恒 200。列表分页使用 opaque `nextCursor`。
+The API style follows the metaso-p2p house convention: a `{code, data, message, processingTime}` envelope, `code=0` on success, business error codes limited to `40000/40400/50000`, HTTP status always 200. List pagination uses an opaque `nextCursor`.
 
-## 总体原则
+## General Principles
 
-- 聚合端只做声明式数据聚合：索引、折叠、字段归一、过滤、排序。不做"这个应用好不好/安不安全"之类的主观业务裁决。
-- 语义理解发生在宿主 LLM 层：聚合端提供关键词/标签/时间/作者/派生关系的结构化检索，"哪个应用最符合意图"由宿主 LLM 从候选中选择。
-- 默认列表只返回 latest、非 revoke、`disabled != true` 的应用；这是对链上声明状态的筛选。
-- 检索语料为 `title/appName/intro/tags`，**不含 `prompt`**（AI 生成提示词太长且噪声大，仅在 detail 返回）。
-- 向量/语义检索 v1 不做。若未来应用量级增长导致关键词召回不足，再扩展（方向：embedding 走可配置外部 HTTP 服务、向量存 Pebble namespace、内存余弦，做成可选模块，不引入重外部依赖）。
+- The aggregator only does declarative data aggregation: indexing, folding, field normalization, filtering, sorting. It makes no subjective judgments such as "is this app good/safe".
+- Semantic understanding lives in the host LLM layer: the aggregator provides structured retrieval by keyword/tag/time/publisher/derivation; "which app best matches the intent" is decided by the host LLM from the candidates.
+- The default list only returns latest, non-revoked, `disabled != true` apps; this is a filter over on-chain declared state.
+- The search corpus is `title/appName/intro/tags` and **excludes `prompt`** (AI generation prompts are too long and noisy; only returned by detail).
+- No vector/semantic search in v1. If keyword recall becomes insufficient as the app count grows, extend later (direction: embeddings via a configurable external HTTP service, vectors in a Pebble namespace, in-memory cosine similarity, as an optional module with no heavy external dependencies).
 
-## API 1: MetaAPP 列表 / 检索
+## API 1: MetaApp List / Search
 
 ### Endpoint
 
 `GET /api/metaapp/list`
 
-### 用途
+### Purpose
 
-MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列表；配合参数覆盖："最近 N 天的 X 类应用"（keyword+since）、"某 MetaID/地址发布的应用"（publisher）、"支持某协议的应用"（tag）等场景。
+The global MetaApp feed and intent search. With no filters it is the "latest apps" list; with parameters it covers scenarios such as "category X apps from the last N days" (keyword+since), "apps published by a MetaID/address" (publisher), and "apps supporting a protocol" (tag).
 
 ### Query Parameters
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `keyword` | string | 否 | - | 空格分词，AND 语义，大小写不敏感子串匹配；语料 `title/appName/intro/tags` |
-| `tag` | string | 否 | - | 逗号分隔多个标签，任一命中；对 payload `tags` 精确匹配（大小写不敏感） |
-| `chainName` | string | 否 | - | 按应用所在链筛选，如 `mvc`、`btc`、`doge`、`opcat` |
-| `runtime` | string | 否 | - | contains 匹配（大小写不敏感），`browser` 可命中 `browser/android` |
-| `publisher` | string | 否 | - | 对发布者 `globalMetaId/metaId/address` 三字段任一命中（大小写不敏感）；配 `size=1` 即"该用户最新应用" |
-| `since` | number | 否 | - | unix 秒，只返回 `updatedAt >= since` 的应用 |
-| `until` | number | 否 | - | unix 秒，只返回 `updatedAt <= until` 的应用 |
-| `includeDisabled` | number | 否 | `0` | `1` 时包含 payload 声明 `disabled=true` 的应用（revoke 的恒不返回） |
-| `size` | number | 否 | `20` | 每页数量，上限 100 |
-| `cursor` | string | 否 | - | opaque 游标，非法游标返回 40000 |
+| `keyword` | string | No | - | Whitespace-tokenized, AND semantics, case-insensitive substring match; corpus `title/appName/intro/tags` |
+| `tag` | string | No | - | Comma-separated tags, any hit; exact match against payload `tags` (case-insensitive) |
+| `chainName` | string | No | - | Filter by the chain hosting the app, e.g. `mvc`, `btc`, `doge`, `opcat` |
+| `runtime` | string | No | - | Contains match (case-insensitive); `browser` matches `browser/android` |
+| `publisher` | string | No | - | Matches any of the publisher's `globalMetaId/metaId/address` (case-insensitive); with `size=1` it means "this user's latest app" |
+| `since` | number | No | - | Unix seconds; only apps with `updatedAt >= since` |
+| `until` | number | No | - | Unix seconds; only apps with `updatedAt <= until` |
+| `includeDisabled` | number | No | `0` | When `1`, include apps whose payload declares `disabled=true` (revoked apps are never returned) |
+| `size` | number | No | `20` | Page size, max 100 |
+| `cursor` | string | No | - | Opaque cursor; an invalid cursor returns 40000 |
 
-### 排序
+### Sorting
 
-- 有 `keyword`：先按相关性分降序（tag 命中 ×3 + title/appName 命中 ×2 + intro 命中 ×1，按命中的分词数累计），再按 `updatedAt` 降序。
-- 无 `keyword`：按 `updatedAt` 降序。
-- 并列兜底：`chainName`、`pinId` 字典序。
+- With `keyword`: relevance score descending first (tag hit ×3 + title/appName hit ×2 + intro hit ×1, accumulated per matched token), then `updatedAt` descending.
+- Without `keyword`: `updatedAt` descending.
+- Tie-breakers: `chainName`, then `pinId` lexicographic order.
 
 ### Response
 
@@ -87,31 +87,31 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
 }
 ```
 
-- `pinId` 为版本链的**稳定根 pin**（source pin，与 `sourcePinId` 相同）——MetaID 的 modify/revoke 都锚定在原始 pin 上，宿主构造打开地址应使用 `metaapp://<pinId>`（即原始 pin）。该语义与 Bot Homepage v3 section item 的 `pinId` 规则一致。`currentPinId` 为版本链最新 pin，可用于判断应用是否有更新；从未修改的应用三者相同。
-- 列表项的 title/intro/tags 等 payload 字段取自版本链**最新**记录，与稳定 pinId 组合返回。
-- `icon/coverImg/content` 原样返回 `metafile://` URI，由调用方按既有 metafile 链路自行解析下载。
-- `publisherName` / `publisherAvatarId` 来自 userinfo 聚合的发布者资料补全（头像 pinId，可经 metafile 链路取内容）；发布者无资料时两个字段缺省。
-- `createdAt/updatedAt` 为 unix 秒。
+- `pinId` is the version chain's **stable root pin** (source pin, identical to `sourcePinId`) — MetaID modify/revoke operations anchor to the original pin, so hosts should build open URLs as `metaapp://<pinId>` (the original pin). This matches the `pinId` semantics of Bot Homepage v3 section items. `currentPinId` is the latest version pin and can be used to detect app updates; for never-modified apps all three are equal.
+- List-item payload fields (title/intro/tags, etc.) come from the version chain's **latest** record, combined with the stable pinId.
+- `icon/coverImg/content` are returned as raw `metafile://` URIs; callers resolve and download them via the existing metafile chain.
+- `publisherName` / `publisherAvatarId` come from userinfo profile enrichment (avatar pinId, downloadable via the metafile chain); both fields are absent when the publisher has no profile.
+- `createdAt/updatedAt` are unix seconds.
 
-## API 2: MetaAPP 详情
+## API 2: MetaApp Detail
 
 ### Endpoint
 
 `GET /api/metaapp/detail/:pinId`
 
-### 用途
+### Purpose
 
-打开应用前获取完整 manifest。`:pinId` 接受版本链上任意版本 pinId（自动解析到最新记录）。
+Fetch the complete manifest before opening an app. `:pinId` accepts any version pinId on the chain (automatically resolved to the latest record).
 
 ### Query Parameters
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `chainName` | string | 否 | - | 提供则直查；不提供则跨链扫描解析 |
+| `chainName` | string | No | - | Direct lookup when provided; otherwise resolved via a cross-chain scan |
 
 ### Response
 
-`data` 为列表项字段超集，额外包含：
+`data` is a superset of the list-item fields, plus:
 
 ```json
 {
@@ -119,65 +119,65 @@ MetaAPP 的全局 feed 与意图检索。无过滤条件时即"最新应用"列�
   "message": "ok",
   "data": {
     "pinId": "...",
-    "...": "（同列表项全部字段）",
+    "...": "(all list-item fields)",
     "prompt": "You are an AI...",
-    "payload": { "（链上原始 payload JSON）" }
+    "payload": { "(raw on-chain payload JSON)" }
   }
 }
 ```
 
-应用不存在返回 `code=40400`。
+A non-existent app returns `code=40400`.
 
-## API 3: MetaAPP 派生列表
+## API 3: MetaApp Forks
 
 ### Endpoint
 
 `GET /api/metaapp/forks/:pinId`
 
-### 用途
+### Purpose
 
-"展示基于某个 MetaAPP 派生出的其他 MetaAPP"：返回 payload 中 `forkedfrom`/`forkedFrom` 指向该应用版本链的直接子代。子代引用父代任意版本 pinId 均可聚簇到同一版本链。fork 的 fork 不在 v1 递归，调用方可对子代再次调用本接口。
+"Show the apps derived from this MetaApp": returns direct children whose payload `forkedfrom`/`forkedFrom` points at this app's version chain. A child referencing any version pinId of the parent clusters into the same version chain. Forks of forks are not recursed in v1; callers may call this endpoint again on a child.
 
 ### Query Parameters
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `size` | number | 否 | `20` | 每页数量，上限 100 |
-| `cursor` | string | 否 | - | opaque 游标 |
+| `size` | number | No | `20` | Page size, max 100 |
+| `cursor` | string | No | - | Opaque cursor |
 
-排序：`createdAt` 降序。父应用不存在返回 `code=40400`。响应结构同 API 1（`items/nextCursor/hasMore`）。
+Sorting: `createdAt` descending. A non-existent parent returns `code=40400`. The response shape is the same as API 1 (`items/nextCursor/hasMore`).
 
-## MetaAppItem 字段归一规则
+## MetaAppItem Field Normalization Rules
 
-链上 payload 字段名存在多套写法，聚合端统一按下表归一（按优先级取第一个非空字符串）：
+On-chain payload field names come in several spellings; the aggregator normalizes them as follows (first non-empty string wins by priority):
 
-| 输出字段 | payload 提取键 |
+| Output field | Payload keys |
 | --- | --- |
 | `title` | `title` → `name` → `displayName` |
 | `appName` | `appName` → `appname` |
 | `intro` | `intro` → `description` → `summary` |
-| `tags` | `tags`（数组元素字符串化） |
-| `icon` / `coverImg` / `runtime` / `version` / `content` | 同名键 |
-| `indexFile` | `indexFile`，缺省 `index.html` |
+| `tags` | `tags` (array elements stringified) |
+| `icon` / `coverImg` / `runtime` / `version` / `content` | same-name key |
+| `indexFile` | `indexFile`, defaults to `index.html` |
 | `forkedFrom` | `forkedfrom` → `forkedFrom` |
-| `disabled` | `disabled`（容忍 `true` 与 `"true"`） |
+| `disabled` | `disabled` (tolerates `true` and `"true"`) |
 
-## 错误码
+## Error Codes
 
-| code | 场景 |
+| code | Scenario |
 | --- | --- |
-| 40000 | 参数非法（size/since/until/includeDisabled 无法解析、cursor 非法） |
-| 40400 | detail/forks 的目标应用不存在 |
-| 50000 | 聚合内部错误 |
+| 40000 | Invalid parameters (size/since/until/includeDisabled unparseable, invalid cursor) |
+| 40400 | Target app of detail/forks does not exist |
+| 50000 | Internal aggregation error |
 
-## 协议能力声明约定（发布侧配合）
+## Protocol Capability Declaration Convention (Publisher-Side Cooperation)
 
-"能显示 simplebuzz 的 MetaAPP""能发布链上笔记的应用"这类能力检索，依赖发布方在 payload `tags` 中声明能力标签（建议直接使用协议名，如 `simplebuzz`、`simplenote`）。聚合端不做 payload 内容推断；未声明能力的应用只能靠 `intro` 文本关键词兜底命中。
+Capability searches like "a MetaApp that can display simplebuzz" or "an app that can publish on-chain notes" depend on publishers declaring capability tags in payload `tags` (recommended: use protocol names directly, e.g. `simplebuzz`, `simplenote`). The aggregator does not infer capabilities from payload content; undeclared capabilities can only fall back to keyword hits in `intro` text. When IDBots' publish tool (the `bot_browser_publish_app` chain) generates a metaapp payload, it should write the protocols the app supports into `tags`.
 
-## 明确不做（v1）
+## Explicitly Out of Scope (v1)
 
-- 向量/语义检索（见"总体原则"）。
-- tag/forkedFrom 二级索引（当前应用量级下，时间索引扫描 + 内存过滤足够；量级增长后再加）。
-- icon/cover 等资产的 URL 改写（保持 `metafile://` 原样返回）。
-- forks 递归整棵派生树。
-- 新增配置项。
+- Vector/semantic search (see "General Principles").
+- Secondary indexes for tag/forkedFrom (at the current app volume, time-index scan + in-memory filtering is sufficient; add when the volume grows).
+- URL rewriting for assets such as icon/cover (returned as raw `metafile://`).
+- Recursing the full derivation tree in forks.
+- New configuration items.
