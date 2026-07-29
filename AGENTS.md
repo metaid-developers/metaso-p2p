@@ -1,3 +1,7 @@
+## Documentation and Comment Language
+
+- Write all documentation (specs, guides, READMEs, and any other Markdown files) and all code comments in English, regardless of the conversation language.
+
 ## Commit and Merge Rules
 
 - If you notice unfamiliar or unrelated file changes, continue working and stay focused on your own scoped edits unless the user asks you to inspect them.
