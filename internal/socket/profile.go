@@ -29,10 +29,11 @@ func (s *Server) hydrateOnlineEntries(items []OnlineEntry) []OnlineEntry {
 	if s == nil || s.profileLookup == nil {
 		return items
 	}
+	// Enrich every online identity regardless of connection type (pc or app).
+	// The legacy idchat behavior resolved name/avatar for all connection types,
+	// since a device type only governs per-type connection caps, not presence
+	// display.
 	for i := range items {
-		if items[i].Type != string(ConnTypeApp) {
-			continue
-		}
 		profile := s.lookupPresenceProfile(items[i].MetaId)
 		if profile == nil {
 			continue

@@ -1147,6 +1147,87 @@ func TestIdchatOnlineUsersHonorsCursorAndGroupsDevices(t *testing.T) {
 	}
 }
 
+// TestIdchatOnlineUsersWithUserInfoEnrichesAllConnectionTypes verifies two
+// behaviors that mirror the legacy idchat contract:
+//   - withUserInfo defaults to false: rows carry no userInfo even when a lookup
+//     is wired.
+//   - withUserInfo=true enriches BOTH pc and app connections (the legacy code
+//     never filtered profile enrichment by device type).
+func TestIdchatOnlineUsersWithUserInfoEnrichesAllConnectionTypes(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	router.GET("/chat-api/group-chat/socket/online-users", srv.HandleIdchatOnlineUsers)
+
+	const (
+		pcGlobal  = "idq1wlsx9q3lf45uz3n654lnya8kplj6lt2vuwjgy5"
+		appGlobal = "idq1zzz000000000000000000000000000000000000"
+	)
+	srv.SetProfileLookup(&fakePresenceProfileLookup{
+		byGlobalMeta: map[string]*ProfileSnapshot{
+			pcGlobal:  {GlobalMetaId: pcGlobal, Name: "PC User"},
+			appGlobal: {GlobalMetaId: appGlobal, Name: "App User"},
+		},
+	})
+
+	now := time.Now().UnixMilli()
+	addServerTestConnection(srv, pcGlobal, ConnTypePC, now-1000, now-500)
+	addServerTestConnection(srv, appGlobal, ConnTypeApp, now-1000, now-500)
+
+	type response struct {
+		Data struct {
+			List []idchatOnlineRow `json:"list"`
+		} `json:"data"`
+	}
+
+	find := func(rows []idchatOnlineRow, global string) *idchatOnlineRow {
+		for i := range rows {
+			if rows[i].GlobalMetaId == global {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+
+	// Default (no withUserInfo) -> no userInfo for any row.
+	def := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?cursor=0&size=100")
+	var defResp response
+	if err := json.Unmarshal(def.Body.Bytes(), &defResp); err != nil {
+		t.Fatalf("decode default page: %v body=%s", err, def.Body.String())
+	}
+	for _, row := range defResp.Data.List {
+		if row.UserInfo != nil {
+			t.Fatalf("default request should omit userInfo, got %#v for %s", row.UserInfo, row.GlobalMetaId)
+		}
+	}
+
+	// withUserInfo=true -> both pc and app rows are enriched with names.
+	enabled := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?cursor=0&size=100&withUserInfo=true")
+	var enabledResp response
+	if err := json.Unmarshal(enabled.Body.Bytes(), &enabledResp); err != nil {
+		t.Fatalf("decode enriched page: %v body=%s", err, enabled.Body.String())
+	}
+	pcRow := find(enabledResp.Data.List, pcGlobal)
+	appRow := find(enabledResp.Data.List, appGlobal)
+	if pcRow == nil || pcRow.UserInfo == nil || pcRow.UserInfo.Name != "PC User" {
+		t.Fatalf("pc connection should be enriched, got %#v", pcRow)
+	}
+	if appRow == nil || appRow.UserInfo == nil || appRow.UserInfo.Name != "App User" {
+		t.Fatalf("app connection should be enriched, got %#v", appRow)
+	}
+
+	// withUserInfo=false explicitly -> no userInfo (matches legacy default contract).
+	off := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?cursor=0&size=100&withUserInfo=false")
+	var offResp response
+	if err := json.Unmarshal(off.Body.Bytes(), &offResp); err != nil {
+		t.Fatalf("decode disabled page: %v body=%s", err, off.Body.String())
+	}
+	for _, row := range offResp.Data.List {
+		if row.UserInfo != nil {
+			t.Fatalf("withUserInfo=false should omit userInfo, got %#v for %s", row.UserInfo, row.GlobalMetaId)
+		}
+	}
+}
+
 // TestConcurrentManagerAccess verifies concurrent access to the connection manager.
 func TestConcurrentManagerAccess(t *testing.T) {
 	cm := NewConnectionManager(3, 3)

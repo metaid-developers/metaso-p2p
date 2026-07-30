@@ -116,7 +116,13 @@ func (s *Server) HandleIdchatOnlineUsers(c *gin.Context) {
 		offset = 0
 	}
 
-	allRows := s.onlineRowsForIDChat()
+	// withUserInfo controls whether name/avatar profile info is attached to each
+	// row. It defaults to false to match the legacy idchat contract; callers opt
+	// in with withUserInfo=true. When false, presence fields are still returned
+	// but userInfo is omitted.
+	withUserInfo, _ := strconv.ParseBool(strings.TrimSpace(c.DefaultQuery("withUserInfo", "false")))
+
+	allRows := s.onlineRowsForIDChat(withUserInfo)
 	total := len(allRows)
 	start := offset
 	if start > total {
@@ -204,7 +210,7 @@ func (s *Server) HandleGlobalPresenceByGlobalMetaId(c *gin.Context) {
 	})
 }
 
-func (s *Server) onlineItemsForIDChat() []OnlineEntry {
+func (s *Server) onlineItemsForIDChat(withUserInfo bool) []OnlineEntry {
 	scope := "local"
 	reader := s.presenceGlobalReader()
 	if reader != nil && reader.Enabled() && strings.ToLower(strings.TrimSpace(reader.DefaultScope())) == "global" {
@@ -219,11 +225,15 @@ func (s *Server) onlineItemsForIDChat() []OnlineEntry {
 	if items == nil {
 		items = []OnlineEntry{}
 	}
+	if !withUserInfo {
+		// Presence rows only; skip the (potentially remote) profile lookups.
+		return items
+	}
 	return s.hydrateOnlineEntries(items)
 }
 
-func (s *Server) onlineRowsForIDChat() []idchatOnlineRow {
-	items := s.onlineItemsForIDChat()
+func (s *Server) onlineRowsForIDChat(withUserInfo bool) []idchatOnlineRow {
+	items := s.onlineItemsForIDChat(withUserInfo)
 	now := time.Now().UnixMilli()
 	rowsByIdentity := make(map[string]*idchatOnlineRow, len(items))
 
