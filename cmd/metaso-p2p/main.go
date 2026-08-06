@@ -18,6 +18,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/socialcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -79,6 +80,9 @@ func main() {
 		} else {
 			socialAgg = socialCandidate
 			socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
+		}
+		if err := aggRegistry.Register(&socialcontent.Aggregator{}); err != nil {
+			log.Printf("WARNING: socialcontent aggregator init failed: %v", err)
 		}
 		groupChatCandidate := &groupchat.Aggregator{}
 		if err := aggRegistry.Register(groupChatCandidate); err != nil {

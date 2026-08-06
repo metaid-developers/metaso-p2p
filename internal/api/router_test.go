@@ -20,6 +20,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/socialcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
 	"github.com/metaid-developers/metaso-p2p/internal/api"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -40,15 +41,16 @@ func setupFullRouter(t *testing.T) *gin.Engine {
 }
 
 type fullRouterFixture struct {
-	router         *gin.Engine
-	store          *storage.PebbleStore
-	userAgg        *userinfo.Aggregator
-	groupAgg       *groupchat.Aggregator
-	privateAgg     *privatechat.Aggregator
-	botHomepageAgg *bothomepage.Aggregator
-	socialAgg      *social.Aggregator
-	skillAgg       *skillservice.Aggregator
-	publishedAgg   *publishedcontent.Aggregator
+	router           *gin.Engine
+	store            *storage.PebbleStore
+	userAgg          *userinfo.Aggregator
+	groupAgg         *groupchat.Aggregator
+	privateAgg       *privatechat.Aggregator
+	botHomepageAgg   *bothomepage.Aggregator
+	socialAgg        *social.Aggregator
+	socialContentAgg *socialcontent.Aggregator
+	skillAgg         *skillservice.Aggregator
+	publishedAgg     *publishedcontent.Aggregator
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
@@ -78,6 +80,10 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(socialAgg); err != nil {
 		t.Fatalf("register social: %v", err)
 	}
+	socialContentAgg := &socialcontent.Aggregator{}
+	if err := reg.Register(socialContentAgg); err != nil {
+		t.Fatalf("register socialcontent: %v", err)
+	}
 	skillAgg := &skillservice.Aggregator{}
 	skillAgg.SetProfileLookup(skillservice.NewUserInfoLookupAdapter(userAgg))
 	if err := reg.Register(skillAgg); err != nil {
@@ -105,15 +111,16 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	cfg := config.Default()
 	// SetupRouter handles nil socketServer gracefully (Socket.IO routes skipped).
 	return &fullRouterFixture{
-		router:         api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
-		store:          store,
-		userAgg:        userAgg,
-		groupAgg:       groupAgg,
-		privateAgg:     privateAgg,
-		botHomepageAgg: botHomepageAgg,
-		socialAgg:      socialAgg,
-		skillAgg:       skillAgg,
-		publishedAgg:   publishedAgg,
+		router:           api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
+		store:            store,
+		userAgg:          userAgg,
+		groupAgg:         groupAgg,
+		privateAgg:       privateAgg,
+		botHomepageAgg:   botHomepageAgg,
+		socialAgg:        socialAgg,
+		socialContentAgg: socialContentAgg,
+		skillAgg:         skillAgg,
+		publishedAgg:     publishedAgg,
 	}
 }
 
