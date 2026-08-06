@@ -10,12 +10,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/pebble"
+
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
 const defaultBackfillPageSize = 100
@@ -101,131 +105,199 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	}
 	paths := normaliseBackfillPaths(opts.Paths)
 
-	// MANAPI pagination is not globally ordered by timestamp. Scan every page,
-	// but retain only lookback seeds and their lightweight references. This
-	// preserves completeness without keeping the entire historical index in RAM.
+	spool, err := newPinSpool()
+	if err != nil {
+		return err
+	}
+	defer spool.Close()
+
+	// Reference and selection sets live in a temporary Pebble store so the
+	// backfill memory stays bounded no matter how large the lookback window is.
+	refsStore := storage.NewPebbleStore(filepath.Join(spool.dir, "sets"))
+	defer refsStore.Close()
+	if _, err := refsStore.OpenDB(refsNamespace); err != nil {
+		return fmt.Errorf("open backfill refs set: %w", err)
+	}
+	if _, err := refsStore.OpenDB(selectedNamespace); err != nil {
+		return fmt.Errorf("open backfill selected set: %w", err)
+	}
+
+	// MANAPI pagination is not globally ordered by timestamp, so every page is
+	// scanned. In-window pins are spooled to disk and their IDs, targets, and
+	// originals are indexed in the on-disk refs set; RAM stays independent of
+	// the historical size.
 	lookbackUnix := int64(0)
 	if !opts.Since.IsZero() {
 		lookbackUnix = opts.Since.Unix()
 	}
-	interactions := make(map[string]backfillMeta)
-	postRefs := make(map[string]struct{})
-	recentPosts := make(map[string]struct{})
-	pins := make(map[string]*aggregator.PinInscription)
 	for _, path := range paths {
 		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
+			var refs []storage.KeyValue
+			var inWindow []BackfillPin
 			for _, pin := range page.Pins {
 				meta := backfillMetaFromPin(pin)
 				if meta.ID == "" || (lookbackUnix != 0 && meta.Timestamp < lookbackUnix) {
 					continue
 				}
-				switch meta.Path {
-				case PathSimpleBuzz:
-					recentPosts[meta.ID] = struct{}{}
-					postRefs[meta.ID] = struct{}{}
-					if meta.TargetID != "" {
-						postRefs[meta.TargetID] = struct{}{}
-					}
-					if meta.OriginalID != "" {
-						postRefs[meta.OriginalID] = struct{}{}
-					}
-				case PathPayLike, PathPayComment:
-					interactions[meta.ID] = meta
-					if meta.TargetID != "" {
-						postRefs[meta.TargetID] = struct{}{}
-					}
+				inWindow = append(inWindow, pin)
+				refs = append(refs, storage.KeyValue{Key: []byte(meta.ID)})
+				if meta.TargetID != "" {
+					refs = append(refs, storage.KeyValue{Key: []byte(meta.TargetID)})
 				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-	}
-	selectedPosts := make(map[string]struct{}, len(recentPosts)+len(postRefs))
-	for id := range recentPosts {
-		selectedPosts[id] = struct{}{}
-	}
-	// Resolve old source pins and all versions referenced by recent posts or
-	// interactions. The scan remains complete, but only matching metadata is kept.
-	for _, path := range paths {
-		if path != PathSimpleBuzz {
-			continue
-		}
-		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
-			for _, pin := range page.Pins {
-				meta := backfillMetaFromPin(pin)
-				if _, ok := postRefs[meta.ID]; !ok {
-					if meta.OriginalID == "" {
-						continue
-					}
-					if _, ok := postRefs[meta.OriginalID]; !ok {
-						continue
-					}
-				}
-				selectedPosts[meta.ID] = struct{}{}
-				pins[meta.ID] = pin.toAggregatorPin()
 				if meta.OriginalID != "" {
-					postRefs[meta.OriginalID] = struct{}{}
+					refs = append(refs, storage.KeyValue{Key: []byte(meta.OriginalID)})
+				}
+			}
+			if len(refs) > 0 {
+				if err := refsStore.SetBatch(refsNamespace, refs); err != nil {
+					return fmt.Errorf("index backfill refs for %s: %w", path, err)
+				}
+			}
+			if len(inWindow) > 0 {
+				if err := spool.appendPins(spoolName(path), inWindow); err != nil {
+					return err
 				}
 			}
 			return nil
 		}); err != nil {
-			return err
+			return fmt.Errorf("scan %s: %w", path, err)
 		}
-	}
-	selected := make(map[string]struct{}, len(selectedPosts)+len(interactions))
-	for id := range selectedPosts {
-		selected[id] = struct{}{}
-	}
-	for id, meta := range interactions {
-		if _, ok := selectedPosts[meta.TargetID]; ok {
-			selected[id] = struct{}{}
-		}
-	}
-	if len(selected) == 0 {
-		return nil
 	}
 
-	// Scan interaction paths a second time to fetch bodies without retaining the
-	// historical content bodies encountered during the complete metadata scan.
+	// Resolve every simplebuzz version referenced by the in-window set,
+	// including older modify/revoke chains, and spool the selected posts.
+	if containsPath(paths, PathSimpleBuzz) {
+		if err := opts.Client.scanPath(ctx, PathSimpleBuzz, pageSize, func(page BackfillPage) error {
+			pageSelected := make(map[string]struct{}, len(page.Pins))
+			changed := true
+			for changed {
+				changed = false
+				var refs []storage.KeyValue
+				var selected []storage.KeyValue
+				var out []BackfillPin
+				for _, pin := range page.Pins {
+					meta := backfillMetaFromPin(pin)
+					if meta.ID == "" {
+						continue
+					}
+					if _, ok := pageSelected[meta.ID]; ok {
+						continue
+					}
+					referenced, err := refsStore.Get(refsNamespace, []byte(meta.ID))
+					if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+						return err
+					}
+					if referenced == nil {
+						if meta.OriginalID == "" {
+							continue
+						}
+						original, err := refsStore.Get(refsNamespace, []byte(meta.OriginalID))
+						if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+							return err
+						}
+						if original == nil {
+							continue
+						}
+					}
+					pageSelected[meta.ID] = struct{}{}
+					out = append(out, pin)
+					selected = append(selected, storage.KeyValue{Key: []byte(meta.ID)})
+					if meta.OriginalID != "" {
+						original, err := refsStore.Get(refsNamespace, []byte(meta.OriginalID))
+						if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+							return err
+						}
+						if original == nil {
+							refs = append(refs, storage.KeyValue{Key: []byte(meta.OriginalID)})
+							changed = true
+						}
+					}
+				}
+				if len(refs) > 0 {
+					if err := refsStore.SetBatch(refsNamespace, refs); err != nil {
+						return fmt.Errorf("extend backfill refs: %w", err)
+					}
+				}
+				if len(selected) > 0 {
+					if err := refsStore.SetBatch(selectedNamespace, selected); err != nil {
+						return fmt.Errorf("index backfill selected posts: %w", err)
+					}
+				}
+				if len(out) > 0 {
+					if err := spool.appendPins(spoolName(PathSimpleBuzz)+".selected", out); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("scan %s: %w", PathSimpleBuzz, err)
+		}
+	}
+
+	// Keep only interactions whose target post was selected for replay.
 	for _, path := range paths {
 		if path == PathSimpleBuzz {
 			continue
 		}
-		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
-			for _, pin := range page.Pins {
-				if _, ok := selected[pin.ID]; ok {
-					pins[pin.ID] = pin.toAggregatorPin()
-				}
+		if err := spool.filterPins(spoolName(path), spoolName(path)+".selected", func(pin BackfillPin) (bool, error) {
+			meta := backfillMetaFromPin(pin)
+			if meta.TargetID == "" {
+				return false, nil
 			}
-			return nil
+			target, err := refsStore.Get(selectedNamespace, []byte(meta.TargetID))
+			if err != nil {
+				if errors.Is(err, pebble.ErrNotFound) {
+					return false, nil
+				}
+				return false, err
+			}
+			return target != nil, nil
 		}); err != nil {
 			return err
 		}
 	}
-	ordered := make([]*aggregator.PinInscription, 0, len(pins))
-	for _, pin := range pins {
-		ordered = append(ordered, pin)
-	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		left, right := backfillPathRank(ordered[i].Path), backfillPathRank(ordered[j].Path)
-		if left != right {
-			return left < right
-		}
-		if ordered[i].Timestamp != ordered[j].Timestamp {
-			return ordered[i].Timestamp < ordered[j].Timestamp
-		}
-		if ordered[i].GenesisHeight != ordered[j].GenesisHeight {
-			return ordered[i].GenesisHeight < ordered[j].GenesisHeight
-		}
-		return ordered[i].Id < ordered[j].Id
-	})
-	for _, pin := range ordered {
+
+	// Replay posts, likes, and comments in deterministic order. Each path is
+	// externally sorted on disk, so replay memory is bounded by one chunk.
+	replay := func(pin *aggregator.PinInscription) error {
 		if _, err := a.HandleBlockPin(pin); err != nil {
 			return fmt.Errorf("replay social pin %s: %w", pin.Id, err)
 		}
+		return nil
+	}
+	for _, path := range orderedBackfillPaths(paths) {
+		if err := spool.sortAndReplay(spoolName(path)+".selected", replay); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+const (
+	refsNamespace     = "refs"
+	selectedNamespace = "selected"
+)
+
+func spoolName(path string) string {
+	return strings.TrimPrefix(protocolPathFromPinPath(path), "/protocols/")
+}
+
+func containsPath(paths []string, target string) bool {
+	for _, path := range paths {
+		if protocolPathFromPinPath(path) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func orderedBackfillPaths(paths []string) []string {
+	ordered := append([]string(nil), paths...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return backfillPathRank(ordered[i]) < backfillPathRank(ordered[j])
+	})
+	return ordered
 }
 
 func (c *BackfillClient) scanPath(ctx context.Context, path string, size int, visit func(BackfillPage) error) error {
@@ -281,64 +353,6 @@ func backfillMetaFromPin(pin BackfillPin) backfillMeta {
 		}
 	}
 	return meta
-}
-
-func selectBackfillPins(metas map[string]backfillMeta, since time.Time) map[string]struct{} {
-	selected := make(map[string]struct{})
-	for id, meta := range metas {
-		if since.IsZero() || meta.Timestamp >= since.Unix() {
-			selected[id] = struct{}{}
-		}
-	}
-	resolveSource := func(id string) string {
-		seen := make(map[string]struct{})
-		for id != "" {
-			if _, ok := seen[id]; ok {
-				return id
-			}
-			seen[id] = struct{}{}
-			meta, ok := metas[id]
-			if !ok || meta.Path != PathSimpleBuzz || meta.Operation == OperationCreate || meta.TargetID == "" {
-				return id
-			}
-			id = meta.TargetID
-		}
-		return id
-	}
-	for changed := true; changed; {
-		changed = false
-		sources := make(map[string]struct{})
-		for id := range selected {
-			meta, ok := metas[id]
-			if !ok {
-				continue
-			}
-			target := meta.TargetID
-			if meta.Path == PathSimpleBuzz {
-				target = id
-			}
-			if source := resolveSource(target); source != "" {
-				sources[source] = struct{}{}
-			}
-		}
-		for id, meta := range metas {
-			_, sourceSelected := sources[resolveSource(id)]
-			if meta.Path == PathSimpleBuzz && sourceSelected {
-				if _, ok := selected[id]; !ok {
-					selected[id] = struct{}{}
-					changed = true
-				}
-			}
-			_, targetSelected := sources[resolveSource(meta.TargetID)]
-			if (meta.Path == PathPayLike || meta.Path == PathPayComment) && targetSelected {
-				if _, ok := selected[id]; !ok {
-					selected[id] = struct{}{}
-					changed = true
-				}
-			}
-		}
-	}
-	return selected
 }
 
 func backfillPathRank(path string) int {

@@ -92,8 +92,8 @@ func TestBackfillDoesNotStopAtAnOlderPageAndIncludesTargetPost(t *testing.T) {
 	if err != nil || post == nil || post.LikeCount != 1 {
 		t.Fatalf("target post = %+v err=%v", post, err)
 	}
-	if requests != 8 {
-		t.Fatalf("requests = %d, want 8 (two paths, two passes, one terminal page each)", requests)
+	if requests != 6 {
+		t.Fatalf("requests = %d, want 6 (simplebuzz scanned twice, interactions spooled once)", requests)
 	}
 }
 
