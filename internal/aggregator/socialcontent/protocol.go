@@ -72,6 +72,17 @@ func payloadObject(raw []byte) (map[string]any, error) {
 	return obj, nil
 }
 
+func payloadObjectFromPin(pin *aggregator.PinInscription) (map[string]any, error) {
+	if pin == nil {
+		return nil, ErrMalformedPayload
+	}
+	obj, err := payloadObject(pin.ContentBody)
+	if err == nil {
+		return obj, nil
+	}
+	return payloadObject([]byte(pin.ContentSummary))
+}
+
 func stringField(obj map[string]any, keys ...string) string {
 	for _, key := range keys {
 		value, ok := obj[key]
@@ -156,7 +167,7 @@ func postRecordFromPin(pin *aggregator.PinInscription, sourcePinId string, curre
 }
 
 func parseLike(pin *aggregator.PinInscription) (*LikeEvent, error) {
-	obj, err := payloadObject(pin.ContentBody)
+	obj, err := payloadObjectFromPin(pin)
 	if err != nil {
 		return nil, fmt.Errorf("paylike %s: %w", pin.Id, err)
 	}
@@ -182,7 +193,7 @@ func parseLike(pin *aggregator.PinInscription) (*LikeEvent, error) {
 }
 
 func parseComment(pin *aggregator.PinInscription) (*CommentRecord, error) {
-	obj, err := payloadObject(pin.ContentBody)
+	obj, err := payloadObjectFromPin(pin)
 	if err != nil {
 		return nil, fmt.Errorf("paycomment %s: %w", pin.Id, err)
 	}

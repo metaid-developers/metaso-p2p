@@ -102,6 +102,23 @@ func TestInteractionsAndAuthorTimeFilter(t *testing.T) {
 	}
 }
 
+func TestInteractionPayloadFallsBackToContentSummary(t *testing.T) {
+	postID := "buzz-summary-target:i0"
+	like := testPin("like-summary:i0", PathPayLike, OperationCreate, "mvc", 210, nil)
+	like.ContentSummary = `{"isLike":"1","likeTo":"` + postID + `"}`
+	parsedLike, err := parseLike(like)
+	if err != nil || parsedLike.TargetPinId != postID || !parsedLike.IsLike {
+		t.Fatalf("summary like = %+v, err=%v", parsedLike, err)
+	}
+
+	comment := testPin("comment-summary:i0", PathPayComment, OperationCreate, "mvc", 220, nil)
+	comment.ContentSummary = `{"commentTo":"` + postID + `","content":"summary comment"}`
+	parsedComment, err := parseComment(comment)
+	if err != nil || parsedComment.TargetPinId != postID || parsedComment.Content != "summary comment" {
+		t.Fatalf("summary comment = %+v, err=%v", parsedComment, err)
+	}
+}
+
 func TestMempoolDoesNotBecomePublicUntilConfirmed(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	pin := testPin("mempool-buzz:i0", PathSimpleBuzz, OperationCreate, "mvc", 300, []byte(`{"text":"pending"}`))
