@@ -149,7 +149,7 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 				}
 			}
 			if len(refs) > 0 {
-				if err := refsStore.SetBatch(refsNamespace, refs); err != nil {
+				if err := refsStore.SetBatchNoSync(refsNamespace, refs); err != nil {
 					return fmt.Errorf("index backfill refs for %s: %w", path, err)
 				}
 			}
@@ -214,12 +214,12 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 					}
 				}
 				if len(refs) > 0 {
-					if err := refsStore.SetBatch(refsNamespace, refs); err != nil {
+					if err := refsStore.SetBatchNoSync(refsNamespace, refs); err != nil {
 						return fmt.Errorf("extend backfill refs: %w", err)
 					}
 				}
 				if len(selected) > 0 {
-					if err := refsStore.SetBatch(selectedNamespace, selected); err != nil {
+					if err := refsStore.SetBatchNoSync(selectedNamespace, selected); err != nil {
 						return fmt.Errorf("index backfill selected posts: %w", err)
 					}
 				}
@@ -261,7 +261,7 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	// Replay posts, likes, and comments in deterministic order. Each path is
 	// externally sorted on disk, so replay memory is bounded by one chunk.
 	replay := func(pin *aggregator.PinInscription) error {
-		if _, err := a.HandleBlockPin(pin); err != nil {
+		if err := a.HandleBlockPinReplay(pin); err != nil {
 			return fmt.Errorf("replay social pin %s: %w", pin.Id, err)
 		}
 		return nil

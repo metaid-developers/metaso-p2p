@@ -92,6 +92,16 @@ func (s *PebbleStore) Set(namespace string, key, value []byte) error {
 	return db.Set(key, value, pebble.Sync)
 }
 
+// SetNoSync writes a key-value pair without forcing an fsync. It is intended
+// for bulk replay paths whose source data can be re-fetched after a crash.
+func (s *PebbleStore) SetNoSync(namespace string, key, value []byte) error {
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+	return db.Set(key, value, pebble.NoSync)
+}
+
 // SetBatch atomically writes all entries to one namespace.
 func (s *PebbleStore) SetBatch(namespace string, entries []KeyValue) error {
 	if len(entries) == 0 {
@@ -109,6 +119,26 @@ func (s *PebbleStore) SetBatch(namespace string, entries []KeyValue) error {
 		}
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+// SetBatchNoSync atomically writes all entries to one namespace without
+// forcing an fsync. It is intended for temporary backfill index sets.
+func (s *PebbleStore) SetBatchNoSync(namespace string, entries []KeyValue) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, entry := range entries {
+		if err := batch.Set(entry.Key, entry.Value, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.NoSync)
 }
 
 // Get reads a key from a namespace. Returns pebble.ErrNotFound if not found.
@@ -136,6 +166,15 @@ func (s *PebbleStore) Delete(namespace string, key []byte) error {
 		return nil
 	}
 	return db.Delete(key, pebble.Sync)
+}
+
+// DeleteNoSync deletes a key without forcing an fsync; used by bulk replay.
+func (s *PebbleStore) DeleteNoSync(namespace string, key []byte) error {
+	db := s.GetDB(namespace)
+	if db == nil {
+		return nil
+	}
+	return db.Delete(key, pebble.NoSync)
 }
 
 // DeleteByPrefix removes all keys with the given prefix from a namespace.

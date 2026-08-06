@@ -132,14 +132,6 @@ func loadJSON[T any](store *storage.PebbleStore, key []byte, out *T) error {
 	return json.Unmarshal(raw, out)
 }
 
-func saveJSON(store *storage.PebbleStore, key []byte, value any) error {
-	raw, err := marshalRecord(value)
-	if err != nil {
-		return err
-	}
-	return store.Set(Namespace, key, raw)
-}
-
 func encodeCursor(offset int) string {
 	if offset <= 0 {
 		return ""

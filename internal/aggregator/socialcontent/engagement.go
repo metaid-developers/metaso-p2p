@@ -69,7 +69,7 @@ func (a *Aggregator) recomputeCounters(chain, target string) error {
 	post.LikeCount = likeCount
 	post.CommentCount = commentCount
 	post.HotScore = hotScore(post, time.Now().Unix())
-	return saveJSON(a.store, postRecordKey(chain, source), post)
+	return a.saveRecord(postRecordKey(chain, source), post)
 }
 
 func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
@@ -87,15 +87,15 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 		}
 		oldTarget := event.TargetPinId
 		event.TargetPinId = post.SourcePinId
-		if err := saveJSON(a.store, key, &event); err != nil {
+		if err := a.saveRecord(key, &event); err != nil {
 			return err
 		}
 		actor := firstIdentity(event.ActorGlobalMetaId, event.ActorMetaId, event.ActorAddress)
 		if actor != "" {
 			if oldTarget != event.TargetPinId {
-				_ = a.store.Delete(Namespace, likeStateKey(chain, oldTarget, actor))
+				_ = a.deleteStore(Namespace, likeStateKey(chain, oldTarget, actor))
 			}
-			if err := saveJSON(a.store, likeStateKey(chain, event.TargetPinId, actor), &event); err != nil {
+			if err := a.saveRecord(likeStateKey(chain, event.TargetPinId, actor), &event); err != nil {
 				return err
 			}
 		}
@@ -115,12 +115,12 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 		oldTarget := comment.TargetPinId
 		comment.TargetPinId = post.SourcePinId
 		if oldTarget != comment.TargetPinId {
-			_ = a.store.Delete(Namespace, commentTargetKey(chain, oldTarget, comment.Timestamp, comment.PinId))
+			_ = a.deleteStore(Namespace, commentTargetKey(chain, oldTarget, comment.Timestamp, comment.PinId))
 		}
-		if err := saveJSON(a.store, key, &comment); err != nil {
+		if err := a.saveRecord(key, &comment); err != nil {
 			return err
 		}
-		return a.store.Set(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId))
+		return a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId))
 	}); err != nil {
 		return err
 	}

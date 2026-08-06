@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
@@ -22,11 +24,33 @@ type pinSpool struct {
 }
 
 func newPinSpool() (*pinSpool, error) {
+	cleanStaleSpools()
 	dir, err := os.MkdirTemp("", "metaso-social-backfill-*")
 	if err != nil {
 		return nil, fmt.Errorf("create backfill spool: %w", err)
 	}
 	return &pinSpool{dir: dir}, nil
+}
+
+// cleanStaleSpools removes spool directories left behind by a killed process
+// more than one day ago. A live backfill always recreates its own spool, so
+// removing old orphaned directories keeps temporary storage from filling up.
+func cleanStaleSpools() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "metaso-social-backfill-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
+	}
 }
 
 func (s *pinSpool) Close() error {

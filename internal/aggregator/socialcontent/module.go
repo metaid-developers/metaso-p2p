@@ -16,10 +16,12 @@ import (
 )
 
 type Aggregator struct {
-	store    *storage.PebbleStore
-	cache    *cache.Cache[[]byte]
-	notifyCh chan *aggregator.NotifyEvent
-	mu       sync.Mutex
+	store         *storage.PebbleStore
+	cache         *cache.Cache[[]byte]
+	notifyCh      chan *aggregator.NotifyEvent
+	mu            sync.Mutex
+	bulk          bool // set while replaying a historical backfill under the lock
+	skipReconcile bool // pending-interaction reconciliation is unneeded when posts replay first
 }
 
 func (a *Aggregator) Name() string { return Namespace }
@@ -40,9 +42,28 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if pin != nil && pin.ChainName != "" && pin.Id != "" {
-		_ = a.store.Delete(Namespace, mempoolEventKey(pin.ChainName, pin.Id))
+		_ = a.deleteStore(Namespace, mempoolEventKey(pin.ChainName, pin.Id))
 	}
 	return nil, a.processPin(pin, false)
+}
+
+// HandleBlockPinReplay processes a confirmed pin during a historical backfill.
+// It is only called after every post has been replayed before its interactions,
+// so pending-interaction reconciliation is skipped and writes skip fsync; the
+// source data can be re-fetched if the process crashes mid-replay.
+func (a *Aggregator) HandleBlockPinReplay(pin *aggregator.PinInscription) error {
+	a.mu.Lock()
+	a.bulk = true
+	a.skipReconcile = true
+	defer func() {
+		a.bulk = false
+		a.skipReconcile = false
+		a.mu.Unlock()
+	}()
+	if pin != nil && pin.ChainName != "" && pin.Id != "" {
+		_ = a.deleteStore(Namespace, mempoolEventKey(pin.ChainName, pin.Id))
+	}
+	return a.processPin(pin, false)
 }
 
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
@@ -59,7 +80,7 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) 
 	}
 	chain := strings.ToLower(strings.TrimSpace(pin.ChainName))
 	if isMempool {
-		return saveJSON(a.store, mempoolEventKey(chain, pin.Id), pin)
+		return a.saveRecord(mempoolEventKey(chain, pin.Id), pin)
 	}
 
 	path := protocolPathFromPinPath(pin.Path)
@@ -123,14 +144,17 @@ func (a *Aggregator) processPost(pin *aggregator.PinInscription, chain string) e
 	if err := a.removePostIndexes(&current); err != nil {
 		return err
 	}
-	if err := saveJSON(a.store, postRecordKey(chain, source), record); err != nil {
+	if err := a.saveRecord(postRecordKey(chain, source), record); err != nil {
 		return err
 	}
 	if err := a.writePostIndexes(record); err != nil {
 		return err
 	}
-	if err := a.store.Set(Namespace, postPinKey(chain, pin.Id), []byte(source)); err != nil {
+	if err := a.setStore(Namespace, postPinKey(chain, pin.Id), []byte(source)); err != nil {
 		return err
+	}
+	if a.skipReconcile {
+		return nil
 	}
 	return a.reconcilePendingInteractions(record)
 }
@@ -146,14 +170,14 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string) e
 		return err
 	}
 	event.TargetPinId = canonicalTarget
-	if err := saveJSON(a.store, likeEventKey(chain, pin.Id), event); err != nil {
+	if err := a.saveRecord(likeEventKey(chain, pin.Id), event); err != nil {
 		return err
 	}
 	actor := firstIdentity(event.ActorGlobalMetaId, event.ActorMetaId, event.ActorAddress)
 	if actor == "" {
 		return a.recomputeCounters(chain, event.TargetPinId)
 	}
-	if err := saveJSON(a.store, likeStateKey(chain, event.TargetPinId, actor), event); err != nil {
+	if err := a.saveRecord(likeStateKey(chain, event.TargetPinId, actor), event); err != nil {
 		return err
 	}
 	return a.recomputeCounters(chain, event.TargetPinId)
@@ -170,13 +194,35 @@ func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string
 		return err
 	}
 	comment.TargetPinId = canonicalTarget
-	if err := saveJSON(a.store, commentRecordKey(chain, pin.Id), comment); err != nil {
+	if err := a.saveRecord(commentRecordKey(chain, pin.Id), comment); err != nil {
 		return err
 	}
-	if err := a.store.Set(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+	if err := a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
 		return err
 	}
 	return a.recomputeCounters(chain, comment.TargetPinId)
+}
+
+func (a *Aggregator) setStore(namespace string, key, value []byte) error {
+	if a.bulk {
+		return a.store.SetNoSync(namespace, key, value)
+	}
+	return a.store.Set(namespace, key, value)
+}
+
+func (a *Aggregator) deleteStore(namespace string, key []byte) error {
+	if a.bulk {
+		return a.store.DeleteNoSync(namespace, key)
+	}
+	return a.store.Delete(namespace, key)
+}
+
+func (a *Aggregator) saveRecord(key []byte, value any) error {
+	raw, err := marshalRecord(value)
+	if err != nil {
+		return err
+	}
+	return a.setStore(Namespace, key, raw)
 }
 
 func firstIdentity(values ...string) string {
@@ -231,14 +277,14 @@ func (a *Aggregator) writePostIndexes(record *PostRecord) error {
 	if record == nil || record.SourcePinId == "" || record.ChainName == "" || record.Hidden {
 		return nil
 	}
-	if err := a.store.Set(Namespace, postTimeKey(record.CreatedAt, record.ChainName, record.SourcePinId), []byte(record.SourcePinId)); err != nil {
+	if err := a.setStore(Namespace, postTimeKey(record.CreatedAt, record.ChainName, record.SourcePinId), []byte(record.SourcePinId)); err != nil {
 		return err
 	}
 	for _, identity := range []string{record.AuthorGlobalMetaId, record.AuthorMetaId, record.AuthorAddress} {
 		if identity == "" {
 			continue
 		}
-		if err := a.store.Set(Namespace, postAuthorKey(identity, record.CreatedAt, record.ChainName, record.SourcePinId), []byte(record.SourcePinId)); err != nil {
+		if err := a.setStore(Namespace, postAuthorKey(identity, record.CreatedAt, record.ChainName, record.SourcePinId), []byte(record.SourcePinId)); err != nil {
 			return err
 		}
 	}
@@ -249,10 +295,10 @@ func (a *Aggregator) removePostIndexes(record *PostRecord) error {
 	if record == nil || record.SourcePinId == "" {
 		return nil
 	}
-	_ = a.store.Delete(Namespace, postTimeKey(record.CreatedAt, record.ChainName, record.SourcePinId))
+	_ = a.deleteStore(Namespace, postTimeKey(record.CreatedAt, record.ChainName, record.SourcePinId))
 	for _, identity := range []string{record.AuthorGlobalMetaId, record.AuthorMetaId, record.AuthorAddress} {
 		if identity != "" {
-			_ = a.store.Delete(Namespace, postAuthorKey(identity, record.CreatedAt, record.ChainName, record.SourcePinId))
+			_ = a.deleteStore(Namespace, postAuthorKey(identity, record.CreatedAt, record.ChainName, record.SourcePinId))
 		}
 	}
 	return nil
