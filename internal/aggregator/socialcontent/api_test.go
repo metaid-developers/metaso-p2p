@@ -26,6 +26,7 @@ func TestRoutesExposeFeedDetailAndComments(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/social/feed?size=10",
+		"/api/social/feed?size=10&sort=hot",
 		"/api/social/post/api-buzz:i0",
 		"/api/social/post/api-buzz:i0/comments?size=10",
 	} {

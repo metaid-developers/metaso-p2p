@@ -76,6 +76,10 @@ func likeStateKey(chain, target, actor string) []byte {
 	return []byte(keyLikeState + strings.ToLower(chain) + ":" + target + ":" + strings.ToLower(actor))
 }
 
+func likeStatePrefix(chain, target string) []byte {
+	return []byte(keyLikeState + strings.ToLower(chain) + ":" + target + ":")
+}
+
 func commentRecordKey(chain, pinID string) []byte {
 	return []byte(keyCommentRecord + strings.ToLower(chain) + ":" + pinID)
 }

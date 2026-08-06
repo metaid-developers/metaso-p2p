@@ -2,8 +2,10 @@ package socialcontent
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 
@@ -54,7 +56,14 @@ func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 		return nil, err
 	}
 
+	now := time.Now().Unix()
 	sort.SliceStable(records, func(i, j int) bool {
+		if params.Sort == SortHot {
+			left, right := hotScore(records[i], now), hotScore(records[j], now)
+			if left != right {
+				return left > right
+			}
+		}
 		if records[i].CreatedAt != records[j].CreatedAt {
 			return records[i].CreatedAt > records[j].CreatedAt
 		}
@@ -228,6 +237,10 @@ func postItemFromRecord(record *PostRecord) PostItem {
 		ContentType:  record.ContentType,
 		CreatedAt:    record.CreatedAt,
 		UpdatedAt:    record.UpdatedAt,
+		LikeCount:    record.LikeCount,
+		CommentCount: record.CommentCount,
+		DonateCount:  record.DonateCount,
+		HotScore:     hotScore(record, time.Now().Unix()),
 	}
 	if record.PayloadJSON != nil {
 		item.Payload = record.PayloadJSON
@@ -237,11 +250,28 @@ func postItemFromRecord(record *PostRecord) PostItem {
 	return item
 }
 
+func hotScore(record *PostRecord, now int64) float64 {
+	if record == nil {
+		return 0
+	}
+	ageHours := float64(now-record.CreatedAt) / 3600
+	if ageHours < 1 {
+		ageHours = 1
+	}
+	engagement := float64(record.LikeCount + 2*record.CommentCount + 3*record.DonateCount)
+	return engagement / math.Pow(ageHours+2, 1.5)
+}
+
 func (a *Aggregator) ListComments(params CommentParams) (*CommentResult, error) {
 	params.ChainName = strings.ToLower(strings.TrimSpace(params.ChainName))
 	params.PinId = strings.TrimSpace(params.PinId)
 	if params.PinId == "" {
 		return nil, ErrInvalidParameter
+	}
+	if post, err := a.FindPost(params.PinId, params.ChainName); err != nil {
+		return nil, err
+	} else if post != nil {
+		params.PinId = post.SourcePinId
 	}
 	if params.Size <= 0 {
 		params.Size = defaultCommentSize

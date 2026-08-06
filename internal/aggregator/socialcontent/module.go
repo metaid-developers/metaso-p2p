@@ -129,7 +129,10 @@ func (a *Aggregator) processPost(pin *aggregator.PinInscription, chain string) e
 	if err := a.writePostIndexes(record); err != nil {
 		return err
 	}
-	return a.store.Set(Namespace, postPinKey(chain, pin.Id), []byte(source))
+	if err := a.store.Set(Namespace, postPinKey(chain, pin.Id), []byte(source)); err != nil {
+		return err
+	}
+	return a.reconcilePendingInteractions(record)
 }
 
 func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string) error {
@@ -138,14 +141,22 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string) e
 		return err
 	}
 	event.ChainName = chain
+	canonicalTarget, err := a.canonicalTarget(chain, event.TargetPinId)
+	if err != nil {
+		return err
+	}
+	event.TargetPinId = canonicalTarget
 	if err := saveJSON(a.store, likeEventKey(chain, pin.Id), event); err != nil {
 		return err
 	}
 	actor := firstIdentity(event.ActorGlobalMetaId, event.ActorMetaId, event.ActorAddress)
 	if actor == "" {
-		return nil
+		return a.recomputeCounters(chain, event.TargetPinId)
 	}
-	return saveJSON(a.store, likeStateKey(chain, event.TargetPinId, actor), event)
+	if err := saveJSON(a.store, likeStateKey(chain, event.TargetPinId, actor), event); err != nil {
+		return err
+	}
+	return a.recomputeCounters(chain, event.TargetPinId)
 }
 
 func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string) error {
@@ -154,10 +165,18 @@ func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string
 		return err
 	}
 	comment.ChainName = chain
+	canonicalTarget, err := a.canonicalTarget(chain, comment.TargetPinId)
+	if err != nil {
+		return err
+	}
+	comment.TargetPinId = canonicalTarget
 	if err := saveJSON(a.store, commentRecordKey(chain, pin.Id), comment); err != nil {
 		return err
 	}
-	return a.store.Set(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId))
+	if err := a.store.Set(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+		return err
+	}
+	return a.recomputeCounters(chain, comment.TargetPinId)
 }
 
 func firstIdentity(values ...string) string {

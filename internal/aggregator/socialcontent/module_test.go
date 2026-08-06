@@ -3,6 +3,7 @@ package socialcontent
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
@@ -128,6 +129,59 @@ func TestMalformedInteractionPayloadIsRejected(t *testing.T) {
 	bad := testPin("bad-like:i0", PathPayLike, OperationCreate, "mvc", 400, []byte(`{"isLike":true}`))
 	if _, err := agg.HandleBlockPin(bad); err == nil {
 		t.Fatal("malformed like unexpectedly succeeded")
+	}
+}
+
+func TestEngagementCountersHotOrderingAndPendingInteractions(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	now := time.Now().Unix()
+	old := testPin("old-buzz:i0", PathSimpleBuzz, OperationCreate, "mvc", now-7200, []byte(`{"text":"old"}`))
+	newer := testPin("new-buzz:i0", PathSimpleBuzz, OperationCreate, "mvc", now-3600, []byte(`{"text":"new"}`))
+
+	pendingLike := testPin("pending-like:i0", PathPayLike, OperationCreate, "mvc", now-7100, mustJSON(t, map[string]any{"isLike": true, "likeTo": old.Id}))
+	pendingLike.MetaId = "pending-actor"
+	if _, err := agg.HandleBlockPin(pendingLike); err != nil {
+		t.Fatalf("pending like: %v", err)
+	}
+	if _, err := agg.HandleBlockPin(old); err != nil {
+		t.Fatalf("old post: %v", err)
+	}
+	if _, err := agg.HandleBlockPin(newer); err != nil {
+		t.Fatalf("new post: %v", err)
+	}
+
+	post, err := agg.FindPost(old.Id, "mvc")
+	if err != nil || post == nil || post.LikeCount != 1 {
+		t.Fatalf("pending like was not reconciled: post=%+v err=%v", post, err)
+	}
+
+	likeOff := testPin("pending-unlike:i0", PathPayLike, OperationCreate, "mvc", now-7000, mustJSON(t, map[string]any{"isLike": false, "likeTo": old.Id}))
+	likeOff.MetaId = "pending-actor"
+	if _, err := agg.HandleBlockPin(likeOff); err != nil {
+		t.Fatalf("unlike: %v", err)
+	}
+	post, err = agg.FindPost(old.Id, "mvc")
+	if err != nil || post == nil || post.LikeCount != 0 {
+		t.Fatalf("unlike was not reflected: post=%+v err=%v", post, err)
+	}
+
+	for i := 0; i < 2; i++ {
+		comment := testPin("old-comment-"+string(rune('a'+i))+":i0", PathPayComment, OperationCreate, "mvc", now-6900-int64(i), mustJSON(t, map[string]any{"commentTo": old.Id, "content": "comment"}))
+		if _, err := agg.HandleBlockPin(comment); err != nil {
+			t.Fatalf("comment %d: %v", i, err)
+		}
+	}
+	post, err = agg.FindPost(old.Id, "mvc")
+	if err != nil || post == nil || post.CommentCount != 2 {
+		t.Fatalf("comment count = %+v err=%v", post, err)
+	}
+
+	hot, err := agg.List(FeedParams{Sort: SortHot, Size: 10})
+	if err != nil || len(hot.Items) != 2 || hot.Items[0].SourcePinId != old.Id {
+		t.Fatalf("hot feed = %+v err=%v", hot, err)
+	}
+	if hot.Items[0].CommentCount != 2 || hot.Items[0].HotScore <= hot.Items[1].HotScore {
+		t.Fatalf("hot item scores = %+v", hot.Items)
 	}
 }
 

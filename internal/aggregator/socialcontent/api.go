@@ -97,7 +97,7 @@ func parseFeedParams(c *gin.Context) (FeedParams, error) {
 		return FeedParams{}, ErrInvalidParameter
 	}
 	sortName := strings.ToLower(strings.TrimSpace(c.Query("sort")))
-	if sortName != "" && sortName != SortNewest {
+	if sortName != "" && sortName != SortNewest && sortName != SortHot {
 		return FeedParams{}, ErrInvalidParameter
 	}
 	return FeedParams{

@@ -54,6 +54,11 @@ type PostRecord struct {
 	UpdatedAt int64 `json:"updatedAt"`
 	Hidden    bool  `json:"hidden"`
 	IsMempool bool  `json:"isMempool,omitempty"`
+
+	LikeCount    int     `json:"likeCount"`
+	CommentCount int     `json:"commentCount"`
+	DonateCount  int     `json:"donateCount"`
+	HotScore     float64 `json:"hotScore,omitempty"`
 }
 
 // LikeEvent is an append-only normalized like/unlike event.
@@ -116,6 +121,10 @@ type PostItem struct {
 	Payload      any        `json:"payload,omitempty"`
 	CreatedAt    int64      `json:"createdAt"`
 	UpdatedAt    int64      `json:"updatedAt"`
+	LikeCount    int        `json:"likeCount"`
+	CommentCount int        `json:"commentCount"`
+	DonateCount  int        `json:"donateCount"`
+	HotScore     float64    `json:"hotScore,omitempty"`
 }
 
 type AuthorItem struct {
