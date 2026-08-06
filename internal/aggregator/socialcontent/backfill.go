@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,16 @@ type BackfillPin struct {
 	OriginalId     string       `json:"originalId"`
 }
 
+type backfillMeta struct {
+	ID            string
+	Path          string
+	Operation     string
+	TargetID      string
+	ChainName     string
+	Timestamp     int64
+	GenesisHeight int64
+}
+
 func DefaultBackfillPaths() []string {
 	return append([]string(nil), defaultBackfillPaths...)
 }
@@ -89,41 +100,190 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	}
 	paths := normaliseBackfillPaths(opts.Paths)
 
+	// MANAPI pagination is not globally ordered by timestamp. First scan all
+	// pages and retain only lightweight metadata, then compute the dependency
+	// closure needed to fold recent interactions onto their canonical posts.
+	metas := make(map[string]backfillMeta)
 	for _, path := range paths {
-		cursor := ""
-		seenCursors := make(map[string]struct{})
-		pins := make([]*aggregator.PinInscription, 0, pageSize)
-		for {
-			if _, seen := seenCursors[cursor]; seen {
-				return fmt.Errorf("repeated MANAPI cursor %q for path %s", cursor, path)
-			}
-			seenCursors[cursor] = struct{}{}
-			page, err := opts.Client.ListPath(ctx, path, cursor, pageSize)
-			if err != nil {
-				return err
-			}
-			if len(page.Pins) == 0 {
-				break
-			}
-			allOlder := true
+		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
 			for _, pin := range page.Pins {
-				if opts.Since.IsZero() || pin.Timestamp >= opts.Since.Unix() {
-					allOlder = false
-					pins = append(pins, pin.toAggregatorPin())
+				meta := backfillMetaFromPin(pin)
+				if meta.ID != "" {
+					metas[meta.ID] = meta
 				}
 			}
-			if allOlder || page.NextCursor == "" || len(page.Pins) < pageSize {
-				break
-			}
-			cursor = page.NextCursor
+			return nil
+		}); err != nil {
+			return err
 		}
-		for i := len(pins) - 1; i >= 0; i-- {
-			if _, err := a.HandleBlockPin(pins[i]); err != nil {
-				return fmt.Errorf("replay %s pin %s: %w", path, pins[i].Id, err)
+	}
+	selected := selectBackfillPins(metas, opts.Since)
+	if len(selected) == 0 {
+		return nil
+	}
+
+	// Scan a second time so the first pass does not retain large content bodies.
+	pins := make(map[string]*aggregator.PinInscription, len(selected))
+	for _, path := range paths {
+		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
+			for _, pin := range page.Pins {
+				if _, ok := selected[pin.ID]; ok {
+					pins[pin.ID] = pin.toAggregatorPin()
+				}
 			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	ordered := make([]*aggregator.PinInscription, 0, len(pins))
+	for _, pin := range pins {
+		ordered = append(ordered, pin)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := backfillPathRank(ordered[i].Path), backfillPathRank(ordered[j].Path)
+		if left != right {
+			return left < right
+		}
+		if ordered[i].Timestamp != ordered[j].Timestamp {
+			return ordered[i].Timestamp < ordered[j].Timestamp
+		}
+		if ordered[i].GenesisHeight != ordered[j].GenesisHeight {
+			return ordered[i].GenesisHeight < ordered[j].GenesisHeight
+		}
+		return ordered[i].Id < ordered[j].Id
+	})
+	for _, pin := range ordered {
+		if _, err := a.HandleBlockPin(pin); err != nil {
+			return fmt.Errorf("replay social pin %s: %w", pin.Id, err)
 		}
 	}
 	return nil
+}
+
+func (c *BackfillClient) scanPath(ctx context.Context, path string, size int, visit func(BackfillPage) error) error {
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for {
+		if _, seen := seenCursors[cursor]; seen {
+			return fmt.Errorf("repeated MANAPI cursor %q for path %s", cursor, path)
+		}
+		seenCursors[cursor] = struct{}{}
+		page, err := c.ListPath(ctx, path, cursor, size)
+		if err != nil {
+			return err
+		}
+		if len(page.Pins) == 0 {
+			return nil
+		}
+		if err := visit(page); err != nil {
+			return err
+		}
+		if page.NextCursor == "" {
+			return nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
+func backfillMetaFromPin(pin BackfillPin) backfillMeta {
+	converted := pin.toAggregatorPin()
+	meta := backfillMeta{
+		ID:            strings.TrimSpace(pin.ID),
+		Path:          protocolPathFromPinPath(pin.Path),
+		Operation:     strings.ToLower(strings.TrimSpace(pin.Operation)),
+		ChainName:     strings.ToLower(strings.TrimSpace(pin.ChainName)),
+		Timestamp:     pin.Timestamp,
+		GenesisHeight: pin.GenesisHeight,
+	}
+	if converted == nil {
+		return meta
+	}
+	meta.TargetID = targetPinID(converted)
+	if meta.TargetID == "" {
+		switch meta.Path {
+		case PathPayLike:
+			if event, err := parseLike(converted); err == nil {
+				meta.TargetID = event.TargetPinId
+			}
+		case PathPayComment:
+			if comment, err := parseComment(converted); err == nil {
+				meta.TargetID = comment.TargetPinId
+			}
+		}
+	}
+	return meta
+}
+
+func selectBackfillPins(metas map[string]backfillMeta, since time.Time) map[string]struct{} {
+	selected := make(map[string]struct{})
+	for id, meta := range metas {
+		if since.IsZero() || meta.Timestamp >= since.Unix() {
+			selected[id] = struct{}{}
+		}
+	}
+	resolveSource := func(id string) string {
+		seen := make(map[string]struct{})
+		for id != "" {
+			if _, ok := seen[id]; ok {
+				return id
+			}
+			seen[id] = struct{}{}
+			meta, ok := metas[id]
+			if !ok || meta.Path != PathSimpleBuzz || meta.Operation == OperationCreate || meta.TargetID == "" {
+				return id
+			}
+			id = meta.TargetID
+		}
+		return id
+	}
+	for changed := true; changed; {
+		changed = false
+		sources := make(map[string]struct{})
+		for id := range selected {
+			meta, ok := metas[id]
+			if !ok {
+				continue
+			}
+			target := meta.TargetID
+			if meta.Path == PathSimpleBuzz {
+				target = id
+			}
+			if source := resolveSource(target); source != "" {
+				sources[source] = struct{}{}
+			}
+		}
+		for id, meta := range metas {
+			_, sourceSelected := sources[resolveSource(id)]
+			if meta.Path == PathSimpleBuzz && sourceSelected {
+				if _, ok := selected[id]; !ok {
+					selected[id] = struct{}{}
+					changed = true
+				}
+			}
+			_, targetSelected := sources[resolveSource(meta.TargetID)]
+			if (meta.Path == PathPayLike || meta.Path == PathPayComment) && targetSelected {
+				if _, ok := selected[id]; !ok {
+					selected[id] = struct{}{}
+					changed = true
+				}
+			}
+		}
+	}
+	return selected
+}
+
+func backfillPathRank(path string) int {
+	switch protocolPathFromPinPath(path) {
+	case PathSimpleBuzz:
+		return 0
+	case PathPayLike:
+		return 1
+	case PathPayComment:
+		return 2
+	default:
+		return 3
+	}
 }
 
 func normaliseBackfillPaths(paths []string) []string {

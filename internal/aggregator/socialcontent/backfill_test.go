@@ -40,8 +40,8 @@ func TestBackfillReplaysNewestFirstPagesOldestFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Backfill: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("requests = %d, want 1", requests)
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2 for the two-pass scan", requests)
 	}
 	result, err := agg.List(FeedParams{Size: 10})
 	if err != nil {
@@ -49,6 +49,51 @@ func TestBackfillReplaysNewestFirstPagesOldestFirst(t *testing.T) {
 	}
 	if len(result.Items) != 2 || result.Items[0].SourcePinId != "buzz-new:i0" || result.Items[1].SourcePinId != "buzz-old:i0" {
 		t.Fatalf("items = %+v", result.Items)
+	}
+}
+
+func TestBackfillDoesNotStopAtAnOlderPageAndIncludesTargetPost(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		cursor := r.URL.Query().Get("cursor")
+		var pins []BackfillPin
+		switch {
+		case r.URL.Query().Get("path") == PathSimpleBuzz && cursor == "":
+			pins = []BackfillPin{backfillPin("old-buzz:i0", OperationCreate, 100, `{"text":"old"}`)}
+		case r.URL.Query().Get("path") == PathSimpleBuzz && cursor == "buzz-next":
+			pins = nil
+		case r.URL.Query().Get("path") == PathPayLike && cursor == "":
+			like := backfillPin("recent-like:i0", OperationCreate, 200, `{"isLike":true,"likeTo":"old-buzz:i0"}`)
+			like.Path = PathPayLike
+			pins = []BackfillPin{like}
+		default:
+			pins = nil
+		}
+		next := ""
+		if cursor == "" && len(pins) > 0 {
+			next = map[string]string{PathSimpleBuzz: "buzz-next", PathPayLike: "like-next"}[r.URL.Query().Get("path")]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"list": pins, "nextCursor": next}})
+	}))
+	defer server.Close()
+
+	if err := agg.Backfill(BackfillOptions{
+		Context:  context.Background(),
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathSimpleBuzz, PathPayLike},
+		Since:    time.Unix(150, 0),
+		PageSize: 1,
+	}); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+	post, err := agg.FindPost("old-buzz:i0", "mvc")
+	if err != nil || post == nil || post.LikeCount != 1 {
+		t.Fatalf("target post = %+v err=%v", post, err)
+	}
+	if requests != 8 {
+		t.Fatalf("requests = %d, want 8 (two paths, two passes, one terminal page each)", requests)
 	}
 }
 
