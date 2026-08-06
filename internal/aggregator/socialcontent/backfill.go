@@ -64,6 +64,7 @@ type backfillMeta struct {
 	Path          string
 	Operation     string
 	TargetID      string
+	OriginalID    string
 	ChainName     string
 	Timestamp     int64
 	GenesisHeight int64
@@ -100,16 +101,39 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	}
 	paths := normaliseBackfillPaths(opts.Paths)
 
-	// MANAPI pagination is not globally ordered by timestamp. First scan all
-	// pages and retain only lightweight metadata, then compute the dependency
-	// closure needed to fold recent interactions onto their canonical posts.
-	metas := make(map[string]backfillMeta)
+	// MANAPI pagination is not globally ordered by timestamp. Scan every page,
+	// but retain only lookback seeds and their lightweight references. This
+	// preserves completeness without keeping the entire historical index in RAM.
+	lookbackUnix := int64(0)
+	if !opts.Since.IsZero() {
+		lookbackUnix = opts.Since.Unix()
+	}
+	interactions := make(map[string]backfillMeta)
+	postRefs := make(map[string]struct{})
+	recentPosts := make(map[string]struct{})
+	pins := make(map[string]*aggregator.PinInscription)
 	for _, path := range paths {
 		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
 			for _, pin := range page.Pins {
 				meta := backfillMetaFromPin(pin)
-				if meta.ID != "" {
-					metas[meta.ID] = meta
+				if meta.ID == "" || (lookbackUnix != 0 && meta.Timestamp < lookbackUnix) {
+					continue
+				}
+				switch meta.Path {
+				case PathSimpleBuzz:
+					recentPosts[meta.ID] = struct{}{}
+					postRefs[meta.ID] = struct{}{}
+					if meta.TargetID != "" {
+						postRefs[meta.TargetID] = struct{}{}
+					}
+					if meta.OriginalID != "" {
+						postRefs[meta.OriginalID] = struct{}{}
+					}
+				case PathPayLike, PathPayComment:
+					interactions[meta.ID] = meta
+					if meta.TargetID != "" {
+						postRefs[meta.TargetID] = struct{}{}
+					}
 				}
 			}
 			return nil
@@ -117,14 +141,57 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 			return err
 		}
 	}
-	selected := selectBackfillPins(metas, opts.Since)
+	selectedPosts := make(map[string]struct{}, len(recentPosts)+len(postRefs))
+	for id := range recentPosts {
+		selectedPosts[id] = struct{}{}
+	}
+	// Resolve old source pins and all versions referenced by recent posts or
+	// interactions. The scan remains complete, but only matching metadata is kept.
+	for _, path := range paths {
+		if path != PathSimpleBuzz {
+			continue
+		}
+		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
+			for _, pin := range page.Pins {
+				meta := backfillMetaFromPin(pin)
+				if _, ok := postRefs[meta.ID]; !ok {
+					if meta.OriginalID == "" {
+						continue
+					}
+					if _, ok := postRefs[meta.OriginalID]; !ok {
+						continue
+					}
+				}
+				selectedPosts[meta.ID] = struct{}{}
+				pins[meta.ID] = pin.toAggregatorPin()
+				if meta.OriginalID != "" {
+					postRefs[meta.OriginalID] = struct{}{}
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	selected := make(map[string]struct{}, len(selectedPosts)+len(interactions))
+	for id := range selectedPosts {
+		selected[id] = struct{}{}
+	}
+	for id, meta := range interactions {
+		if _, ok := selectedPosts[meta.TargetID]; ok {
+			selected[id] = struct{}{}
+		}
+	}
 	if len(selected) == 0 {
 		return nil
 	}
 
-	// Scan a second time so the first pass does not retain large content bodies.
-	pins := make(map[string]*aggregator.PinInscription, len(selected))
+	// Scan interaction paths a second time to fetch bodies without retaining the
+	// historical content bodies encountered during the complete metadata scan.
 	for _, path := range paths {
+		if path == PathSimpleBuzz {
+			continue
+		}
 		if err := opts.Client.scanPath(ctx, path, pageSize, func(page BackfillPage) error {
 			for _, pin := range page.Pins {
 				if _, ok := selected[pin.ID]; ok {
@@ -192,6 +259,7 @@ func backfillMetaFromPin(pin BackfillPin) backfillMeta {
 		ID:            strings.TrimSpace(pin.ID),
 		Path:          protocolPathFromPinPath(pin.Path),
 		Operation:     strings.ToLower(strings.TrimSpace(pin.Operation)),
+		OriginalID:    strings.TrimSpace(pin.OriginalId),
 		ChainName:     strings.ToLower(strings.TrimSpace(pin.ChainName)),
 		Timestamp:     pin.Timestamp,
 		GenesisHeight: pin.GenesisHeight,
