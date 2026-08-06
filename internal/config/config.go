@@ -22,6 +22,7 @@ type Config struct {
 	BotHub                BotHubConfig                `json:"botHub"`
 	Federation            FederationConfig            `json:"federation"`
 	SocialBackfill        SocialBackfillConfig        `json:"socialBackfill"`
+	SocialContentBackfill SocialContentBackfillConfig `json:"socialContentBackfill"`
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
 }
 
@@ -68,6 +69,14 @@ type BotHomepageV2BackfillConfig struct {
 }
 
 type SocialBackfillConfig struct {
+	Enabled       bool          `json:"enabled"`
+	Lookback      time.Duration `json:"lookback"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
+}
+
+type SocialContentBackfillConfig struct {
 	Enabled       bool          `json:"enabled"`
 	Lookback      time.Duration `json:"lookback"`
 	Timeout       time.Duration `json:"timeout"`
@@ -293,6 +302,13 @@ func Default() Config {
 			PageSize:      100,
 			MANAPIBaseURL: "https://manapi.metaid.io",
 		},
+		SocialContentBackfill: SocialContentBackfillConfig{
+			Enabled:       false,
+			Lookback:      1440 * time.Hour,
+			Timeout:       2 * time.Minute,
+			PageSize:      100,
+			MANAPIBaseURL: "https://manapi.metaid.io",
+		},
 		BotHomepageV2Backfill: BotHomepageV2BackfillConfig{
 			Enabled:       false,
 			Lookback:      1440 * time.Hour,
@@ -408,6 +424,12 @@ func Load() (Config, error) {
 	applyIntEnv("METASO_P2P_SOCIAL_BACKFILL_PAGE_SIZE", &cfg.SocialBackfill.PageSize)
 	applyStringEnv("METASO_P2P_SOCIAL_BACKFILL_MANAPI_BASE_URL", &cfg.SocialBackfill.MANAPIBaseURL)
 
+	applyBoolEnv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_ENABLED", &cfg.SocialContentBackfill.Enabled)
+	applyDurationEnv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_LOOKBACK", &cfg.SocialContentBackfill.Lookback)
+	applyDurationEnv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_TIMEOUT", &cfg.SocialContentBackfill.Timeout)
+	applyIntEnv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_PAGE_SIZE", &cfg.SocialContentBackfill.PageSize)
+	applyStringEnv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_MANAPI_BASE_URL", &cfg.SocialContentBackfill.MANAPIBaseURL)
+
 	applyBoolEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED", &cfg.BotHomepageV2Backfill.Enabled)
 	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", &cfg.BotHomepageV2Backfill.Lookback)
 	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT", &cfg.BotHomepageV2Backfill.Timeout)
@@ -463,6 +485,9 @@ func (c Config) Validate() error {
 	if err := c.validateSocialBackfill(); err != nil {
 		return err
 	}
+	if err := c.validateSocialContentBackfill(); err != nil {
+		return err
+	}
 	if err := c.validateBotHomepageV2Backfill(); err != nil {
 		return err
 	}
@@ -500,6 +525,22 @@ func (c Config) validateSocialBackfill() error {
 	}
 	if c.SocialBackfill.Enabled && strings.TrimSpace(c.SocialBackfill.MANAPIBaseURL) == "" {
 		return errors.New("socialBackfill.manapiBaseUrl is required when backfill is enabled")
+	}
+	return nil
+}
+
+func (c Config) validateSocialContentBackfill() error {
+	if c.SocialContentBackfill.Lookback <= 0 {
+		return errors.New("socialContentBackfill.lookback must be greater than zero")
+	}
+	if c.SocialContentBackfill.Timeout <= 0 {
+		return errors.New("socialContentBackfill.timeout must be greater than zero")
+	}
+	if c.SocialContentBackfill.PageSize <= 0 {
+		return errors.New("socialContentBackfill.pageSize must be greater than zero")
+	}
+	if c.SocialContentBackfill.Enabled && strings.TrimSpace(c.SocialContentBackfill.MANAPIBaseURL) == "" {
+		return errors.New("socialContentBackfill.manapiBaseUrl is required when backfill is enabled")
 	}
 	return nil
 }

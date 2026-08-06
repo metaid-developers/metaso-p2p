@@ -63,6 +63,7 @@ func main() {
 	var userinfoAgg *userinfo.Aggregator
 	var botHomepageAgg *bothomepage.Aggregator
 	var socialAgg *social.Aggregator
+	var socialContentAgg *socialcontent.Aggregator
 	var groupChatAgg *groupchat.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
@@ -81,8 +82,11 @@ func main() {
 			socialAgg = socialCandidate
 			socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userinfoAgg))
 		}
-		if err := aggRegistry.Register(&socialcontent.Aggregator{}); err != nil {
+		socialContentCandidate := &socialcontent.Aggregator{}
+		if err := aggRegistry.Register(socialContentCandidate); err != nil {
 			log.Printf("WARNING: socialcontent aggregator init failed: %v", err)
+		} else {
+			socialContentAgg = socialContentCandidate
 		}
 		groupChatCandidate := &groupchat.Aggregator{}
 		if err := aggRegistry.Register(groupChatCandidate); err != nil {
@@ -170,6 +174,25 @@ func main() {
 				log.Printf("WARNING: social follow backfill requested but aggregator is unavailable")
 			} else if err := runSocialBackfillIfEnabled(socialAgg, cfg.SocialBackfill); err != nil {
 				log.Printf("WARNING: social follow backfill failed: %v", err)
+			}
+		}
+		if cfg.SocialContentBackfill.Enabled {
+			if socialContentAgg == nil {
+				log.Printf("WARNING: social content backfill requested but aggregator is unavailable")
+			} else {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), cfg.SocialContentBackfill.Timeout)
+					err := socialContentAgg.Backfill(socialcontent.BackfillOptions{
+						Context:  ctx,
+						Client:   socialcontent.NewBackfillClient(cfg.SocialContentBackfill.MANAPIBaseURL, http.DefaultClient),
+						Since:    time.Now().Add(-cfg.SocialContentBackfill.Lookback),
+						PageSize: cfg.SocialContentBackfill.PageSize,
+					})
+					cancel()
+					if err != nil {
+						log.Printf("WARNING: social content backfill failed: %v", err)
+					}
+				}()
 			}
 		}
 		startPublishedContentReplayIfEnabled(publishedAgg, cfg)

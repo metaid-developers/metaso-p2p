@@ -1,8 +1,11 @@
 package socialcontent
 
 import (
+	"errors"
 	"sort"
 	"strings"
+
+	"github.com/cockroachdb/pebble"
 
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
@@ -138,8 +141,11 @@ func (a *Aggregator) FindPost(pinID, chainName string) (*PostRecord, error) {
 	}
 	if chainName != "" {
 		raw, err := a.store.Get(Namespace, postPinKey(chainName, pinID))
-		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-			return nil, err
+		if err != nil {
+			if !errors.Is(err, pebble.ErrNotFound) {
+				return nil, err
+			}
+			raw = nil
 		}
 		source := string(raw)
 		if source == "" {

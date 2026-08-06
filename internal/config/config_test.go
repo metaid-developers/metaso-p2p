@@ -105,6 +105,43 @@ func TestDefaultSocialBackfillConfigDisabled(t *testing.T) {
 	}
 }
 
+func TestDefaultSocialContentBackfillConfigDisabled(t *testing.T) {
+	cfg := Default()
+	if cfg.SocialContentBackfill.Enabled {
+		t.Fatal("expected social content backfill to be disabled by default")
+	}
+	if cfg.SocialContentBackfill.Lookback != 1440*time.Hour {
+		t.Fatalf("expected default lookback 1440h, got %s", cfg.SocialContentBackfill.Lookback)
+	}
+	if cfg.SocialContentBackfill.Timeout != 2*time.Minute {
+		t.Fatalf("expected default timeout 2m, got %s", cfg.SocialContentBackfill.Timeout)
+	}
+	if cfg.SocialContentBackfill.PageSize != 100 {
+		t.Fatalf("expected default page size 100, got %d", cfg.SocialContentBackfill.PageSize)
+	}
+	if cfg.SocialContentBackfill.MANAPIBaseURL != "https://manapi.metaid.io" {
+		t.Fatalf("expected default MANAPI base URL, got %q", cfg.SocialContentBackfill.MANAPIBaseURL)
+	}
+}
+
+func TestLoadSocialContentBackfillEnv(t *testing.T) {
+	t.Setenv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_ENABLED", "true")
+	t.Setenv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_LOOKBACK", "720h")
+	t.Setenv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_TIMEOUT", "45s")
+	t.Setenv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_PAGE_SIZE", "50")
+	t.Setenv("METASO_P2P_SOCIAL_CONTENT_BACKFILL_MANAPI_BASE_URL", "https://manapi.social-content.example")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.SocialContentBackfill.Enabled || cfg.SocialContentBackfill.Lookback != 720*time.Hour ||
+		cfg.SocialContentBackfill.Timeout != 45*time.Second || cfg.SocialContentBackfill.PageSize != 50 ||
+		cfg.SocialContentBackfill.MANAPIBaseURL != "https://manapi.social-content.example" {
+		t.Fatalf("unexpected social content backfill config: %+v", cfg.SocialContentBackfill)
+	}
+}
+
 func TestLoadBotHomepageV2BackfillEnv(t *testing.T) {
 	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_ENABLED", "true")
 	t.Setenv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", "720h")

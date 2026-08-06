@@ -276,6 +276,33 @@ pageSize = 100
 manapiBaseUrl = "https://manapi.metaid.io"
 
 # ---------------------------------------------------------------------------
+# [socialContentBackfill]  Optional social post/interaction MANAPI import
+# ---------------------------------------------------------------------------
+[socialContentBackfill]
+# Disabled by default. When enabled, startup imports recent simplebuzz,
+# paylike, and paycomment pins into the socialcontent read model.
+# Env: METASO_P2P_SOCIAL_CONTENT_BACKFILL_ENABLED
+enabled = false
+
+# How far back MANAPI backfill should read.
+# Format: Go duration string (e.g. "1440h" for 60 days).
+# Env: METASO_P2P_SOCIAL_CONTENT_BACKFILL_LOOKBACK
+lookback = "1440h"
+
+# Timeout for outbound MANAPI requests.
+# Format: Go duration string (e.g. "2m").
+# Env: METASO_P2P_SOCIAL_CONTENT_BACKFILL_TIMEOUT
+timeout = "2m"
+
+# Number of pins requested per MANAPI page.
+# Env: METASO_P2P_SOCIAL_CONTENT_BACKFILL_PAGE_SIZE
+pageSize = 100
+
+# MANAPI base URL used by the backfill client.
+# Env: METASO_P2P_SOCIAL_CONTENT_BACKFILL_MANAPI_BASE_URL
+manapiBaseUrl = "https://manapi.metaid.io"
+
+# ---------------------------------------------------------------------------
 # [botHomepageV2Backfill]  Optional Bot Homepage v2 MANAPI historical import
 # ---------------------------------------------------------------------------
 [botHomepageV2Backfill]

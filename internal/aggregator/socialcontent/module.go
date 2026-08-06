@@ -1,11 +1,13 @@
 package socialcontent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -170,7 +172,7 @@ func firstIdentity(values ...string) string {
 func (a *Aggregator) sourcePinID(chain, pinID string) (string, error) {
 	raw, err := a.store.Get(Namespace, postPinKey(chain, pinID))
 	if err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if !errors.Is(err, pebble.ErrNotFound) {
 			return "", err
 		}
 		raw = nil
