@@ -3,6 +3,7 @@ package socialcontent
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -105,11 +106,14 @@ func mempoolEventKey(chain, pinID string) []byte {
 func invertedTimestamp(ts int64) string {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, ^uint64(ts))
-	return base64.RawURLEncoding.EncodeToString(buf)
+	// Hex is used instead of base64 because base64's alphabet is not ordered
+	// like the underlying bytes (digits sort before uppercase in ASCII but
+	// after them in the base64 alphabet), which broke newest-first key order.
+	return hex.EncodeToString(buf)
 }
 
 func decodeInvertedTimestamp(encoded string) (int64, bool) {
-	buf, err := base64.RawURLEncoding.DecodeString(encoded)
+	buf, err := hex.DecodeString(encoded)
 	if err != nil || len(buf) != 8 {
 		return 0, false
 	}
