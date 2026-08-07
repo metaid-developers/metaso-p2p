@@ -3,6 +3,7 @@ package socialcontent
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestFeedPaginationUsesBoundedNewestCursor(t *testing.T) {
@@ -39,8 +40,9 @@ func TestFeedPaginationUsesBoundedNewestCursor(t *testing.T) {
 
 func TestFeedHotReturnsBoundedTopN(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
+	now := time.Now().Unix()
 	for i := 1; i <= 3; i++ {
-		pin := testPin(fmt.Sprintf("hot-post-%d:i0", i), PathSimpleBuzz, OperationCreate, "mvc", int64(100+i), []byte(`{"text":"hot"}`))
+		pin := testPin(fmt.Sprintf("hot-post-%d:i0", i), PathSimpleBuzz, OperationCreate, "mvc", now-int64(4-i), []byte(`{"text":"hot"}`))
 		if _, err := agg.HandleBlockPin(pin); err != nil {
 			t.Fatalf("post %d: %v", i, err)
 		}
@@ -54,5 +56,25 @@ func TestFeedHotReturnsBoundedTopN(t *testing.T) {
 	}
 	if page.Items[0].SourcePinId != "hot-post-3:i0" {
 		t.Fatalf("hot top item = %+v", page.Items[0])
+	}
+}
+
+func TestFeedHotIgnoresPostsOutsideRecentWindow(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	now := time.Now().Unix()
+	old := testPin("hot-old:i0", PathSimpleBuzz, OperationCreate, "mvc", now-7*24*3600, []byte(`{"text":"old hot"}`))
+	if _, err := agg.HandleBlockPin(old); err != nil {
+		t.Fatalf("old post: %v", err)
+	}
+	recent := testPin("hot-recent:i0", PathSimpleBuzz, OperationCreate, "mvc", now-3600, []byte(`{"text":"recent hot"}`))
+	if _, err := agg.HandleBlockPin(recent); err != nil {
+		t.Fatalf("recent post: %v", err)
+	}
+	page, err := agg.List(FeedParams{Size: 10, Sort: SortHot})
+	if err != nil {
+		t.Fatalf("List hot: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SourcePinId != "hot-recent:i0" {
+		t.Fatalf("hot window items = %+v", page.Items)
 	}
 }

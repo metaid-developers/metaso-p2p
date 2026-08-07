@@ -14,6 +14,10 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
+// hotWindow limits hot ranking to recent posts, matching the product intent
+// that nobody cares about a hot list from months ago.
+const hotWindow = 48 * time.Hour
+
 func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 	params = normaliseFeedParams(params)
 	if params.Sort == SortHot {
@@ -85,12 +89,13 @@ func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
 	return result, nil
 }
 
-// listHot ranks the full candidate set by the hot score. It keeps only the
-// best page in a bounded heap while scanning, so memory stays proportional to
-// the page size instead of the total post count. The result is a top-N
-// snapshot without offset pagination.
+// listHot ranks only posts created within hotWindow by the hot score. The
+// newest-first index scan stops at the first post older than the window, so
+// the request stays fast and memory stays proportional to the page size. The
+// result is a top-N snapshot without offset pagination.
 func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 	now := time.Now().Unix()
+	windowStart := now - int64(hotWindow.Seconds())
 	top := &hotTopHeap{limit: params.Size}
 	seen := make(map[string]struct{})
 	prefix := postTimePrefix()
@@ -102,6 +107,9 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 		if err != nil || record == nil || record.Hidden || record.IsMempool {
 			return err
 		}
+		if record.CreatedAt < windowStart {
+			return errStop
+		}
 		if !feedRecordMatches(record, params) {
 			return nil
 		}
@@ -112,7 +120,7 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 		seen[keyID] = struct{}{}
 		top.push(record, now)
 		return nil
-	}); err != nil {
+	}); err != nil && err != errStop {
 		return nil, err
 	}
 
