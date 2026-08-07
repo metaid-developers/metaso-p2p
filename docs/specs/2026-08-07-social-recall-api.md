@@ -35,6 +35,26 @@ Out of scope for v1 (explicit non-goals):
 - donation counters (reserved field, always zero until the adapter is
   verified and enabled).
 
+## 2.1 Scenario-driven requirements
+
+The contract is derived from concrete downstream scenarios. Each scenario
+must be satisfiable with the endpoints in this document; the backend always
+returns a coarse, time-ordered (or engagement-ordered) candidate set and never
+personalizes or ranks by user preference.
+
+| # | Scenario | Structured query | Backend behavior |
+| --- | --- | --- | --- |
+| S1 | "Today's posts about AI" / scheduled morning digest over several topics | `keyword` or `keywords`, `since`/`until` | Coarse candidates matching any keyword in the time window |
+| S2 | "What did X say in the last two days" | `publisher`, `since`/`until` | Coarse candidates from that author in the window |
+| S3 | "What are the latest hot posts" | `sort=hot` | Top-N by engagement within the recent hot window |
+| S4 | "Just show me the latest posts" | no conditions | Newest-first feed |
+| S5 | "Check post P / how many likes does my latest post have" | detail by `pinId`; `publisher=self&size=1` for own latest | Aggregated post info with like/comment/repost counts |
+| S6 | "What have the people I follow posted" | `scope=following&user=<globalMetaId>`, `since` | Posts by the user's followed authors, newest first |
+
+The Agent host is responsible for: resolving names to GlobalMetaIDs, computing
+calendar windows ("today", "last two days"), issuing one or more calls, and
+selecting/presenting 3-5 final items.
+
 ## 3. Data state
 
 The aggregated dataset is complete through the most recently completed
@@ -98,7 +118,11 @@ Error (HTTP 200, no `data` field):
 | `publisher` | string | - | - | GlobalMetaID, MetaID, or address of the post author |
 | `since` | int64 | - | unix seconds | Inclusive `createdAt` lower bound |
 | `until` | int64 | - | unix seconds | Inclusive `createdAt` upper bound |
-| `keyword` | string | - | - | Case-insensitive substring over post text |
+| `keyword` | string | - | - | Case-insensitive substring over post text (single term) |
+| `keywords` | string | - | - | Comma-separated terms, OR semantics; matches if any term matches |
+| `publishers` | string | - | - | Comma-separated GlobalMetaIDs/MetaIDs/addresses, OR semantics |
+| `scope` | string | - | `following` | Restrict to posts by authors followed by `user` |
+| `user` | string | - | - | GlobalMetaID used by `scope=following` |
 | `chainName` | string | - | - | Restrict to one chain (e.g. `mvc`) |
 | `protocol` | string | - | `simplebuzz` | Protocol path; only simplebuzz is supported in v1 |
 
@@ -108,6 +132,10 @@ Constraints:
 - `size` outside `1..100` is rejected.
 - `sort`, `protocol`, and malformed `since`/`until`/`cursor` are rejected.
 - All filters combine with AND semantics.
+- `keyword` and `keywords` are mutually exclusive; `publisher` and
+  `publishers` are mutually exclusive.
+- `scope=following` requires `user`; the followed set is resolved from the
+  MetaSo follow graph and the author filter is applied as an OR over that set.
 
 ### 6.2 Ordering semantics
 
@@ -115,9 +143,10 @@ Constraints:
   stops after one page plus a has-more probe, so latency is independent of the
   total dataset size.
 - `hot`: top-N within a fixed recent window of the last 48 hours, ranked by
-  the documented hot score (`engagement / (ageHours + 2)^1.5`, engagement =
-  likes + 2*comments + 3*donations, ageHours floored at 1). Older posts are
-  never returned by `hot`. The result is a top-N snapshot with no pagination.
+  engagement descending, aligned with the legacy MetaSo hot semantics
+  (sort by raw engagement count). Engagement = `likeCount + commentCount +
+  donateCount`. Ties are broken by newest first. Older posts are never
+  returned by `hot`. The result is a top-N snapshot with no pagination.
 
 ### 6.3 Response data
 
@@ -146,7 +175,7 @@ Constraints:
       "likeCount": 2,
       "commentCount": 0,
       "donateCount": 0,
-      "hotScore": 0.0335
+      "quoteCount": 0
     }
   ],
   "nextCursor": "k:...",
@@ -158,6 +187,9 @@ Notes:
 
 - `payload` is the normalized post payload (object or raw text).
 - `hotScore` is present only for `sort=hot`; zero scores are omitted.
+- `quoteCount` counts simplebuzz posts whose payload `quotePin` references the
+  canonical source of this post (repost/quote semantics from the legacy
+  MetaSo protocol). It is a proposed field; see Open decisions.
 - `nextCursor` is opaque, key-based, and only present for `newest` pages with
   more results. It must be passed back unchanged.
 
@@ -246,6 +278,8 @@ Before this contract is marked stable:
    documented as full-walk.
 6. Error contract: invalid inputs return `40000`, missing posts `40400`, and
    the envelope shape is stable.
+7. Scenario coverage: S1-S6 above each return real candidates in production
+   with the documented ordering.
 
 ## 12. Open decisions for review
 
@@ -255,7 +289,12 @@ Before this contract is marked stable:
 - Whether actor-like state ("did this identity like the post?") is needed by
   downstream agents; exposing it requires an identity parameter and is
   intentionally not part of v1.
+- `quoteCount` (repost/quote) requires verifying real `quotePin` samples from
+  MANAPI and adding the counter; until then the field is absent or zero.
 - Whether a dedicated likes list endpoint is needed before Agent integration.
+- Whether `scope=following` should be its own endpoint
+  (`/api/social/following-feed`) instead of a feed parameter; both are
+  functionally equivalent in v1.
 - Follow-up work for the backfill pipeline: incremental/resumable crawling and
   MANAPI-side index health are prerequisites for stronger freshness
   guarantees.
