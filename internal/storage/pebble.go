@@ -228,6 +228,63 @@ func (s *PebbleStore) ScanPrefix(namespace string, prefix []byte, fn func(key, v
 	return nil
 }
 
+// ScanAfter iterates over all keys strictly after the given key and calls fn
+// for each. The caller controls the upper bound through its own filtering or
+// by returning a stop error. A nil after starts from the first key.
+func (s *PebbleStore) ScanAfter(namespace string, after []byte, fn func(key, value []byte) error) error {
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+
+	var lower []byte
+	if len(after) > 0 {
+		lower = make([]byte, 0, len(after)+1)
+		lower = append(lower, after...)
+		lower = append(lower, 0x00)
+	}
+	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: lower})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		if err := fn(iter.Key(), iter.Value()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ScanPrefixAfter iterates over keys matching prefix that are strictly after
+// the given key. The after key must lie within the prefix range.
+func (s *PebbleStore) ScanPrefixAfter(namespace string, prefix, after []byte, fn func(key, value []byte) error) error {
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+
+	lower := make([]byte, 0, len(after)+1)
+	lower = append(lower, after...)
+	lower = append(lower, 0x00)
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: lower,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		if err := fn(iter.Key(), iter.Value()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // prefixUpperBound computes the exclusive upper bound for a prefix scan.
 func prefixUpperBound(prefix []byte) []byte {
 	end := make([]byte, len(prefix))

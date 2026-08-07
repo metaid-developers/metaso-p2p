@@ -14,11 +14,82 @@ import (
 
 func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 	params = normaliseFeedParams(params)
-	offset, err := decodeCursor(params.Cursor)
+	if params.Sort == SortHot {
+		return a.listHot(params)
+	}
+	return a.listNewest(params)
+}
+
+// listNewest streams the newest-first index and stops once one page plus the
+// hasMore probe is collected, so feed reads stay bounded regardless of the
+// total post count. The index order matches the newest sort contract.
+func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
+	after, err := decodePostCursor(params.Cursor)
 	if err != nil {
 		return nil, err
 	}
 
+	records := make([]*PostRecord, 0)
+	seen := make(map[string]struct{})
+	prefix := postTimePrefix()
+	if params.Publisher != "" {
+		prefix = postAuthorPrefix(params.Publisher)
+	}
+	need := params.Size + 1
+	var lastKey []byte
+	scan := func(key, value []byte) error {
+		record, err := a.recordFromIndexKey(key, value, params.Publisher != "")
+		if err != nil || record == nil || record.Hidden || record.IsMempool {
+			return err
+		}
+		if !feedRecordMatches(record, params) {
+			return nil
+		}
+		keyID := record.ChainName + ":" + record.SourcePinId
+		if _, ok := seen[keyID]; ok {
+			return nil
+		}
+		seen[keyID] = struct{}{}
+		if len(records) < params.Size {
+			lastKey = append(lastKey[:0], key...)
+		}
+		records = append(records, record)
+		if len(records) >= need {
+			return errStop
+		}
+		return nil
+	}
+	if len(after) > 0 {
+		err = a.store.ScanPrefixAfter(Namespace, prefix, after, scan)
+	} else {
+		err = a.store.ScanPrefix(Namespace, prefix, scan)
+	}
+	if err != nil && err != errStop {
+		return nil, err
+	}
+
+	hasMore := len(records) > params.Size
+	if hasMore {
+		records = records[:params.Size]
+	}
+	result := &FeedResult{Items: make([]PostItem, 0, len(records))}
+	for _, record := range records {
+		result.Items = append(result.Items, postItemFromRecord(record))
+	}
+	result.HasMore = hasMore
+	if hasMore {
+		result.NextCursor = encodePostCursor(lastKey)
+	}
+	return result, nil
+}
+
+// listHot ranks the full candidate set by the hot score, so it scans all
+// matching posts and keeps the offset cursor contract.
+func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
+	offset, err := decodeCursor(params.Cursor)
+	if err != nil {
+		return nil, err
+	}
 	records := make([]*PostRecord, 0)
 	seen := make(map[string]struct{})
 	prefix := postTimePrefix()
@@ -30,19 +101,7 @@ func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 		if err != nil || record == nil || record.Hidden || record.IsMempool {
 			return err
 		}
-		if params.ChainName != "" && record.ChainName != params.ChainName {
-			return nil
-		}
-		if params.Since > 0 && record.CreatedAt < params.Since {
-			return nil
-		}
-		if params.Until > 0 && record.CreatedAt > params.Until {
-			return nil
-		}
-		if params.Publisher != "" && !publisherMatch(record, params.Publisher) {
-			return nil
-		}
-		if params.Keyword != "" && !keywordMatch(record, params.Keyword) {
+		if !feedRecordMatches(record, params) {
 			return nil
 		}
 		keyID := record.ChainName + ":" + record.SourcePinId
@@ -58,11 +117,9 @@ func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 
 	now := time.Now().Unix()
 	sort.SliceStable(records, func(i, j int) bool {
-		if params.Sort == SortHot {
-			left, right := hotScore(records[i], now), hotScore(records[j], now)
-			if left != right {
-				return left > right
-			}
+		left, right := hotScore(records[i], now), hotScore(records[j], now)
+		if left != right {
+			return left > right
 		}
 		if records[i].CreatedAt != records[j].CreatedAt {
 			return records[i].CreatedAt > records[j].CreatedAt
@@ -89,6 +146,25 @@ func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 		result.NextCursor = encodeCursor(end)
 	}
 	return result, nil
+}
+
+func feedRecordMatches(record *PostRecord, params FeedParams) bool {
+	if params.ChainName != "" && record.ChainName != params.ChainName {
+		return false
+	}
+	if params.Since > 0 && record.CreatedAt < params.Since {
+		return false
+	}
+	if params.Until > 0 && record.CreatedAt > params.Until {
+		return false
+	}
+	if params.Publisher != "" && !publisherMatch(record, params.Publisher) {
+		return false
+	}
+	if params.Keyword != "" && !keywordMatch(record, params.Keyword) {
+		return false
+	}
+	return true
 }
 
 func normaliseFeedParams(params FeedParams) FeedParams {

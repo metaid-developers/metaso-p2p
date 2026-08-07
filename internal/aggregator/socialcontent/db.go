@@ -153,3 +153,25 @@ func decodeCursor(cursor string) (int, error) {
 	}
 	return offset, nil
 }
+
+func encodePostCursor(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return "k:" + base64.RawURLEncoding.EncodeToString(key)
+}
+
+func decodePostCursor(cursor string) ([]byte, error) {
+	if strings.TrimSpace(cursor) == "" {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(cursor)
+	if !strings.HasPrefix(raw, "k:") {
+		return nil, ErrInvalidCursor
+	}
+	key, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(raw, "k:"))
+	if err != nil || len(key) == 0 {
+		return nil, ErrInvalidCursor
+	}
+	return key, nil
+}
