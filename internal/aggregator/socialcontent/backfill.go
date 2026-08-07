@@ -88,21 +88,14 @@ func NewBackfillClient(baseURL string, httpClient *http.Client) *BackfillClient 
 	}
 }
 
-// newBackfillHTTPClient returns a client with an overall request timeout and
-// HTTP/1.1 transport. MANAPI occasionally leaves an HTTP/2 stream open without
-// responding, and the default client would wait forever on such a stream.
+// newBackfillHTTPClient returns a client with an overall request timeout.
+// It keeps the standard transport (HTTP/2 capable) because MANAPI's nginx
+// accepts those handshakes reliably, and the timeout prevents a stale stream
+// from blocking the backfill forever.
 func newBackfillHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: 60 * time.Second,
-		Transport: &http.Transport{
-			ForceAttemptHTTP2:     false,
-			MaxIdleConns:          10,
-			MaxIdleConnsPerHost:   4,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		},
+		Timeout:   60 * time.Second,
+		Transport: http.DefaultTransport,
 	}
 }
 
