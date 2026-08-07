@@ -153,6 +153,9 @@ func (a *Aggregator) processPost(pin *aggregator.PinInscription, chain string) e
 	if err := a.setStore(Namespace, postPinKey(chain, pin.Id), []byte(source)); err != nil {
 		return err
 	}
+	if err := a.setStore(Namespace, postPinChainKey(pin.Id), []byte(chain)); err != nil {
+		return err
+	}
 	if a.skipReconcile {
 		return nil
 	}

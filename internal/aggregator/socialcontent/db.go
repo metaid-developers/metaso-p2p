@@ -32,6 +32,12 @@ func postPinKey(chain, pinID string) []byte {
 	return []byte(keyPostPin + strings.ToLower(chain) + ":" + pinID)
 }
 
+func postPinPrefix() []byte { return []byte(keyPostPin) }
+
+func postPinChainKey(pinID string) []byte {
+	return []byte("post:pinchain:" + pinID)
+}
+
 func postTimeKey(ts int64, chain, source string) []byte {
 	return []byte(keyPostTime + invertedTimestamp(ts) + ":" + strings.ToLower(chain) + ":" + source)
 }

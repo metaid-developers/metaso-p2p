@@ -1,6 +1,8 @@
 package socialcontent
 
 import (
+	"bytes"
+	"container/heap"
 	"errors"
 	"math"
 	"sort"
@@ -83,14 +85,13 @@ func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
 	return result, nil
 }
 
-// listHot ranks the full candidate set by the hot score, so it scans all
-// matching posts and keeps the offset cursor contract.
+// listHot ranks the full candidate set by the hot score. It keeps only the
+// best page in a bounded heap while scanning, so memory stays proportional to
+// the page size instead of the total post count. The result is a top-N
+// snapshot without offset pagination.
 func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
-	offset, err := decodeCursor(params.Cursor)
-	if err != nil {
-		return nil, err
-	}
-	records := make([]*PostRecord, 0)
+	now := time.Now().Unix()
+	top := &hotTopHeap{limit: params.Size}
 	seen := make(map[string]struct{})
 	prefix := postTimePrefix()
 	if params.Publisher != "" {
@@ -109,13 +110,13 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 			return nil
 		}
 		seen[keyID] = struct{}{}
-		records = append(records, record)
+		top.push(record, now)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	now := time.Now().Unix()
+	records := top.records()
 	sort.SliceStable(records, func(i, j int) bool {
 		left, right := hotScore(records[i], now), hotScore(records[j], now)
 		if left != right {
@@ -130,22 +131,74 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 		return records[i].SourcePinId < records[j].SourcePinId
 	})
 
-	if offset > len(records) {
-		return nil, ErrInvalidCursor
-	}
-	end := offset + params.Size
-	if end > len(records) {
-		end = len(records)
-	}
-	result := &FeedResult{Items: make([]PostItem, 0, end-offset)}
-	for _, record := range records[offset:end] {
+	result := &FeedResult{Items: make([]PostItem, 0, len(records))}
+	for _, record := range records {
 		result.Items = append(result.Items, postItemFromRecord(record))
 	}
-	result.HasMore = end < len(records)
-	if result.HasMore {
-		result.NextCursor = encodeCursor(end)
-	}
 	return result, nil
+}
+
+type hotHeapItem struct {
+	record *PostRecord
+	score  float64
+}
+
+type hotTopHeap struct {
+	items []hotHeapItem
+	limit int
+}
+
+func (h *hotTopHeap) push(record *PostRecord, now int64) {
+	item := hotHeapItem{record: record, score: hotScore(record, now)}
+	if len(h.items) < h.limit {
+		heap.Push(h, item)
+		return
+	}
+	if h.Len() > 0 && hotWorse(item, h.items[0]) {
+		return
+	}
+	h.items[0] = item
+	heap.Fix(h, 0)
+}
+
+func (h *hotTopHeap) records() []*PostRecord {
+	records := make([]*PostRecord, 0, len(h.items))
+	for h.Len() > 0 {
+		records = append(records, heap.Pop(h).(hotHeapItem).record)
+	}
+	return records
+}
+
+func (h hotTopHeap) Len() int { return len(h.items) }
+
+func (h hotTopHeap) Less(i, j int) bool {
+	return hotWorse(h.items[i], h.items[j])
+}
+
+func (h hotTopHeap) Swap(i, j int) { h.items[i], h.items[j] = h.items[j], h.items[i] }
+
+func (h *hotTopHeap) Push(value any) { h.items = append(h.items, value.(hotHeapItem)) }
+
+func (h *hotTopHeap) Pop() any {
+	old := h.items
+	last := old[len(old)-1]
+	h.items = old[:len(old)-1]
+	return last
+}
+
+// hotWorse reports whether left ranks below right in the hot ordering, so the
+// heap root is always the current worst candidate.
+func hotWorse(left, right hotHeapItem) bool {
+	if left.score != right.score {
+		return left.score < right.score
+	}
+	if left.record.CreatedAt != right.record.CreatedAt {
+		return left.record.CreatedAt < right.record.CreatedAt
+	}
+	if left.record.ChainName != right.record.ChainName {
+		return left.record.ChainName > right.record.ChainName
+	}
+	return left.record.SourcePinId > right.record.SourcePinId
 }
 
 func feedRecordMatches(record *PostRecord, params FeedParams) bool {
@@ -239,29 +292,50 @@ func (a *Aggregator) FindPost(pinID, chainName string) (*PostRecord, error) {
 		return a.loadPost(chainName, source)
 	}
 
-	var found *PostRecord
-	err := a.store.ScanPrefix(Namespace, postTimePrefix(), func(key, value []byte) error {
-		chain, source, ok := parsePostTimeKey(key)
-		if !ok {
+	// Fast path: pins written after the chain index key resolve in one read.
+	chainRaw, err := a.store.Get(Namespace, postPinChainKey(pinID))
+	if err == nil && len(chainRaw) > 0 {
+		chain := string(chainRaw)
+		raw, err := a.store.Get(Namespace, postPinKey(chain, pinID))
+		if err != nil {
+			if !errors.Is(err, pebble.ErrNotFound) {
+				return nil, err
+			}
+			raw = nil
+		}
+		source := string(raw)
+		if source == "" {
+			source = pinID
+		}
+		return a.loadPost(chain, source)
+	}
+	if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+		return nil, err
+	}
+
+	// Legacy fallback: scan the compact pin-to-source index without loading
+	// every post record, then resolve the canonical chain and record.
+	suffix := []byte(":" + pinID)
+	var foundChain, foundSource string
+	err = a.store.ScanPrefix(Namespace, postPinPrefix(), func(key, _ []byte) error {
+		if !bytes.HasSuffix(key, suffix) {
 			return nil
 		}
-		if len(value) > 0 {
-			source = string(value)
+		rest := strings.TrimPrefix(string(key), keyPostPin)
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) != 2 {
+			return nil
 		}
-		record, err := a.loadPost(chain, source)
-		if err != nil {
-			return err
-		}
-		if record != nil && (record.SourcePinId == pinID || record.CurrentPinId == pinID) {
-			found = record
-			return errStop
-		}
-		return nil
+		foundChain, foundSource = parts[0], parts[1]
+		return errStop
 	})
 	if err != nil && err != errStop {
 		return nil, err
 	}
-	return found, nil
+	if foundChain == "" {
+		return nil, nil
+	}
+	return a.loadPost(foundChain, foundSource)
 }
 
 func publisherMatch(record *PostRecord, publisher string) bool {

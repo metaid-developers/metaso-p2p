@@ -37,7 +37,7 @@ func TestFeedPaginationUsesBoundedNewestCursor(t *testing.T) {
 	}
 }
 
-func TestFeedHotKeepsOffsetCursorContract(t *testing.T) {
+func TestFeedHotReturnsBoundedTopN(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	for i := 1; i <= 3; i++ {
 		pin := testPin(fmt.Sprintf("hot-post-%d:i0", i), PathSimpleBuzz, OperationCreate, "mvc", int64(100+i), []byte(`{"text":"hot"}`))
@@ -49,14 +49,10 @@ func TestFeedHotKeepsOffsetCursorContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List hot: %v", err)
 	}
-	if len(page.Items) != 2 || !page.HasMore || page.NextCursor == "" {
+	if len(page.Items) != 2 || page.HasMore || page.NextCursor != "" {
 		t.Fatalf("hot page = %+v", page)
 	}
-	next, err := agg.List(FeedParams{Size: 2, Sort: SortHot, Cursor: page.NextCursor})
-	if err != nil {
-		t.Fatalf("List hot page 2: %v", err)
-	}
-	if len(next.Items) != 1 || next.HasMore {
-		t.Fatalf("hot page 2 = %+v", next)
+	if page.Items[0].SourcePinId != "hot-post-3:i0" {
+		t.Fatalf("hot top item = %+v", page.Items[0])
 	}
 }
