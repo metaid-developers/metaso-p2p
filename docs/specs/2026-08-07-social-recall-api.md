@@ -1,7 +1,7 @@
 # Social Recall API (Agent Downstream Contract)
 
 Date: 2026-08-07
-Status: Draft for review
+Status: v1 contract (decisions resolved 2026-08-07)
 
 ## 1. Purpose
 
@@ -189,7 +189,8 @@ Notes:
 - `hotScore` is present only for `sort=hot`; zero scores are omitted.
 - `quoteCount` counts simplebuzz posts whose payload `quotePin` references the
   canonical source of this post (repost/quote semantics from the legacy
-  MetaSo protocol). It is a proposed field; see Open decisions.
+  MetaSo protocol). Verified against real MANAPI samples (approximately 0.1%
+  of simplebuzz posts carry a non-empty `quotePin`).
 - `nextCursor` is opaque, key-based, and only present for `newest` pages with
   more results. It must be passed back unchanged.
 
@@ -281,20 +282,29 @@ Before this contract is marked stable:
 7. Scenario coverage: S1-S6 above each return real candidates in production
    with the documented ordering.
 
-## 12. Open decisions for review
+## 12. Resolved decisions (v1)
 
-- Whether the 48-hour `hot` window should become a query parameter in a later
-  revision (recommended: keep it fixed for v1, add `hotWindow` only if a
-  downstream need appears).
-- Whether actor-like state ("did this identity like the post?") is needed by
-  downstream agents; exposing it requires an identity parameter and is
-  intentionally not part of v1.
-- `quoteCount` (repost/quote) requires verifying real `quotePin` samples from
-  MANAPI and adding the counter; until then the field is absent or zero.
-- Whether a dedicated likes list endpoint is needed before Agent integration.
-- Whether `scope=following` should be its own endpoint
-  (`/api/social/following-feed`) instead of a feed parameter; both are
-  functionally equivalent in v1.
+- Multi-keyword retrieval uses the `keywords` parameter with OR semantics;
+  `keyword` remains as the single-term alias.
+- Multi-author retrieval uses the `publishers` parameter with OR semantics;
+  `publisher` remains as the single-author alias.
+- The following feed is a feed parameter (`scope=following&user=`), not a
+  separate endpoint.
+- `sort=hot` ranks by raw engagement (likes + comments + donations)
+  descending within a fixed 48-hour window, aligning with the legacy MetaSo
+  hot semantics; `hotWindow` parameterization is deferred until a downstream
+  need appears.
+- `quoteCount` is part of the v1 post item and is maintained from simplebuzz
+  `quotePin` references; quotes whose target is not yet indexed are skipped.
+
+## 13. Deferred
+
+- Actor-like state ("did this identity like the post?") and a dedicated likes
+  list endpoint, pending downstream Agent needs.
+- `hotWindow` query parameter.
+- Incremental/resumable backfill and MANAPI-side index health improvements.
+- Quote revocation handling (revoked quoting posts keep their historical
+  quote event in v1).
 - Follow-up work for the backfill pipeline: incremental/resumable crawling and
   MANAPI-side index health are prerequisites for stronger freshness
   guarantees.
