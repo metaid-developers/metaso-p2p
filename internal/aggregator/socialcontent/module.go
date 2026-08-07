@@ -22,6 +22,18 @@ type Aggregator struct {
 	mu            sync.Mutex
 	bulk          bool // set while replaying a historical backfill under the lock
 	skipReconcile bool // pending-interaction reconciliation is unneeded when posts replay first
+	followLister  FollowLister
+}
+
+// FollowLister resolves the GlobalMetaIDs a subject follows. It is wired by
+// the runtime so the socialcontent read model stays decoupled from the follow
+// aggregator.
+type FollowLister interface {
+	ListFollowing(globalMetaId string) ([]string, error)
+}
+
+func (a *Aggregator) SetFollowLister(lister FollowLister) {
+	a.followLister = lister
 }
 
 func (a *Aggregator) Name() string { return Namespace }
@@ -156,10 +168,75 @@ func (a *Aggregator) processPost(pin *aggregator.PinInscription, chain string) e
 	if err := a.setStore(Namespace, postPinChainKey(pin.Id), []byte(chain)); err != nil {
 		return err
 	}
+	if err := a.processQuoteIfAny(pin, chain); err != nil {
+		return err
+	}
 	if a.skipReconcile {
 		return nil
 	}
 	return a.reconcilePendingInteractions(record)
+}
+
+// processQuoteIfAny records a simplebuzz quotePin reference and refreshes the
+// target post's quote count. Quotes whose target is not yet indexed are
+// skipped, mirroring the interaction model.
+func (a *Aggregator) processQuoteIfAny(pin *aggregator.PinInscription, chain string) error {
+	target := quotePinFromPin(pin)
+	if target == "" {
+		return nil
+	}
+	canonical, err := a.canonicalTarget(chain, target)
+	if err != nil {
+		return err
+	}
+	if canonical == "" || canonical == strings.TrimSpace(pin.Id) {
+		return nil
+	}
+	post, err := a.loadPost(chain, canonical)
+	if err != nil {
+		return err
+	}
+	if post == nil {
+		return nil
+	}
+	author := authorFromPin(pin)
+	event := &QuoteEvent{
+		QuotePinId:         strings.TrimSpace(pin.Id),
+		ChainName:          chain,
+		TargetPinId:        canonical,
+		AuthorGlobalMetaId: author.GlobalMetaId,
+		AuthorMetaId:       author.MetaId,
+		AuthorAddress:      author.Address,
+		Timestamp:          pin.Timestamp,
+	}
+	if err := a.saveRecord(quoteEventKey(chain, pin.Id), event); err != nil {
+		return err
+	}
+	if err := a.setStore(Namespace, quoteTargetKey(chain, canonical, pin.Timestamp, pin.Id), []byte(pin.Id)); err != nil {
+		return err
+	}
+	return a.recomputeQuoteCount(chain, canonical)
+}
+
+func (a *Aggregator) recomputeQuoteCount(chain, target string) error {
+	post, err := a.loadPost(chain, target)
+	if err != nil {
+		return err
+	}
+	if post == nil {
+		return nil
+	}
+	count := 0
+	if err := a.store.ScanPrefix(Namespace, quoteTargetPrefix(chain, target), func(_, value []byte) error {
+		if len(value) > 0 {
+			count++
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	post.QuoteCount = count
+	return a.saveRecord(postRecordKey(chain, target), post)
 }
 
 func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string) error {

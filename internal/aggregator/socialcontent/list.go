@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"container/heap"
 	"errors"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +19,19 @@ const hotWindow = 48 * time.Hour
 
 func (a *Aggregator) List(params FeedParams) (*FeedResult, error) {
 	params = normaliseFeedParams(params)
+	if params.Scope == "following" {
+		if a.followLister == nil {
+			return nil, errors.New("following feed unavailable")
+		}
+		followed, err := a.followLister.ListFollowing(params.User)
+		if err != nil {
+			return nil, err
+		}
+		if len(followed) == 0 {
+			return &FeedResult{Items: []PostItem{}}, nil
+		}
+		params.Publishers = followed
+	}
 	if params.Sort == SortHot {
 		return a.listHot(params)
 	}
@@ -38,13 +50,14 @@ func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
 	records := make([]*PostRecord, 0)
 	seen := make(map[string]struct{})
 	prefix := postTimePrefix()
-	if params.Publisher != "" {
-		prefix = postAuthorPrefix(params.Publisher)
+	authorIndexed := len(params.Publishers) == 1
+	if authorIndexed {
+		prefix = postAuthorPrefix(params.Publishers[0])
 	}
 	need := params.Size + 1
 	var lastKey []byte
 	scan := func(key, value []byte) error {
-		record, err := a.recordFromIndexKey(key, value, params.Publisher != "")
+		record, err := a.recordFromIndexKey(key, value, authorIndexed)
 		if err != nil || record == nil || record.Hidden || record.IsMempool {
 			return err
 		}
@@ -94,16 +107,16 @@ func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
 // the request stays fast and memory stays proportional to the page size. The
 // result is a top-N snapshot without offset pagination.
 func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
-	now := time.Now().Unix()
-	windowStart := now - int64(hotWindow.Seconds())
+	windowStart := time.Now().Unix() - int64(hotWindow.Seconds())
 	top := &hotTopHeap{limit: params.Size}
 	seen := make(map[string]struct{})
 	prefix := postTimePrefix()
-	if params.Publisher != "" {
-		prefix = postAuthorPrefix(params.Publisher)
+	authorIndexed := len(params.Publishers) == 1
+	if authorIndexed {
+		prefix = postAuthorPrefix(params.Publishers[0])
 	}
 	if err := a.store.ScanPrefix(Namespace, prefix, func(key, value []byte) error {
-		record, err := a.recordFromIndexKey(key, value, params.Publisher != "")
+		record, err := a.recordFromIndexKey(key, value, authorIndexed)
 		if err != nil || record == nil || record.Hidden || record.IsMempool {
 			return err
 		}
@@ -118,7 +131,7 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 			return nil
 		}
 		seen[keyID] = struct{}{}
-		top.push(record, now)
+		top.push(record)
 		return nil
 	}); err != nil && err != errStop {
 		return nil, err
@@ -126,7 +139,7 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 
 	records := top.records()
 	sort.SliceStable(records, func(i, j int) bool {
-		left, right := hotScore(records[i], now), hotScore(records[j], now)
+		left, right := postEngagement(records[i]), postEngagement(records[j])
 		if left != right {
 			return left > right
 		}
@@ -141,14 +154,16 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 
 	result := &FeedResult{Items: make([]PostItem, 0, len(records))}
 	for _, record := range records {
-		result.Items = append(result.Items, postItemFromRecord(record))
+		item := postItemFromRecord(record)
+		item.HotScore = float64(postEngagement(record))
+		result.Items = append(result.Items, item)
 	}
 	return result, nil
 }
 
 type hotHeapItem struct {
 	record *PostRecord
-	score  float64
+	score  int
 }
 
 type hotTopHeap struct {
@@ -156,8 +171,8 @@ type hotTopHeap struct {
 	limit int
 }
 
-func (h *hotTopHeap) push(record *PostRecord, now int64) {
-	item := hotHeapItem{record: record, score: hotScore(record, now)}
+func (h *hotTopHeap) push(record *PostRecord) {
+	item := hotHeapItem{record: record, score: postEngagement(record)}
 	if len(h.items) < h.limit {
 		heap.Push(h, item)
 		return
@@ -200,6 +215,8 @@ func hotWorse(left, right hotHeapItem) bool {
 	if left.score != right.score {
 		return left.score < right.score
 	}
+	// The heap root must be the worst candidate: lowest engagement, then
+	// oldest, then lexicographically largest chain/source.
 	if left.record.CreatedAt != right.record.CreatedAt {
 		return left.record.CreatedAt < right.record.CreatedAt
 	}
@@ -207,6 +224,13 @@ func hotWorse(left, right hotHeapItem) bool {
 		return left.record.ChainName > right.record.ChainName
 	}
 	return left.record.SourcePinId > right.record.SourcePinId
+}
+
+func postEngagement(record *PostRecord) int {
+	if record == nil {
+		return 0
+	}
+	return record.LikeCount + record.CommentCount + record.DonateCount
 }
 
 func feedRecordMatches(record *PostRecord, params FeedParams) bool {
@@ -219,11 +243,29 @@ func feedRecordMatches(record *PostRecord, params FeedParams) bool {
 	if params.Until > 0 && record.CreatedAt > params.Until {
 		return false
 	}
-	if params.Publisher != "" && !publisherMatch(record, params.Publisher) {
-		return false
+	if len(params.Publishers) > 0 {
+		matched := false
+		for _, publisher := range params.Publishers {
+			if publisherMatch(record, publisher) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
-	if params.Keyword != "" && !keywordMatch(record, params.Keyword) {
-		return false
+	if len(params.Keywords) > 0 {
+		matched := false
+		for _, keyword := range params.Keywords {
+			if keywordMatch(record, keyword) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	return true
 }
@@ -234,8 +276,16 @@ func normaliseFeedParams(params FeedParams) FeedParams {
 		params.Protocol = PathSimpleBuzz
 	}
 	params.Publisher = strings.TrimSpace(params.Publisher)
+	if params.Publisher != "" {
+		params.Publishers = append(params.Publishers, params.Publisher)
+	}
+	params.Publishers = normaliseIdentities(params.Publishers)
 	params.ChainName = strings.ToLower(strings.TrimSpace(params.ChainName))
 	params.Keyword = strings.TrimSpace(params.Keyword)
+	if params.Keyword != "" {
+		params.Keywords = append(params.Keywords, params.Keyword)
+	}
+	params.Keywords = normaliseTerms(params.Keywords)
 	params.Sort = strings.ToLower(strings.TrimSpace(params.Sort))
 	if params.Sort == "" {
 		params.Sort = SortNewest
@@ -246,7 +296,47 @@ func normaliseFeedParams(params FeedParams) FeedParams {
 	if params.Size > maxFeedSize {
 		params.Size = maxFeedSize
 	}
+	params.Scope = strings.ToLower(strings.TrimSpace(params.Scope))
+	params.User = strings.TrimSpace(params.User)
 	return params
+}
+
+func normaliseIdentities(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{})
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func normaliseTerms(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{})
+	for _, value := range values {
+		for _, term := range strings.Split(value, ",") {
+			trimmed := strings.TrimSpace(term)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func (a *Aggregator) recordFromIndexKey(key, value []byte, author bool) (*PostRecord, error) {
@@ -398,7 +488,7 @@ func postItemFromRecord(record *PostRecord) PostItem {
 		LikeCount:    record.LikeCount,
 		CommentCount: record.CommentCount,
 		DonateCount:  record.DonateCount,
-		HotScore:     hotScore(record, time.Now().Unix()),
+		QuoteCount:   record.QuoteCount,
 	}
 	if record.PayloadJSON != nil {
 		item.Payload = record.PayloadJSON
@@ -406,18 +496,6 @@ func postItemFromRecord(record *PostRecord) PostItem {
 		item.Payload = record.PayloadText
 	}
 	return item
-}
-
-func hotScore(record *PostRecord, now int64) float64 {
-	if record == nil {
-		return 0
-	}
-	ageHours := float64(now-record.CreatedAt) / 3600
-	if ageHours < 1 {
-		ageHours = 1
-	}
-	engagement := float64(record.LikeCount + 2*record.CommentCount + 3*record.DonateCount)
-	return engagement / math.Pow(ageHours+2, 1.5)
 }
 
 func (a *Aggregator) ListComments(params CommentParams) (*CommentResult, error) {

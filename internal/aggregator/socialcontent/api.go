@@ -100,17 +100,49 @@ func parseFeedParams(c *gin.Context) (FeedParams, error) {
 	if sortName != "" && sortName != SortNewest && sortName != SortHot {
 		return FeedParams{}, ErrInvalidParameter
 	}
+	scope := strings.ToLower(strings.TrimSpace(c.Query("scope")))
+	if scope != "" && scope != "following" {
+		return FeedParams{}, ErrInvalidParameter
+	}
+	user := strings.TrimSpace(c.Query("user"))
+	if scope == "following" && user == "" {
+		return FeedParams{}, ErrInvalidParameter
+	}
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	keywordsText := strings.TrimSpace(c.Query("keywords"))
+	if keyword != "" && keywordsText != "" {
+		return FeedParams{}, ErrInvalidParameter
+	}
+	publisher := strings.TrimSpace(c.Query("publisher"))
+	publishersText := strings.TrimSpace(c.Query("publishers"))
+	if publisher != "" && publishersText != "" {
+		return FeedParams{}, ErrInvalidParameter
+	}
 	return FeedParams{
 		Protocol:  protocol,
-		Publisher: c.Query("publisher"),
+		Publisher: publisher,
+		Keywords:  splitCSV(keywordsText),
 		ChainName: c.Query("chainName"),
 		Since:     since,
 		Until:     until,
-		Keyword:   c.Query("keyword"),
+		Keyword:   keyword,
 		Sort:      sortName,
 		Size:      size,
 		Cursor:    c.Query("cursor"),
+		Scope:     scope,
+		User:      user,
 	}, nil
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func parseSize(raw string) (int, error) {

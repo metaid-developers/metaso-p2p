@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -87,6 +88,9 @@ func main() {
 			log.Printf("WARNING: socialcontent aggregator init failed: %v", err)
 		} else {
 			socialContentAgg = socialContentCandidate
+		}
+		if socialAgg != nil && socialContentAgg != nil {
+			socialContentAgg.SetFollowLister(&socialFollowAdapter{agg: socialAgg})
 		}
 		groupChatCandidate := &groupchat.Aggregator{}
 		if err := aggRegistry.Register(groupChatCandidate); err != nil {
@@ -429,4 +433,37 @@ func socketProfileFromUserInfo(p *userinfo.UserProfile) *socket.ProfileSnapshot 
 		ChatPublicKey: p.ChatPublicKey,
 		Bio:           p.Bio,
 	}
+}
+
+// socialFollowAdapter exposes the social follow graph to the socialcontent
+// read model for scope=following feed queries.
+type socialFollowAdapter struct {
+	agg *social.Aggregator
+}
+
+func (a *socialFollowAdapter) ListFollowing(globalMetaId string) ([]string, error) {
+	if a == nil || a.agg == nil {
+		return nil, errors.New("social follow aggregator unavailable")
+	}
+	var ids []string
+	cursor := ""
+	for {
+		result, err := a.agg.ListFollowing(social.ListParams{
+			GlobalMetaId: globalMetaId,
+			Cursor:       cursor,
+			Size:         100,
+			View:         social.ViewCompact,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range result.List {
+			ids = append(ids, item.GlobalMetaId)
+		}
+		if result.NextCursor == "" || len(ids) >= 2000 {
+			break
+		}
+		cursor = result.NextCursor
+	}
+	return ids, nil
 }

@@ -55,10 +55,10 @@ type PostRecord struct {
 	Hidden    bool  `json:"hidden"`
 	IsMempool bool  `json:"isMempool,omitempty"`
 
-	LikeCount    int     `json:"likeCount"`
-	CommentCount int     `json:"commentCount"`
-	DonateCount  int     `json:"donateCount"`
-	HotScore     float64 `json:"hotScore,omitempty"`
+	LikeCount    int `json:"likeCount"`
+	CommentCount int `json:"commentCount"`
+	DonateCount  int `json:"donateCount"`
+	QuoteCount   int `json:"quoteCount"`
 }
 
 // LikeEvent is an append-only normalized like/unlike event.
@@ -92,16 +92,35 @@ type CommentRecord struct {
 	IsMempool   bool   `json:"isMempool,omitempty"`
 }
 
+// QuoteEvent is an append-only record of a simplebuzz post that quotes
+// (quotePin) another post. It backs the repost/quote count on the target.
+type QuoteEvent struct {
+	QuotePinId  string `json:"quotePinId"`
+	ChainName   string `json:"chainName"`
+	TargetPinId string `json:"targetPinId"`
+
+	AuthorGlobalMetaId string `json:"authorGlobalMetaId,omitempty"`
+	AuthorMetaId       string `json:"authorMetaId,omitempty"`
+	AuthorAddress      string `json:"authorAddress,omitempty"`
+
+	Timestamp int64 `json:"timestamp"`
+	IsMempool bool  `json:"isMempool,omitempty"`
+}
+
 type FeedParams struct {
-	Protocol  string
-	Publisher string
-	ChainName string
-	Since     int64
-	Until     int64
-	Keyword   string
-	Sort      string
-	Size      int
-	Cursor    string
+	Protocol   string
+	Publisher  string
+	Publishers []string
+	ChainName  string
+	Since      int64
+	Until      int64
+	Keyword    string
+	Keywords   []string
+	Sort       string
+	Size       int
+	Cursor     string
+	Scope      string
+	User       string
 }
 
 type FeedResult struct {
@@ -124,6 +143,7 @@ type PostItem struct {
 	LikeCount    int        `json:"likeCount"`
 	CommentCount int        `json:"commentCount"`
 	DonateCount  int        `json:"donateCount"`
+	QuoteCount   int        `json:"quoteCount"`
 	HotScore     float64    `json:"hotScore,omitempty"`
 }
 
