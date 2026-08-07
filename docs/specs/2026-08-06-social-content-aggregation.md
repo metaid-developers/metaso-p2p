@@ -393,6 +393,24 @@ Before production rollout, the implementation must pass:
 The implementation is ready for evaluation when all of the above pass and a
 replayed historical window produces the same read model as live ingestion.
 
+## 10.1 Verified query behavior at production scale
+
+The following behavior was verified against the full 4320-hour MANAPI backfill
+(approximately 1.26 million posts and millions of interactions):
+
+- Newest feed streams the inverted-timestamp index and stops after one page
+  plus a has-more probe. Its cursor is key-based and opaque; pages continue
+  without overlap and the request stays bounded by the page size.
+- Hot ranking scans the full candidate set but keeps only the best page in a
+  bounded heap. It returns a top-N snapshot without offset pagination; the
+  scan is CPU-heavy at full dataset scale and should be replaced by a
+  materialized hot index in a later stage.
+- Post detail and comments resolve the chain through a per-pin chain index
+  key; legacy records fall back to a compact pin-to-source index scan.
+- Recent time-window and keyword queries are bounded because the index is
+  scanned newest-first and collection stops after the page plus probe is full.
+  A `since` window deep in the past still requires a full index walk.
+
 ## 11. Deferred work
 
 The following are intentionally outside Stage 1–2:
