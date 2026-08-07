@@ -123,6 +123,41 @@ func TestBackfillClientDecodesStringJSONBody(t *testing.T) {
 	}
 }
 
+func TestBackfillRetriesTransientMANAPIFailures(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests <= 2 {
+			http.Error(w, "temporary failure", http.StatusBadGateway)
+			return
+		}
+		pins := []BackfillPin{backfillPin("retry-buzz:i0", OperationCreate, 200, `{"text":"retry"}`)}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"list": pins}})
+	}))
+	defer server.Close()
+
+	if err := agg.Backfill(BackfillOptions{
+		Context:  context.Background(),
+		Client:   NewBackfillClient(server.URL, server.Client()),
+		Paths:    []string{PathSimpleBuzz},
+		Since:    time.Unix(150, 0),
+		PageSize: 1,
+	}); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+	if requests != 4 {
+		t.Fatalf("requests = %d, want 4 (two retried failures plus success in pass one, one pass two request)", requests)
+	}
+	result, err := agg.List(FeedParams{Size: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %+v", result.Items)
+	}
+}
+
 func backfillPin(id, op string, timestamp int64, body string) BackfillPin {
 	return BackfillPin{
 		ID:           id,

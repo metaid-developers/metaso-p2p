@@ -80,11 +80,29 @@ func DefaultBackfillPaths() []string {
 
 func NewBackfillClient(baseURL string, httpClient *http.Client) *BackfillClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = newBackfillHTTPClient()
 	}
 	return &BackfillClient{
 		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		httpClient: httpClient,
+	}
+}
+
+// newBackfillHTTPClient returns a client with an overall request timeout and
+// HTTP/1.1 transport. MANAPI occasionally leaves an HTTP/2 stream open without
+// responding, and the default client would wait forever on such a stream.
+func newBackfillHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			ForceAttemptHTTP2:     false,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   4,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		},
 	}
 }
 
@@ -308,7 +326,7 @@ func (c *BackfillClient) scanPath(ctx context.Context, path string, size int, vi
 			return fmt.Errorf("repeated MANAPI cursor %q for path %s", cursor, path)
 		}
 		seenCursors[cursor] = struct{}{}
-		page, err := c.ListPath(ctx, path, cursor, size)
+		page, err := c.listPathWithRetry(ctx, path, cursor, size)
 		if err != nil {
 			return err
 		}
@@ -323,6 +341,28 @@ func (c *BackfillClient) scanPath(ctx context.Context, path string, size int, vi
 		}
 		cursor = page.NextCursor
 	}
+}
+
+const backfillMaxRetries = 3
+
+// listPathWithRetry retries transient MANAPI failures (timeouts, resets, EOF)
+// with a short backoff so a long historical crawl survives a bad page.
+func (c *BackfillClient) listPathWithRetry(ctx context.Context, path, cursor string, size int) (BackfillPage, error) {
+	var lastErr error
+	for attempt := 0; attempt <= backfillMaxRetries; attempt++ {
+		page, err := c.ListPath(ctx, path, cursor, size)
+		if err == nil {
+			return page, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return BackfillPage{}, ctx.Err()
+		}
+		if attempt < backfillMaxRetries {
+			time.Sleep(time.Duration(1<<attempt) * time.Second)
+		}
+	}
+	return BackfillPage{}, lastErr
 }
 
 func backfillMetaFromPin(pin BackfillPin) backfillMeta {

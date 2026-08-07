@@ -184,7 +184,7 @@ func main() {
 					ctx, cancel := context.WithTimeout(context.Background(), cfg.SocialContentBackfill.Timeout)
 					err := socialContentAgg.Backfill(socialcontent.BackfillOptions{
 						Context:  ctx,
-						Client:   socialcontent.NewBackfillClient(cfg.SocialContentBackfill.MANAPIBaseURL, http.DefaultClient),
+						Client:   socialcontent.NewBackfillClient(cfg.SocialContentBackfill.MANAPIBaseURL, nil),
 						Since:    time.Now().Add(-cfg.SocialContentBackfill.Lookback),
 						PageSize: cfg.SocialContentBackfill.PageSize,
 					})
