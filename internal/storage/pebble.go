@@ -141,6 +141,25 @@ func (s *PebbleStore) SetBatchNoSync(namespace string, entries []KeyValue) error
 	return batch.Commit(pebble.NoSync)
 }
 
+// DeleteBatch atomically deletes all keys from one namespace.
+func (s *PebbleStore) DeleteBatch(namespace string, keys [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, key := range keys {
+		if err := batch.Delete(key, nil); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.Sync)
+}
+
 // Get reads a key from a namespace. Returns pebble.ErrNotFound if not found.
 func (s *PebbleStore) Get(namespace string, key []byte) ([]byte, error) {
 	db, err := s.OpenDB(namespace)
