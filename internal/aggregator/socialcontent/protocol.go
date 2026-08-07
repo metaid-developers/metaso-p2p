@@ -214,3 +214,16 @@ func parseComment(pin *aggregator.PinInscription) (*CommentRecord, error) {
 		Timestamp:          pin.Timestamp,
 	}, nil
 }
+
+// quotePinFromPin returns the quoted PIN reference from a simplebuzz payload
+// (repost/quote semantics in the legacy MetaSo protocol).
+func quotePinFromPin(pin *aggregator.PinInscription) string {
+	if pin == nil {
+		return ""
+	}
+	obj, err := payloadObjectFromPin(pin)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stringField(obj, "quotePin", "quote_pin"))
+}

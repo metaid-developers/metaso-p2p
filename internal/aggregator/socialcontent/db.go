@@ -22,6 +22,8 @@ const (
 	keyLikeState     = "like:state:"
 	keyCommentRecord = "comment:record:"
 	keyCommentTarget = "comment:target:"
+	keyQuoteEvent    = "quote:event:"
+	keyQuoteTarget   = "quote:target:"
 	keyMempoolEvent  = "mempool:event:"
 )
 
@@ -97,6 +99,18 @@ func commentTargetKey(chain, target string, ts int64, pinID string) []byte {
 
 func commentTargetPrefix(chain, target string) []byte {
 	return []byte(keyCommentTarget + strings.ToLower(chain) + ":" + target + ":")
+}
+
+func quoteEventKey(chain, quotePinID string) []byte {
+	return []byte(keyQuoteEvent + strings.ToLower(chain) + ":" + quotePinID)
+}
+
+func quoteTargetKey(chain, target string, ts int64, quotePinID string) []byte {
+	return []byte(keyQuoteTarget + strings.ToLower(chain) + ":" + target + ":" + invertedTimestamp(ts) + ":" + quotePinID)
+}
+
+func quoteTargetPrefix(chain, target string) []byte {
+	return []byte(keyQuoteTarget + strings.ToLower(chain) + ":" + target + ":")
 }
 
 func mempoolEventKey(chain, pinID string) []byte {

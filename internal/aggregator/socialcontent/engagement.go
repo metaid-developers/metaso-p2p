@@ -3,7 +3,6 @@ package socialcontent
 import (
 	"encoding/json"
 	"strings"
-	"time"
 )
 
 func (a *Aggregator) canonicalTarget(chain, target string) (string, error) {
@@ -68,7 +67,6 @@ func (a *Aggregator) recomputeCounters(chain, target string) error {
 
 	post.LikeCount = likeCount
 	post.CommentCount = commentCount
-	post.HotScore = hotScore(post, time.Now().Unix())
 	return a.saveRecord(postRecordKey(chain, source), post)
 }
 
