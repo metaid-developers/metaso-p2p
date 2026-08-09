@@ -93,7 +93,7 @@ func (a *Aggregator) listNewest(params FeedParams) (*FeedResult, error) {
 	}
 	result := &FeedResult{Items: make([]PostItem, 0, len(records))}
 	for _, record := range records {
-		result.Items = append(result.Items, postItemFromRecord(record))
+		result.Items = append(result.Items, a.postItemFromRecord(record))
 	}
 	result.HasMore = hasMore
 	if hasMore {
@@ -154,7 +154,7 @@ func (a *Aggregator) listHot(params FeedParams) (*FeedResult, error) {
 
 	result := &FeedResult{Items: make([]PostItem, 0, len(records))}
 	for _, record := range records {
-		item := postItemFromRecord(record)
+		item := a.postItemFromRecord(record)
 		item.HotScore = float64(postEngagement(record))
 		result.Items = append(result.Items, item)
 	}
@@ -474,14 +474,25 @@ func toSearchText(value any) string {
 	}
 }
 
-func postItemFromRecord(record *PostRecord) PostItem {
+// postItemFromRecord assembles the API post item and enriches the author with
+// a canonical global meta id and, when a profile resolver is wired, the
+// author name. Legacy rows that stored the bare address in
+// AuthorGlobalMetaId are normalized here, so the fix covers existing data
+// without a storage backfill.
+func (a *Aggregator) postItemFromRecord(record *PostRecord) PostItem {
+	author := AuthorItem{
+		GlobalMetaId: record.AuthorGlobalMetaId,
+		MetaId:       record.AuthorMetaId,
+		Address:      record.AuthorAddress,
+	}
+	a.enrichAuthor(&author, record.ChainName)
 	item := PostItem{
 		PinId:        record.SourcePinId,
 		SourcePinId:  record.SourcePinId,
 		CurrentPinId: record.CurrentPinId,
 		ChainName:    record.ChainName,
 		ProtocolPath: record.ProtocolPath,
-		Author:       AuthorItem{GlobalMetaId: record.AuthorGlobalMetaId, MetaId: record.AuthorMetaId, Address: record.AuthorAddress},
+		Author:       author,
 		ContentType:  record.ContentType,
 		CreatedAt:    record.CreatedAt,
 		UpdatedAt:    record.UpdatedAt,
@@ -496,6 +507,58 @@ func postItemFromRecord(record *PostRecord) PostItem {
 		item.Payload = record.PayloadText
 	}
 	return item
+}
+
+// enrichAuthor canonicalizes the global meta id in place and fills Name from
+// the userinfo profile. Lookup is local and cached; failures degrade to the
+// identity fields only, so a profile miss never drops a post.
+func (a *Aggregator) enrichAuthor(author *AuthorItem, chainName string) {
+	if author == nil {
+		return
+	}
+	author.GlobalMetaId = canonicalGlobalMetaId(chainName, author.GlobalMetaId, author.Address)
+	if a == nil || a.profileLookup == nil {
+		return
+	}
+	for _, identity := range []string{author.GlobalMetaId, author.MetaId, author.Address} {
+		if identity = strings.TrimSpace(identity); identity == "" {
+			continue
+		}
+		snap, err := a.profileLookup.LookupLocalByIdentity(identity)
+		if err != nil {
+			return
+		}
+		if snap != nil {
+			author.Name = snap.Name
+			return
+		}
+	}
+}
+
+// enrichComment canonicalizes the author global meta id in place and fills
+// AuthorName from the userinfo profile, mirroring enrichAuthor for the flat
+// comment shape.
+func (a *Aggregator) enrichComment(comment *CommentRecord) {
+	if comment == nil {
+		return
+	}
+	comment.AuthorGlobalMetaId = canonicalGlobalMetaId(comment.ChainName, comment.AuthorGlobalMetaId, comment.AuthorAddress)
+	if a == nil || a.profileLookup == nil {
+		return
+	}
+	for _, identity := range []string{comment.AuthorGlobalMetaId, comment.AuthorMetaId, comment.AuthorAddress} {
+		if identity = strings.TrimSpace(identity); identity == "" {
+			continue
+		}
+		snap, err := a.profileLookup.LookupLocalByIdentity(identity)
+		if err != nil {
+			return
+		}
+		if snap != nil {
+			comment.AuthorName = snap.Name
+			return
+		}
+	}
 }
 
 func (a *Aggregator) ListComments(params CommentParams) (*CommentResult, error) {
@@ -578,6 +641,9 @@ func (a *Aggregator) ListComments(params CommentParams) (*CommentResult, error) 
 		end = len(comments)
 	}
 	result := &CommentResult{Items: comments[offset:end], HasMore: end < len(comments)}
+	for i := range result.Items {
+		a.enrichComment(&result.Items[i])
+	}
 	if result.HasMore {
 		result.NextCursor = encodeCursor(end)
 	}

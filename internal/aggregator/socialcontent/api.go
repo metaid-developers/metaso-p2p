@@ -49,7 +49,7 @@ func (a *Aggregator) handlePost(c *gin.Context) {
 		api.RespErr(c, 40400, "social post not found")
 		return
 	}
-	api.RespSuccess(c, postItemFromRecord(post))
+	api.RespSuccess(c, a.postItemFromRecord(post))
 }
 
 func (a *Aggregator) handleComments(c *gin.Context) {

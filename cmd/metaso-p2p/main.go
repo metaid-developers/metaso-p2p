@@ -88,6 +88,7 @@ func main() {
 			log.Printf("WARNING: socialcontent aggregator init failed: %v", err)
 		} else {
 			socialContentAgg = socialContentCandidate
+			socialContentAgg.SetProfileLookup(socialcontent.NewUserInfoLookupAdapter(userinfoAgg))
 		}
 		if socialAgg != nil && socialContentAgg != nil {
 			socialContentAgg.SetFollowLister(&socialFollowAdapter{agg: socialAgg})

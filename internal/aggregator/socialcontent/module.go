@@ -23,6 +23,7 @@ type Aggregator struct {
 	bulk          bool // set while replaying a historical backfill under the lock
 	skipReconcile bool // pending-interaction reconciliation is unneeded when posts replay first
 	followLister  FollowLister
+	profileLookup AuthorProfileLookup
 }
 
 // FollowLister resolves the GlobalMetaIDs a subject follows. It is wired by
@@ -34,6 +35,12 @@ type FollowLister interface {
 
 func (a *Aggregator) SetFollowLister(lister FollowLister) {
 	a.followLister = lister
+}
+
+// SetProfileLookup wires the userinfo-backed author profile resolver. Without
+// it author names stay empty and responses are unaffected.
+func (a *Aggregator) SetProfileLookup(lookup AuthorProfileLookup) {
+	a.profileLookup = lookup
 }
 
 func (a *Aggregator) Name() string { return Namespace }

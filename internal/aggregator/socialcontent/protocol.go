@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 func protocolPathFromPinPath(path string) string {
@@ -57,7 +58,31 @@ func authorFromPin(pin *aggregator.PinInscription) AuthorItem {
 	if address == "" {
 		address = strings.TrimSpace(pin.CreateAddress)
 	}
-	return AuthorItem{GlobalMetaId: global, MetaId: meta, Address: address}
+	return AuthorItem{
+		GlobalMetaId: canonicalGlobalMetaId(strings.ToLower(strings.TrimSpace(pin.ChainName)), global, address),
+		MetaId:       meta,
+		Address:      address,
+	}
+}
+
+// canonicalGlobalMetaId normalizes a global meta id to the canonical ID
+// address form (idq1...). Upstream index data may carry the bare chain
+// address (or nothing) in GlobalMetaId; encoding the chain address yields the
+// canonical form consumers can render and link. The original value is kept
+// whenever the address cannot be encoded, so no identity is ever dropped.
+func canonicalGlobalMetaId(chainName, globalMetaId, address string) string {
+	global := strings.TrimSpace(globalMetaId)
+	address = strings.TrimSpace(address)
+	if global != "" && strings.HasPrefix(global, "idq1") {
+		return global
+	}
+	if address == "" {
+		return global
+	}
+	if encoded := idaddress.EncodeGlobalMetaId(address, chainName); encoded != "" {
+		return encoded
+	}
+	return global
 }
 
 func payloadObject(raw []byte) (map[string]any, error) {
