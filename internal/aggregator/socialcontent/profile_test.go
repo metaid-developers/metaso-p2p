@@ -1,6 +1,7 @@
 package socialcontent
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -49,8 +50,8 @@ func TestFeedPostDetailReturnCanonicalAuthorWithName(t *testing.T) {
 	if author.Name != "Alice" {
 		t.Fatalf("author.name = %q, want Alice", author.Name)
 	}
-	if author.MetaId != "meta-alice" || author.Address != aliceAddress {
-		t.Fatalf("metaId/address must be preserved: %+v", author)
+	if author.Address != aliceAddress {
+		t.Fatalf("address must be preserved: %+v", author)
 	}
 
 	detail, err := agg.FindPost("buzz-alice:i0", "mvc")
@@ -130,8 +131,8 @@ func TestLegacyPostRecordCanonicalizedAtQueryTime(t *testing.T) {
 	if author.Name != "Alice" {
 		t.Fatalf("legacy author.name = %q, want Alice", author.Name)
 	}
-	if author.Address != aliceAddress || author.MetaId != "meta-alice" {
-		t.Fatalf("legacy metaId/address must be preserved: %+v", author)
+	if author.Address != aliceAddress {
+		t.Fatalf("legacy address must be preserved: %+v", author)
 	}
 }
 
@@ -179,8 +180,8 @@ func TestCommentsReturnAuthorNameAndCanonicalGlobalMetaId(t *testing.T) {
 	if got.AuthorName != "Alice" {
 		t.Fatalf("authorName = %q, want Alice", got.AuthorName)
 	}
-	if got.AuthorMetaId != "meta-alice" || got.AuthorAddress != aliceAddress {
-		t.Fatalf("metaId/address must be preserved: %+v", got)
+	if got.AuthorAddress != aliceAddress {
+		t.Fatalf("address must be preserved: %+v", got)
 	}
 }
 
@@ -210,6 +211,88 @@ func TestEnrichAuthorDegradesOnLookupError(t *testing.T) {
 	}
 	if result.Items[0].Author.Name != "" {
 		t.Fatalf("name = %q, want empty on lookup error", result.Items[0].Author.Name)
+	}
+}
+
+// TestAuthorJSONOmitsMetaId verifies the API JSON for a post author exposes
+// globalMetaId/address/name but never the internal metaId.
+func TestAuthorJSONOmitsMetaId(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	agg.SetProfileLookup(&fakeAuthorProfileLookup{byIdentity: map[string]*AuthorProfileSnapshot{
+		aliceGlobalMetaId: {Name: "Alice"},
+	}})
+	pin := testPin("buzz-json:i0", PathSimpleBuzz, OperationCreate, "mvc", 800, []byte(`{"text":"json"}`))
+	pin.GlobalMetaId = aliceAddress
+	pin.MetaId = "meta-alice"
+	pin.Address = aliceAddress
+	pin.CreateMetaId = "meta-alice"
+	pin.CreateAddress = aliceAddress
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	result, err := agg.List(FeedParams{Size: 10, ChainName: "mvc"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	raw, err := json.Marshal(result.Items[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	text := string(raw)
+	if strings.Contains(text, `"metaId"`) {
+		t.Fatalf("author JSON must not contain metaId: %s", text)
+	}
+	for _, present := range []string{`"globalMetaId"`, `"address"`, `"name":"Alice"`} {
+		if !strings.Contains(text, present) {
+			t.Fatalf("author JSON must contain %s: %s", present, text)
+		}
+	}
+}
+
+// TestCommentJSONOmitsAuthorMetaId verifies the comments API JSON exposes
+// authorGlobalMetaId/authorAddress/authorName but never authorMetaId.
+func TestCommentJSONOmitsAuthorMetaId(t *testing.T) {
+	agg, _ := setupTestAggregator(t)
+	agg.SetProfileLookup(&fakeAuthorProfileLookup{byIdentity: map[string]*AuthorProfileSnapshot{
+		aliceGlobalMetaId: {Name: "Alice"},
+	}})
+	target := testPin("buzz-cj:i0", PathSimpleBuzz, OperationCreate, "mvc", 900, []byte(`{"text":"target"}`))
+	if _, err := agg.HandleBlockPin(target); err != nil {
+		t.Fatalf("target post: %v", err)
+	}
+	comment := &CommentRecord{
+		PinId:              "comment-json:i0",
+		ChainName:          "mvc",
+		TargetPinId:        "buzz-cj:i0",
+		AuthorGlobalMetaId: aliceAddress,
+		AuthorMetaId:       "meta-alice",
+		AuthorAddress:      aliceAddress,
+		Content:            "json comment",
+		ContentType:        "text/plain",
+		Timestamp:          950,
+	}
+	if err := agg.saveRecord(commentRecordKey("mvc", comment.PinId), comment); err != nil {
+		t.Fatalf("save comment: %v", err)
+	}
+	if err := agg.setStore(Namespace, commentTargetKey("mvc", "buzz-cj:i0", comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+		t.Fatalf("index comment: %v", err)
+	}
+	result, err := agg.ListComments(CommentParams{PinId: "buzz-cj:i0", ChainName: "mvc", Size: 10})
+	if err != nil {
+		t.Fatalf("ListComments: %v", err)
+	}
+	raw, err := json.Marshal(result.Items[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	text := string(raw)
+	if strings.Contains(text, `"authorMetaId"`) {
+		t.Fatalf("comment JSON must not contain authorMetaId: %s", text)
+	}
+	for _, present := range []string{`"authorGlobalMetaId"`, `"authorAddress"`, `"authorName":"Alice"`} {
+		if !strings.Contains(text, present) {
+			t.Fatalf("comment JSON must contain %s: %s", present, text)
+		}
 	}
 }
 

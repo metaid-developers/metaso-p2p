@@ -83,9 +83,11 @@ type CommentRecord struct {
 	TargetPinId string `json:"targetPinId"`
 
 	AuthorGlobalMetaId string `json:"authorGlobalMetaId,omitempty"`
-	AuthorMetaId       string `json:"authorMetaId,omitempty"`
-	AuthorAddress      string `json:"authorAddress,omitempty"`
-	AuthorName         string `json:"authorName,omitempty"`
+	// AuthorMetaId stays internal (source identity during indexing and profile
+	// lookup fallback); it is intentionally not serialized in API responses.
+	AuthorMetaId  string `json:"-"`
+	AuthorAddress string `json:"authorAddress,omitempty"`
+	AuthorName    string `json:"authorName,omitempty"`
 
 	Content     string `json:"content"`
 	ContentType string `json:"contentType,omitempty"`
@@ -150,9 +152,11 @@ type PostItem struct {
 
 type AuthorItem struct {
 	GlobalMetaId string `json:"globalMetaId,omitempty"`
-	MetaId       string `json:"metaId,omitempty"`
-	Address      string `json:"address,omitempty"`
-	Name         string `json:"name,omitempty"`
+	// MetaId stays internal (source identity during indexing and profile
+	// lookup fallback); it is intentionally not serialized in API responses.
+	MetaId  string `json:"-"`
+	Address string `json:"address,omitempty"`
+	Name    string `json:"name,omitempty"`
 }
 
 type CommentParams struct {
