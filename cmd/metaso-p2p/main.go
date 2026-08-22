@@ -13,6 +13,7 @@ import (
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
@@ -66,6 +67,7 @@ func main() {
 	var socialAgg *social.Aggregator
 	var socialContentAgg *socialcontent.Aggregator
 	var groupChatAgg *groupchat.Aggregator
+	var botSearchAgg *botsearch.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -141,6 +143,20 @@ func main() {
 		}
 		botHomepageAgg.SetChatInteractionLister(privatechatAgg)
 		botHomepageAgg.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
+		// botsearch is a read-only aggregator over userinfo + groupchat +
+		// skillservice; presence readers are injected after the socket server
+		// and federation service exist (below, next to bothomepage).
+		botSearchCandidate := &botsearch.Aggregator{}
+		botSearchCandidate.SetProfileSource(userinfoAgg)
+		botSearchCandidate.SetSkillLister(skillserviceAgg)
+		if groupChatAgg != nil {
+			botSearchCandidate.SetGroupHistorySource(groupChatAgg)
+		}
+		if err := aggRegistry.Register(botSearchCandidate); err != nil {
+			log.Printf("WARNING: botsearch aggregator init failed: %v", err)
+		} else {
+			botSearchAgg = botSearchCandidate
+		}
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {
 				if cfg.BotHomepageV2Backfill.Enabled {
@@ -292,12 +308,17 @@ func main() {
 		log.Printf("federation service: node_id=%s", federationService.NodeID())
 	}
 
-	if botHomepageAgg != nil && socketServer != nil {
+	if (botHomepageAgg != nil || botSearchAgg != nil) && socketServer != nil {
 		var globalReader presence.GlobalReader
 		if federationService != nil {
 			globalReader = federationService.GlobalReader()
 		}
-		botHomepageAgg.SetPresenceReaders(socketServer.Manager(), globalReader)
+		if botHomepageAgg != nil {
+			botHomepageAgg.SetPresenceReaders(socketServer.Manager(), globalReader)
+		}
+		if botSearchAgg != nil {
+			botSearchAgg.SetPresenceReaders(socketServer.Manager(), globalReader)
+		}
 	}
 
 	// --- HTTP router ---

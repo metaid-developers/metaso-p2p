@@ -14,6 +14,7 @@ import (
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
@@ -51,6 +52,7 @@ type fullRouterFixture struct {
 	socialContentAgg *socialcontent.Aggregator
 	skillAgg         *skillservice.Aggregator
 	publishedAgg     *publishedcontent.Aggregator
+	botSearchAgg     *botsearch.Aggregator
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
@@ -97,6 +99,13 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(botHomepageAgg); err != nil {
 		t.Fatalf("register bothomepage: %v", err)
 	}
+	botSearchAgg := &botsearch.Aggregator{}
+	botSearchAgg.SetProfileSource(userAgg)
+	botSearchAgg.SetGroupHistorySource(groupAgg)
+	botSearchAgg.SetSkillLister(skillAgg)
+	if err := reg.Register(botSearchAgg); err != nil {
+		t.Fatalf("register botsearch: %v", err)
+	}
 
 	socialAgg.SetProfileLookup(social.NewUserInfoLookupAdapter(userAgg))
 	skillAgg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
@@ -121,6 +130,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		socialContentAgg: socialContentAgg,
 		skillAgg:         skillAgg,
 		publishedAgg:     publishedAgg,
+		botSearchAgg:     botSearchAgg,
 	}
 }
 
