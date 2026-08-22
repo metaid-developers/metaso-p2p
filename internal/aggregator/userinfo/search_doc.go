@@ -339,13 +339,35 @@ func metaIDStringSlice(value any) []string {
 		}
 		return out
 	case map[string]any:
-		for _, key := range []string{"allowChatSkills", "allow", "chatSkills", "skills", "tools"} {
+		// IDBots Bot edit v3 shape: chatSkills is the union of the private
+		// and group skill lists.
+		if merged := mergeMetaIDStringSlices(metaIDStringSlice(typed["allowPrivateChatSkills"]), metaIDStringSlice(typed["allowGroupChatSkills"])); len(merged) > 0 {
+			return merged
+		}
+		for _, key := range []string{"allowChatSkills", "allow_chat_skills", "allow", "chatSkills", "skills", "tools"} {
 			if out := metaIDStringSlice(typed[key]); len(out) > 0 {
 				return out
 			}
 		}
 	}
 	return nil
+}
+
+// mergeMetaIDStringSlices concatenates string slices, dropping duplicates
+// while preserving first-occurrence order.
+func mergeMetaIDStringSlices(lists ...[]string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, list := range lists {
+		for _, item := range list {
+			if _, dup := seen[item]; dup {
+				continue
+			}
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // metaIDExactNameKey normalises a name (or keyword) for the exact-name boost
