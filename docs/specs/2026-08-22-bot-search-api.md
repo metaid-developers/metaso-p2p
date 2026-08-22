@@ -12,7 +12,7 @@ The API style aligns with the other aggregation endpoints: a `{code, data, messa
 - Matching is **weighted partial match**, not hard AND: a query `占卜 塔罗 命运` must recall a bot whose bio only contains `占卜塔罗牌`.
 - Group-task history is **facts only** (create/join/leave pins). No verdicts, no reliability scoring. Empty history is valid, not an error.
 - The botsearch aggregator is read-only: it indexes nothing itself and owns no Pebble data. Profiles come from userinfo (`BotSearchProfiles` snapshot), history from groupchat (`GroupHistoryForIdentity`), published skills from skillservice (`PublishedServiceNames`), and presence from the socket manager / federation global reader — all injected via setters in `cmd/metaso-p2p/main.go`.
-- The profile corpus inclusion rule mirrors the MetaID search corpus: identities that never wrote any searchable `/info` field (name/bio/role/soul/goal/persona/llm/chatSkills) are excluded.
+- The profile corpus inclusion rule mirrors the MetaID search corpus: identities that never wrote any searchable `/info` field (name/bio/role/soul/goal/persona/llm/chatSkills) are excluded. Candidate `role`/`goal` fall back to the `/info/persona` JSON `{"role","goal"}` when the separate `/info/role|goal` pins were never written (IDBots Bot edit only writes persona), so persona-only bots still score on role/goal and roleHint.
 
 ## API: Bot Search
 
