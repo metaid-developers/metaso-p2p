@@ -9,7 +9,7 @@ Requirements source: IDBots `docs/metaweb-search-backend-requirements.md` (R1). 
 ## General Principles
 
 - The search aggregator is **read-only**: it indexes nothing itself and owns no Pebble data. Searchable documents are injected from source aggregators via setters, mirroring the `botsearch` composition pattern (`internal/aggregator/botsearch`).
-- Each source aggregator maintains a warm in-memory **search-document snapshot** (derived fields only: title/summary/tags/content excerpt), built from its Pebble store at startup and updated on every block/mempool pin it already processes. `SearchDocuments()` returns an independent snapshot per call.
+- Each source aggregator maintains a warm in-memory **search-document snapshot** (derived fields only: title/summary/tags/content excerpt), built from its Pebble store at startup and updated on every block/mempool pin it already processes. `SearchDocuments()` returns a **shared, immutable snapshot** (copy-on-write: the source swaps in a new slice/map on update; callers hold the previous reference). Callers must not mutate the returned documents. There is no per-request deep copy of the corpus — scoring reads the shared snapshot in place.
 - Matching is **weighted partial match** with CJK-aware tokenization (same rules as `botsearch`), not hard AND.
 - Hidden/revoked records are excluded. Mempool versions are included (freshness: searchable within one confirmed block + mempool relay).
 - v1 covers six protocol keys; the list is extensible without wire-format changes.
@@ -131,7 +131,7 @@ Offset cursor: base64url(JSON `{"o": offset}`) — the same wire format as the M
           "avatar": "metafile://…i0"
         },
         "createdAt": 1755000000,
-        "score": 12.5,
+        "score": 14,
         "links": { "pin": "/api/metaweb/pin/92ec…fb4i0" },
         "extra": { "contentType": "text/markdown" }
       }

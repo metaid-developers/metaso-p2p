@@ -77,7 +77,7 @@ Field rules:
 - `protocol`: the protocol key from the search spec's key table, derived from `path` (e.g. path `/protocols/simplenote` → `simplenote`). For paths outside the known table (only possible via the remote fallback), `protocol` is the last path segment and `path` is returned verbatim.
 - `operation`: `create` | `modify` | `revoke`. A revoked pin is still returned when addressed directly (`operation: "revoke"`, `payload`/`text` from the last known content version when locally available); revoked pins simply never appear in search.
 - `creator.name`: best-effort userinfo enrichment; empty string when unknown. `createdAt`: unix seconds.
-- `payload`: decoded JSON object when the pin body is JSON; the raw string when it is plain text/markdown; `null` when the body is empty, binary, or encrypted (`encryption != "0"`).
+- `payload`: decoded JSON object when the pin body is JSON; the raw string when it is plain text/markdown; `null` when the body is empty, binary, or encrypted (`encryption != "0"`). **`payload` is never truncated** — it always carries the complete body and is the continuation path when `text` is truncated (IDBots reads the remainder from `payload` / the payload's content field; no `?offset=` mechanism exists).
 - `text`: the **LLM-ready normalized body** —
   - JSON payloads: unwrap the protocol's content field (`content` for simplenote/simplebuzz/metaprotocol-markdown bodies; `description` fallback for skill-service/metabot-skill; metaapp: `intro`). When no known content field exists, `text` is `null` (the caller uses `payload`).
   - Plain text/markdown bodies: passed through as-is.

@@ -43,12 +43,12 @@ go run ./cmd/metaso-p2p-metaweb-backfill \
   --data-dir <pebble dir> \
   --manapi-base-url https://manapi.metaid.io \
   --paths /protocols/simplenote,/protocols/metaprotocol \
-  --since 2025-08-01 \
   --page-size 100 \
   --timeout 8h
 ```
 
-- `--paths` defaults to the two new protocol paths; `--since`/`--lookback`, `--page-size`, `--timeout`, `--manapi-base-url` mirror the skillservice/socialcontent commands (MANAPI default `https://manapi.metaid.io`, page size 100).
+- `--paths` defaults to the two new protocol paths; `--page-size`, `--timeout`, `--manapi-base-url` mirror the skillservice/socialcontent commands (MANAPI default `https://manapi.metaid.io`, page size 100).
+- **Backfill scope: full history.** `--since`/`--lookback` exist for operational narrowing (re-runs, disaster recovery) but are omitted by default — both protocols are young and small, and early tutorial content must not be skipped.
 - Fetch: `GET {base}/pin/path/list?path=&cursor=&size=`, cursor loop with repeated-cursor guard and 3× backoff retry, version chains re-fetched via `modify_history` (`@<pinId>` paths) and replayed oldest-first — reusing the existing `publishedcontent.Backfill` machinery.
 - **Completion report** (new vs. the older commands, required by the IDBots contract): on completion the command logs and prints a per-chain table — pins fetched, records created/updated, version-chain replays, errors — grouped by `chainName` (`btc`, `mvc`, `doge`, `opcat`), e.g. `[metaweb-backfill] done path=/protocols/simplenote chain=mvc fetched=5123 upserted=5119 modified=402 revoked=17 errors=0`.
 
