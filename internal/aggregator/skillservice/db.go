@@ -216,6 +216,9 @@ func (a *Aggregator) saveService(rec *ServiceRecord, previous *ServiceRecord) er
 		}
 	}
 	a.notifyServiceUpdated(previous, rec)
+	// Fold the committed record into the warm search-document snapshot so the
+	// metaweb unified search sees service changes immediately.
+	a.refreshSearchDocument(rec)
 	return nil
 }
 

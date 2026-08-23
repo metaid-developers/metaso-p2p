@@ -6,6 +6,8 @@ const (
 	PathSimpleBuzz   = "/protocols/simplebuzz"
 	PathMetaApp      = "/protocols/metaapp"
 	PathMetaBotSkill = "/protocols/metabot-skill"
+	PathSimpleNote   = "/protocols/simplenote"
+	PathMetaProtocol = "/protocols/metaprotocol"
 )
 
 const (

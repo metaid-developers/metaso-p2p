@@ -23,6 +23,82 @@ type BackfillOptions struct {
 	Paths    []string
 	Since    time.Time
 	PageSize int
+	// Stats, when non-nil, accumulates per-path/per-chain counters during the
+	// run (fetched / upserted / modified / revoked / errors) for the
+	// metaweb-backfill completion report.
+	Stats *BackfillStats
+}
+
+// BackfillChainStats accumulates the counters of one (path, chainName) cell.
+type BackfillChainStats struct {
+	Fetched  int64
+	Upserted int64
+	Modified int64
+	Revoked  int64
+	Errors   int64
+}
+
+// BackfillStats groups backfill counters by protocol path, then chainName.
+// Fill it via BackfillOptions.Stats; safe to leave nil. Not goroutine-safe:
+// the backfill replay is single-threaded.
+type BackfillStats struct {
+	Paths map[string]map[string]*BackfillChainStats
+}
+
+func (s *BackfillStats) chain(path, chainName string) *BackfillChainStats {
+	if s == nil {
+		return nil
+	}
+	if s.Paths == nil {
+		s.Paths = make(map[string]map[string]*BackfillChainStats)
+	}
+	byChain := s.Paths[path]
+	if byChain == nil {
+		byChain = make(map[string]*BackfillChainStats)
+		s.Paths[path] = byChain
+	}
+	chainName = strings.ToLower(strings.TrimSpace(chainName))
+	if chainName == "" {
+		chainName = "unknown"
+	}
+	stats := byChain[chainName]
+	if stats == nil {
+		stats = &BackfillChainStats{}
+		byChain[chainName] = stats
+	}
+	return stats
+}
+
+func (s *BackfillStats) recordFetched(path string, pins []manapiPin) {
+	if s == nil {
+		return
+	}
+	for _, pin := range pins {
+		s.chain(path, pin.ChainName).Fetched++
+	}
+}
+
+// recordReplayed counts one successfully replayed pin by its operation.
+func (s *BackfillStats) recordReplayed(path string, pin manapiPin) {
+	if s == nil {
+		return
+	}
+	stats := s.chain(path, pin.ChainName)
+	switch normaliseOperation(pin.Operation) {
+	case OperationModify:
+		stats.Modified++
+	case OperationRevoke:
+		stats.Revoked++
+	default:
+		stats.Upserted++
+	}
+}
+
+func (s *BackfillStats) recordError(path string, pin manapiPin) {
+	if s == nil {
+		return
+	}
+	s.chain(path, pin.ChainName).Errors++
 }
 
 type BackfillClient struct {
@@ -62,10 +138,11 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 		if err != nil {
 			return err
 		}
-		if err := a.replayBackfillPins(pinsToReplay); err != nil {
+		opts.Stats.recordFetched(path, pinsToReplay)
+		if err := a.replayBackfillPins(path, pinsToReplay, opts.Stats); err != nil {
 			return err
 		}
-		if err := a.backfillTargetedVersionPins(ctx, client, pinsToReplay, opts.Since, pageSize); err != nil {
+		if err := a.backfillTargetedVersionPins(ctx, client, path, pinsToReplay, opts.Since, pageSize, opts.Stats); err != nil {
 			return err
 		}
 	}
@@ -108,16 +185,21 @@ func fetchBackfillPins(ctx context.Context, client *BackfillClient, path string,
 	return pinsToReplay, nil
 }
 
-func (a *Aggregator) replayBackfillPins(pins []manapiPin) error {
+func (a *Aggregator) replayBackfillPins(path string, pins []manapiPin, stats *BackfillStats) error {
 	for i := len(pins) - 1; i >= 0; i-- {
 		if err := a.processPin(pins[i].toAggregatorPin(), false); err != nil {
+			stats.recordError(path, pins[i])
 			return err
 		}
+		stats.recordReplayed(path, pins[i])
 	}
 	return nil
 }
 
-func (a *Aggregator) backfillTargetedVersionPins(ctx context.Context, client *BackfillClient, seeds []manapiPin, since time.Time, pageSize int) error {
+// backfillTargetedVersionPins re-fetches the modify_history version chains of
+// the seed pins (`@<pinId>` paths) and replays them oldest-first. Version
+// pins are attributed to the parent protocol path in the stats report.
+func (a *Aggregator) backfillTargetedVersionPins(ctx context.Context, client *BackfillClient, parentPath string, seeds []manapiPin, since time.Time, pageSize int, stats *BackfillStats) error {
 	queue := make([]string, 0)
 	queued := make(map[string]struct{})
 	enqueue := func(path string) {
@@ -150,7 +232,8 @@ func (a *Aggregator) backfillTargetedVersionPins(ctx context.Context, client *Ba
 		if err != nil {
 			return err
 		}
-		if err := a.replayBackfillPins(pins); err != nil {
+		stats.recordFetched(parentPath, pins)
+		if err := a.replayBackfillPins(parentPath, pins, stats); err != nil {
 			return err
 		}
 		for _, pin := range pins {
@@ -164,7 +247,7 @@ func (a *Aggregator) backfillTargetedVersionPins(ctx context.Context, client *Ba
 
 func normaliseBackfillPaths(paths []string) []string {
 	if len(paths) == 0 {
-		return []string{PathSimpleBuzz, PathMetaApp, PathMetaBotSkill}
+		return DefaultBackfillPaths()
 	}
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -173,6 +256,13 @@ func normaliseBackfillPaths(paths []string) []string {
 		}
 	}
 	return out
+}
+
+// DefaultBackfillPaths returns the full set of published protocol paths,
+// including SimpleNote and metaprotocol (added for the MetaWeb unified
+// search indexing spec).
+func DefaultBackfillPaths() []string {
+	return append([]string(nil), publishedProtocolPaths...)
 }
 
 type backfillPage struct {

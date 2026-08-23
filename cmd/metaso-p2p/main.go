@@ -15,6 +15,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
@@ -156,6 +157,22 @@ func main() {
 			log.Printf("WARNING: botsearch aggregator init failed: %v", err)
 		} else {
 			botSearchAgg = botSearchCandidate
+		}
+		// metaweb is a read-only aggregator over the publishedcontent /
+		// skillservice search-document snapshots; pin reads dispatch across
+		// those local namespaces and fall back to MANAPI passthrough.
+		metawebCandidate := &metaweb.Aggregator{}
+		metawebCandidate.SetProfileNamer(metaweb.NewUserInfoProfileNamer(userinfoAgg))
+		metawebCandidate.SetAssetResolver(skillservice.NewAssetResolver(cfg.BotHub.AssetBaseURL))
+		metawebCandidate.SetRemotePinFetcher(metaweb.NewMANAPIPinFetcher(cfg.BotHomepageV2Backfill.MANAPIBaseURL, nil))
+		metawebCandidate.SetDocumentSources(skillserviceAgg)
+		metawebCandidate.SetPinLookups(nil, skillserviceAgg)
+		if publishedAgg != nil {
+			metawebCandidate.SetDocumentSources(publishedAgg, skillserviceAgg)
+			metawebCandidate.SetPinLookups(publishedAgg, skillserviceAgg)
+		}
+		if err := aggRegistry.Register(metawebCandidate); err != nil {
+			log.Printf("WARNING: metaweb aggregator init failed: %v", err)
 		}
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {

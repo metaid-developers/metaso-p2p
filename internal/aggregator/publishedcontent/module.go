@@ -1,12 +1,15 @@
 package publishedcontent
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb/metawebdoc"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
@@ -17,6 +20,12 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	indexMu       sync.Mutex
 	profileLookup MetaAppProfileLookup
+
+	// searchDocs holds the warm, copy-on-write search-document snapshot
+	// consumed by the metaweb unified search aggregator (see searchdoc.go).
+	searchDocs      atomic.Value // []metawebdoc.Document, immutable once stored
+	searchDocsMu    sync.Mutex   // guards searchDocsIndex copy-on-write updates
+	searchDocsIndex map[string]metawebdoc.Document
 }
 
 const (
@@ -33,7 +42,15 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if err := a.ensureHomepageMetaAppGlobalIndexes(); err != nil {
 		return err
 	}
-	return a.ensureMetaAppTimeIndexes()
+	if err := a.ensureMetaAppTimeIndexes(); err != nil {
+		return err
+	}
+	// Warm the search-document snapshot from the record store. A scan failure
+	// is non-fatal: every subsequent record write re-folds its document.
+	if err := a.rebuildSearchDocuments(); err != nil {
+		log.Printf("WARNING: publishedcontent search document snapshot build failed: %v", err)
+	}
+	return nil
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {

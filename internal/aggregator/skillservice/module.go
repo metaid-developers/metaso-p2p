@@ -1,12 +1,15 @@
 package skillservice
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb/metawebdoc"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
@@ -27,6 +30,12 @@ type Aggregator struct {
 	assetResolver    *AssetResolver
 	homepageIndex    sync.Mutex
 	onServiceUpdated func(globalMetaID string)
+
+	// searchDocs holds the warm, copy-on-write search-document snapshot
+	// consumed by the metaweb unified search aggregator (see searchdoc.go).
+	searchDocs      atomic.Value // []metawebdoc.Document, immutable once stored
+	searchDocsMu    sync.Mutex   // guards searchDocsIndex copy-on-write updates
+	searchDocsIndex map[string]metawebdoc.Document
 }
 
 const (
@@ -50,7 +59,16 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	// Buffer 1 so we satisfy the Aggregator interface without ever
 	// actually sending; closed-channel semantics are not required.
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 1)
-	return a.ensureHomepageProviderGlobalIndexes()
+	if err := a.ensureHomepageProviderGlobalIndexes(); err != nil {
+		return err
+	}
+	// Warm the search-document snapshot from the service store. A scan
+	// failure is non-fatal: every subsequent record write re-folds its
+	// document into the snapshot.
+	if err := a.rebuildSearchDocuments(); err != nil {
+		log.Printf("WARNING: skillservice search document snapshot build failed: %v", err)
+	}
+	return nil
 }
 
 // NotifyChannel is required by the Aggregator interface. The skill-service
