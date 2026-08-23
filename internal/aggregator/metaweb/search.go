@@ -20,6 +20,11 @@ import (
 // flat +100 when the whole trimmed query is a substring of the title, and a
 // flat +10 (at most once per document) when it is a substring of the summary,
 // any tag, or the content excerpt.
+//
+// Ranking hardening (2026-08-23): latin tokens only hit on word boundaries,
+// English stopwords are excluded from scoring (stopwords.go), and a token
+// whose document frequency exceeds idfHighFreqThreshold of the merged
+// snapshot gets its weight multiplied by idfHighFreqFactor.
 const (
 	defaultSearchSize = 10
 	maxSearchSize     = 50
@@ -38,6 +43,15 @@ const (
 	// logs a warn line with the query, active filters, result count, and
 	// elapsed milliseconds.
 	slowSearchThresholdMs = 300
+)
+
+// Lightweight IDF: a non-stopword token present in more than 30% of the
+// merged document snapshot carries less signal, so its weight is halved —
+// not zeroed, so a direct query for a ubiquitous term (e.g. "metaid") still
+// works.
+const (
+	idfHighFreqThreshold = 0.30
+	idfHighFreqFactor    = 0.5
 )
 
 // tokenizeQuery turns the query into the deduplicated, lowercased match-token
@@ -129,10 +143,115 @@ func tokenWeight(token string) int {
 	return runes
 }
 
+// isTokenBoundaryRune reports whether r delimits a latin token: any rune
+// outside [a-z0-9] (the matched text is already lowercased).
+func isTokenBoundaryRune(r rune) bool {
+	return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+}
+
+// tokenHitsText is the hit test shared by scoring, IDF counting, and
+// newest-sort admission. lowerText must already be lowercased. Tokens
+// containing CJK runes keep plain substring matching; latin/digit tokens hit
+// only when bounded by non-[a-z0-9] runes or string boundaries, so "is" does
+// not match "this" or "history".
+func tokenHitsText(lowerText, token string) bool {
+	if token == "" {
+		return false
+	}
+	if containsCJK(token) {
+		return strings.Contains(lowerText, token)
+	}
+	for offset := 0; offset+len(token) <= len(lowerText); {
+		idx := strings.Index(lowerText[offset:], token)
+		if idx < 0 {
+			return false
+		}
+		idx += offset
+		leftOK := idx == 0
+		if !leftOK {
+			r, _ := utf8.DecodeLastRuneInString(lowerText[:idx])
+			leftOK = isTokenBoundaryRune(r)
+		}
+		rightIdx := idx + len(token)
+		rightOK := rightIdx == len(lowerText)
+		if !rightOK {
+			r, _ := utf8.DecodeRuneInString(lowerText[rightIdx:])
+			rightOK = isTokenBoundaryRune(r)
+		}
+		if leftOK && rightOK {
+			return true
+		}
+		offset = idx + 1
+	}
+	return false
+}
+
+// tagsHit reports whether the token hits any of the lowercased tags.
+func tagsHit(tags []string, token string) bool {
+	for _, tag := range tags {
+		if tokenHitsText(tag, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// documentTextUnion concatenates the lowercased searchable fields, separated
+// by boundary newlines, for the per-request document-frequency scan.
+func documentTextUnion(doc *metawebdoc.Document) string {
+	var sb strings.Builder
+	sb.WriteString(strings.ToLower(doc.Title))
+	for _, tag := range doc.Tags {
+		sb.WriteByte('\n')
+		sb.WriteString(strings.ToLower(tag))
+	}
+	sb.WriteByte('\n')
+	sb.WriteString(strings.ToLower(doc.Summary))
+	sb.WriteByte('\n')
+	sb.WriteString(strings.ToLower(doc.ContentExcerpt))
+	return sb.String()
+}
+
+// tokenIDFWeights computes the per-request weight of each scoring token: the
+// base weight min(runeCount(token), 4), halved when the token's document
+// frequency over the merged snapshot (all sources, unfiltered) exceeds
+// idfHighFreqThreshold. In-memory only; the scan is one pass over the corpus.
+func tokenIDFWeights(sources []DocumentSource, tokens []string) []float64 {
+	weights := make([]float64, len(tokens))
+	if len(tokens) == 0 {
+		return weights
+	}
+	df := make([]int, len(tokens))
+	total := 0
+	for _, source := range sources {
+		if source == nil {
+			continue
+		}
+		docs := source.SearchDocuments()
+		for i := range docs {
+			total++
+			union := documentTextUnion(&docs[i])
+			for j, token := range tokens {
+				if tokenHitsText(union, token) {
+					df[j]++
+				}
+			}
+		}
+	}
+	for j, token := range tokens {
+		weight := float64(tokenWeight(token))
+		if total > 0 && float64(df[j]) > idfHighFreqThreshold*float64(total) {
+			weight *= idfHighFreqFactor
+		}
+		weights[j] = weight
+	}
+	return weights
+}
+
 // scoreDocument applies the weighted partial match of the contract. Each
 // (field, token) pair is counted once; tagsHit counts a token once when it
-// hits any tag.
-func scoreDocument(doc *metawebdoc.Document, tokens []string, query string) int {
+// hits any tag. weights[i] is the IDF-adjusted weight of tokens[i].
+func scoreDocument(doc *metawebdoc.Document, tokens []string, weights []float64, query string) int {
 	title := strings.ToLower(doc.Title)
 	summary := strings.ToLower(doc.Summary)
 	content := strings.ToLower(doc.ContentExcerpt)
@@ -141,47 +260,51 @@ func scoreDocument(doc *metawebdoc.Document, tokens []string, query string) int 
 		tags = append(tags, strings.ToLower(tag))
 	}
 
-	score := 0
-	for _, token := range tokens {
-		weight := tokenWeight(token)
-		if strings.Contains(title, token) {
+	score := 0.0
+	for i, token := range tokens {
+		weight := weights[i]
+		if tokenHitsText(title, token) {
 			score += weightTitle * weight
 		}
-		if containsAny(tags, token) {
+		if tagsHit(tags, token) {
 			score += weightTags * weight
 		}
-		if strings.Contains(summary, token) {
+		if tokenHitsText(summary, token) {
 			score += weightSummary * weight
 		}
-		if strings.Contains(content, token) {
+		if tokenHitsText(content, token) {
 			score += weightContent * weight
 		}
 	}
 
-	if trimmed := strings.ToLower(strings.TrimSpace(query)); trimmed != "" {
-		if strings.Contains(title, trimmed) {
-			score += exactTitleBoost
-		}
-		if strings.Contains(summary, trimmed) || containsAny(tags, trimmed) || strings.Contains(content, trimmed) {
-			score += exactOtherBoost
+	// The exact-phrase boost requires at least one non-stopword scoring
+	// token, so an all-stopword query (e.g. "what is") matches nothing.
+	if len(tokens) > 0 {
+		if trimmed := strings.ToLower(strings.TrimSpace(query)); trimmed != "" {
+			if strings.Contains(title, trimmed) {
+				score += exactTitleBoost
+			}
+			if strings.Contains(summary, trimmed) || containsAny(tags, trimmed) || strings.Contains(content, trimmed) {
+				score += exactOtherBoost
+			}
 		}
 	}
-	return score
+	return int(score)
 }
 
 // documentMatchesAny is the sort=newest admission filter: scoring is
-// bypassed, but a document must still match at least one token in at least
-// one field.
+// bypassed, but a document must still match at least one scoring token
+// (stopwords excluded by the caller) in at least one field.
 func documentMatchesAny(doc *metawebdoc.Document, tokens []string) bool {
 	title := strings.ToLower(doc.Title)
 	summary := strings.ToLower(doc.Summary)
 	content := strings.ToLower(doc.ContentExcerpt)
 	for _, token := range tokens {
-		if strings.Contains(title, token) || strings.Contains(summary, token) || strings.Contains(content, token) {
+		if tokenHitsText(title, token) || tokenHitsText(summary, token) || tokenHitsText(content, token) {
 			return true
 		}
 		for _, tag := range doc.Tags {
-			if strings.Contains(strings.ToLower(tag), token) {
+			if tokenHitsText(strings.ToLower(tag), token) {
 				return true
 			}
 		}
@@ -189,6 +312,8 @@ func documentMatchesAny(doc *metawebdoc.Document, tokens []string) bool {
 	return false
 }
 
+// containsAny is a plain substring test over several texts, used only by the
+// exact-phrase boost (phrase matching is substring-based by contract).
 func containsAny(texts []string, token string) bool {
 	for _, text := range texts {
 		if strings.Contains(text, token) {

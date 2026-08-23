@@ -286,3 +286,133 @@ func TestHandleSearch_NoDocumentSources(t *testing.T) {
 		t.Fatalf("code = %d, want 50000", envelope.Code)
 	}
 }
+
+func TestHandleSearch_AllStopwordQueryReturnsEmpty(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: testDocs()})
+	router := newTestRouter(agg)
+
+	// An all-stopword query matches nothing: code 0 with an empty page.
+	envelope := doSearch(t, router, "q=what%20is")
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data.Items) != 0 || envelope.Data.HasMore {
+		t.Fatalf("all-stopword items = %+v", envelope.Data)
+	}
+
+	// Same for sort=newest admission.
+	envelope = doSearch(t, router, "q=what%20is&sort=newest")
+	if envelope.Code != 0 || len(envelope.Data.Items) != 0 {
+		t.Fatalf("all-stopword newest items = %+v", envelope.Data)
+	}
+}
+
+func TestHandleSearch_MixedStopwordQueryScoresContentWordOnly(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-seedance:i0",
+			ChainName:      "mvc",
+			Title:          "Seedance video generation guide",
+			Summary:        "text to video",
+			Tags:           []string{},
+			ContentExcerpt: "seedance body",
+			CreatedAt:      1755000000,
+		},
+		{
+			ProtocolKey:    "simplebuzz",
+			SourcePinId:    "pin-chatter:i0",
+			ChainName:      "mvc",
+			Title:          "what is this",
+			Summary:        "what is it about",
+			Tags:           []string{},
+			ContentExcerpt: "what is history",
+			CreatedAt:      1756000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	// Stopwords score nothing; only the seedance doc is returned. The
+	// chatter doc must not accumulate stopword weight, and "is" must not
+	// hit "this"/"history".
+	envelope := doSearch(t, router, "q=what%20is%20seedance")
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].PinId != "pin-seedance:i0" {
+		t.Fatalf("items = %+v", envelope.Data.Items)
+	}
+}
+
+func TestHandleSearch_SeedanceRegression(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:    "metabot-skill",
+			SourcePinId:    "pin-dsh:i0",
+			ChainName:      "mvc",
+			Title:          "dsh ping skill",
+			Summary:        "test skill",
+			Tags:           []string{},
+			ContentExcerpt: "ping test body",
+			CreatedAt:      1756000000,
+		},
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-seedance:i0",
+			ChainName:      "mvc",
+			Title:          "Seedance video generation notes",
+			Summary:        "how to drive seedance",
+			Tags:           []string{"video"},
+			ContentExcerpt: "seedance body",
+			CreatedAt:      1755000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	envelope := doSearch(t, router, "q=seedance")
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data.Items) == 0 || envelope.Data.Items[0].PinId != "pin-seedance:i0" {
+		t.Fatalf("seedance doc not first: %+v", envelope.Data.Items)
+	}
+}
+
+func TestHandleSearch_ChineseQueryRegression(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-zh:i0",
+			ChainName:      "mvc",
+			Title:          "MetaID 协议：数字身份是什么",
+			Summary:        "数字身份协议入门",
+			Tags:           []string{},
+			ContentExcerpt: "数字身份 协议 body",
+			CreatedAt:      1755000000,
+		},
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-en:i0",
+			ChainName:      "mvc",
+			Title:          "MetaID protocol identity on Bitcoin",
+			Summary:        "english explainer",
+			Tags:           []string{},
+			ContentExcerpt: "identity body",
+			CreatedAt:      1756000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	// CJK bigram/substring scoring must keep the Chinese doc on top.
+	envelope := doSearch(t, router, "q=MetaID%20%E6%98%AF%E4%BB%80%E4%B9%88%20%E5%8D%8F%E8%AE%AE%20%E6%95%B0%E5%AD%97%E8%BA%AB%E4%BB%BD")
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data.Items) != 2 || envelope.Data.Items[0].PinId != "pin-zh:i0" {
+		t.Fatalf("items = %+v", envelope.Data.Items)
+	}
+}

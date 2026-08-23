@@ -57,6 +57,8 @@ Whitespace-split `q`, then per segment (identical to `botsearch`):
 
 The token set is deduplicated, preserving first-occurrence order.
 
+**Stopword exclusion** (ranking hardening, 2026-08-23): latin/digit tokens that are English function words (stopword table in `internal/aggregator/metaweb/stopwords.go` — `is`, `what`, `the`, `of`, …) are removed from the scoring token set. CJK tokens are never stopwords. If every token is a stopword (e.g. `q="what is"`), the result set is empty (`code 0`, `items: []`) for both `sort=relevance` and `sort=newest`.
+
 ### Search Document Fields
 
 Each indexed record projects to one search document (derived **at index time**, i.e. when the snapshot entry is built/updated — see "Open-Question Decisions"):
@@ -99,8 +101,11 @@ score = 5*titleHit + 3*tagsHit + 2*summaryHit + 1*contentHit
 ```
 
 - Each hit sums token weights; token weight = `min(runeCount(token), 4)`.
-- Each (field, token) pair is counted once. Hit test: case-insensitive substring against the field text. `tagsHit`: a token hitting any tag counts once.
-- **Exact-phrase boost**: when the whole trimmed `q` (case-insensitive) is a substring of `title`, a flat `+100`; when it is a substring of `summary`, any tag, or `content`, a flat `+10` (at most one +10 per document).
+- Each (field, token) pair is counted once. `tagsHit`: a token hitting any tag counts once.
+- **Hit test** (ranking hardening, 2026-08-23): latin/digit tokens hit a field only on word boundaries — bounded by non-`[a-z0-9]` runes or string boundaries (case-insensitive; e.g. `is` does not hit `this`/`history`). CJK tokens and bigrams keep plain case-insensitive substring matching. The same hit test applies in the `sort=newest` admission filter.
+- **Stopwords score zero** (2026-08-23): stopword tokens (see Tokenization) are excluded from scoring; a document scores only through non-stopword tokens and the exact-phrase boost.
+- **IDF-lite** (2026-08-23): per request, the document frequency of each scoring token is counted over the merged snapshot (all sources, unfiltered; hit test over title+tags+summary+content). If `df[token]/totalDocs > 0.30`, that token's weight is multiplied by `0.5` — halved, not zeroed, so a direct query for a ubiquitous term (e.g. `metaid`) still works. In-memory only, two-pass scoring (one corpus scan for df, then the filtered scoring pass).
+- **Exact-phrase boost**: when the whole trimmed `q` (case-insensitive) is a substring of `title`, a flat `+100`; when it is a substring of `summary`, any tag, or `content`, a flat `+10` (at most one +10 per document). Requires at least one non-stopword token in `q` — an all-stopword query never scores.
 - Documents with score 0 are excluded.
 - `sort=relevance`: score descending, tie-break `createdAt` descending (recency tiebreak), then `pinId` ascending. `sort=newest`: `createdAt` descending, then `pinId` ascending; `score` is reported as `0`.
 

@@ -74,7 +74,13 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 		return
 	}
 
-	tokens := tokenizeQuery(params.query)
+	// Stopword tokens are excluded from scoring; an all-stopword query
+	// yields no scoring tokens and therefore an empty result set.
+	tokens := scoringTokens(tokenizeQuery(params.query))
+
+	// Pass 1: lightweight IDF over the merged snapshot (all docs,
+	// unfiltered). Pass 2 below applies filters and computes the scores.
+	weights := tokenIDFWeights(a.sources, tokens)
 
 	type scoredDoc struct {
 		doc   metawebdoc.Document
@@ -82,8 +88,9 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	}
 	matches := make([]scoredDoc, 0)
 
-	// Score over one merged snapshot per request; filters apply before
-	// scoring. The snapshots are shared immutable slices read in place.
+	// Pass 2: score over one merged snapshot per request; filters apply
+	// before scoring. The snapshots are shared immutable slices read in
+	// place.
 	for _, source := range a.sources {
 		if source == nil {
 			continue
@@ -113,7 +120,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 					continue
 				}
 			} else {
-				score = scoreDocument(&doc, tokens, params.query)
+				score = scoreDocument(&doc, tokens, weights, params.query)
 				if score <= 0 {
 					continue
 				}
