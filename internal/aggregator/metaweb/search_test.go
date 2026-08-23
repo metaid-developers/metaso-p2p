@@ -250,21 +250,21 @@ func TestScoreDocument_StopwordTokenContributesZero(t *testing.T) {
 }
 
 func TestTokenIDFWeights_HighFrequencyHalved(t *testing.T) {
-	// 10 docs: "common" in 4 (40% > 30%) → halved; "rare" in 3 (30%, the
-	// threshold is strict) → full weight.
+	// 10 simplenote docs: "common" in 4 (40% > 30%) → halved; "rare" in 3
+	// (30%, the threshold is strict) → full weight.
 	docs := make([]metawebdoc.Document, 0, 10)
 	for i := 0; i < 4; i++ {
-		docs = append(docs, metawebdoc.Document{Title: "common doc"})
+		docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "common doc"})
 	}
 	for i := 0; i < 3; i++ {
-		docs = append(docs, metawebdoc.Document{Title: "rare doc"})
+		docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "rare doc"})
 	}
 	for i := 0; i < 3; i++ {
-		docs = append(docs, metawebdoc.Document{Title: "filler doc"})
+		docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "filler doc"})
 	}
 	sources := []DocumentSource{&fakeDocSource{docs: docs}}
 
-	weights := tokenIDFWeights(sources, []string{"common", "rare"})
+	weights := tokenIDFWeights(sources, []string{"common", "rare"})["simplenote"]
 	if got, want := weights[0], 2.0; got != want {
 		t.Fatalf("common weight = %v, want %v (halved from 4)", got, want)
 	}
@@ -282,19 +282,72 @@ func TestTokenIDFWeights_HighFrequencyHalved(t *testing.T) {
 	}
 }
 
+func TestTokenIDFWeights_PerProtocolKey(t *testing.T) {
+	// "skill" is ubiquitous within metabot-skill (4 of 4 = 100% > 30%) but
+	// rare within simplenote (1 of 4 = 25%): halved only for metabot-skill.
+	docs := []metawebdoc.Document{
+		{ProtocolKey: "metabot-skill", Title: "skill one"},
+		{ProtocolKey: "metabot-skill", Title: "skill two"},
+		{ProtocolKey: "metabot-skill", Title: "skill three"},
+		{ProtocolKey: "metabot-skill", Title: "skill four"},
+		{ProtocolKey: "simplenote", Title: "skill notes"},
+		{ProtocolKey: "simplenote", Title: "cooking notes"},
+		{ProtocolKey: "simplenote", Title: "travel notes"},
+		{ProtocolKey: "simplenote", Title: "reading notes"},
+	}
+	weights := tokenIDFWeights([]DocumentSource{&fakeDocSource{docs: docs}}, []string{"skill"})
+	if got, want := weights["metabot-skill"][0], 2.0; got != want {
+		t.Fatalf("metabot-skill weight = %v, want %v (halved)", got, want)
+	}
+	if got, want := weights["simplenote"][0], 4.0; got != want {
+		t.Fatalf("simplenote weight = %v, want %v (full)", got, want)
+	}
+}
+
+func TestTokenIDFWeights_CrossKeyIsolation(t *testing.T) {
+	// A token common in simplebuzz must not affect metabot-skill scoring,
+	// even though both ride the same source aggregator.
+	docs := []metawebdoc.Document{
+		{ProtocolKey: "simplebuzz", Title: "metaid buzz one"},
+		{ProtocolKey: "simplebuzz", Title: "metaid buzz two"},
+		{ProtocolKey: "metabot-skill", Title: "ping tool"},
+		{ProtocolKey: "metabot-skill", Title: "image tool"},
+		{ProtocolKey: "metabot-skill", Title: "video tool"},
+		{ProtocolKey: "metabot-skill", Title: "voice tool"},
+	}
+	weights := tokenIDFWeights([]DocumentSource{&fakeDocSource{docs: docs}}, []string{"metaid"})
+	// simplebuzz: df 2/2 = 100% > 30% → halved.
+	if got, want := weights["simplebuzz"][0], 2.0; got != want {
+		t.Fatalf("simplebuzz weight = %v, want %v (halved)", got, want)
+	}
+	// metabot-skill: df 0/4 → full weight despite the simplebuzz frequency.
+	if got, want := weights["metabot-skill"][0], 4.0; got != want {
+		t.Fatalf("metabot-skill weight = %v, want %v (full)", got, want)
+	}
+}
+
 func TestTokenIDFWeights_MergedAcrossSources(t *testing.T) {
-	// Document frequency is computed over the merged snapshot of all
-	// sources, unfiltered.
+	// Document frequency is per protocol key, accumulated across sources:
+	// the same protocol key served by two sources shares one namespace.
 	half := []metawebdoc.Document{
-		{Title: "metaid doc one"},
-		{Title: "metaid doc two"},
-		{Title: "other doc"},
+		{ProtocolKey: "simplenote", Title: "metaid doc one"},
+		{ProtocolKey: "simplenote", Title: "metaid doc two"},
+		{ProtocolKey: "simplenote", Title: "other doc"},
 	}
 	sources := []DocumentSource{&fakeDocSource{docs: half}, &fakeDocSource{docs: half}}
 	weights := tokenIDFWeights(sources, []string{"metaid"})
 	// df = 4 of 6 (67% > 30%) → halved.
-	if got, want := weights[0], 2.0; got != want {
+	if got, want := weights["simplenote"][0], 2.0; got != want {
 		t.Fatalf("metaid weight = %v, want %v", got, want)
+	}
+}
+
+func TestWeightsForProtocol_UnknownKeyDefaultsFull(t *testing.T) {
+	// A protocol key without stats (e.g. entered between the df scan and
+	// the scoring pass) falls back to full weights.
+	weights := weightsForProtocol(map[string][]float64{}, "metaapp", []string{"ab", "abcde"})
+	if len(weights) != 2 || weights[0] != 2.0 || weights[1] != 4.0 {
+		t.Fatalf("weights = %v, want [2 4]", weights)
 	}
 }
 

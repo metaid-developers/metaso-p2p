@@ -23,8 +23,9 @@ import (
 //
 // Ranking hardening (2026-08-23): latin tokens only hit on word boundaries,
 // English stopwords are excluded from scoring (stopwords.go), and a token
-// whose document frequency exceeds idfHighFreqThreshold of the merged
-// snapshot gets its weight multiplied by idfHighFreqFactor.
+// whose document frequency within a protocol key exceeds
+// idfHighFreqThreshold gets its weight multiplied by idfHighFreqFactor for
+// that protocol key's docs.
 const (
 	defaultSearchSize = 10
 	maxSearchSize     = 50
@@ -46,9 +47,9 @@ const (
 )
 
 // Lightweight IDF: a non-stopword token present in more than 30% of the
-// merged document snapshot carries less signal, so its weight is halved —
-// not zeroed, so a direct query for a ubiquitous term (e.g. "metaid") still
-// works.
+// documents of one protocol key carries less signal within that namespace,
+// so its weight is halved for that protocol key's docs — not zeroed, so a
+// direct query for a ubiquitous term (e.g. "metaid") still works.
 const (
 	idfHighFreqThreshold = 0.30
 	idfHighFreqFactor    = 0.5
@@ -212,40 +213,68 @@ func documentTextUnion(doc *metawebdoc.Document) string {
 	return sb.String()
 }
 
-// tokenIDFWeights computes the per-request weight of each scoring token: the
-// base weight min(runeCount(token), 4), halved when the token's document
-// frequency over the merged snapshot (all sources, unfiltered) exceeds
-// idfHighFreqThreshold. In-memory only; the scan is one pass over the corpus.
-func tokenIDFWeights(sources []DocumentSource, tokens []string) []float64 {
-	weights := make([]float64, len(tokens))
+// tokenIDFWeights computes the per-request weight of each scoring token per
+// protocol key: the base weight min(runeCount(token), 4), halved when the
+// token's document frequency within that protocol key's namespace exceeds
+// idfHighFreqThreshold. Namespacing is by protocol key (not source
+// aggregator), so a token ubiquitous in metabot-skill docs is halved only
+// when scoring metabot-skill docs. In-memory only; the scan is one pass over
+// the corpus.
+func tokenIDFWeights(sources []DocumentSource, tokens []string) map[string][]float64 {
+	weights := make(map[string][]float64)
 	if len(tokens) == 0 {
 		return weights
 	}
-	df := make([]int, len(tokens))
-	total := 0
+	df := make(map[string][]int)   // protocol key -> per-token document frequency
+	totals := make(map[string]int) // protocol key -> document count
 	for _, source := range sources {
 		if source == nil {
 			continue
 		}
 		docs := source.SearchDocuments()
 		for i := range docs {
-			total++
+			key := docs[i].ProtocolKey
+			vec, ok := df[key]
+			if !ok {
+				vec = make([]int, len(tokens))
+				df[key] = vec
+			}
+			totals[key]++
 			union := documentTextUnion(&docs[i])
 			for j, token := range tokens {
 				if tokenHitsText(union, token) {
-					df[j]++
+					vec[j]++
 				}
 			}
 		}
 	}
-	for j, token := range tokens {
-		weight := float64(tokenWeight(token))
-		if total > 0 && float64(df[j]) > idfHighFreqThreshold*float64(total) {
-			weight *= idfHighFreqFactor
+	for key, vec := range df {
+		total := totals[key]
+		w := make([]float64, len(tokens))
+		for j, token := range tokens {
+			weight := float64(tokenWeight(token))
+			if total > 0 && float64(vec[j]) > idfHighFreqThreshold*float64(total) {
+				weight *= idfHighFreqFactor
+			}
+			w[j] = weight
 		}
-		weights[j] = weight
+		weights[key] = w
 	}
 	return weights
+}
+
+// weightsForProtocol returns the IDF-adjusted weight vector of one protocol
+// key, defaulting to full (unhalved) weights when the key has no stats — e.g.
+// a doc that entered the snapshot between the df scan and the scoring pass.
+func weightsForProtocol(weights map[string][]float64, protocolKey string, tokens []string) []float64 {
+	if w, ok := weights[protocolKey]; ok {
+		return w
+	}
+	full := make([]float64, len(tokens))
+	for j, token := range tokens {
+		full[j] = float64(tokenWeight(token))
+	}
+	return full
 }
 
 // scoreDocument applies the weighted partial match of the contract. Each

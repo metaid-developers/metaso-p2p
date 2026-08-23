@@ -78,8 +78,9 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	// yields no scoring tokens and therefore an empty result set.
 	tokens := scoringTokens(tokenizeQuery(params.query))
 
-	// Pass 1: lightweight IDF over the merged snapshot (all docs,
-	// unfiltered). Pass 2 below applies filters and computes the scores.
+	// Pass 1: lightweight IDF, document frequency counted per protocol key
+	// over the merged snapshot (all docs, unfiltered). Pass 2 below applies
+	// filters and computes the scores with each doc's own namespace weights.
 	weights := tokenIDFWeights(a.sources, tokens)
 
 	type scoredDoc struct {
@@ -120,7 +121,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 					continue
 				}
 			} else {
-				score = scoreDocument(&doc, tokens, weights, params.query)
+				score = scoreDocument(&doc, tokens, weightsForProtocol(weights, doc.ProtocolKey, tokens), params.query)
 				if score <= 0 {
 					continue
 				}
