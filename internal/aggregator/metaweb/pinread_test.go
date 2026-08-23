@@ -362,6 +362,22 @@ func TestMANAPIPinFetcher_NoPinFound(t *testing.T) {
 	}
 }
 
+func TestDecodeRemoteContentBody_PlainTextBase64(t *testing.T) {
+	// MANAPI serves plain-text bodies base64-encoded too ("VGlsbA==" = "Till");
+	// these must decode even though the result is not JSON.
+	if got := string(decodeRemoteContentBody("VGlsbA==")); got != "Till" {
+		t.Fatalf("decoded = %q, want %q", got, "Till")
+	}
+	// JSON base64 still unwraps.
+	if got := string(decodeRemoteContentBody("eyJhIjoxfQ==")); got != `{"a":1}` {
+		t.Fatalf("decoded = %q, want JSON", got)
+	}
+	// Raw text that merely looks base64-ish must pass through untouched.
+	if got := string(decodeRemoteContentBody("hello world")); got != "hello world" {
+		t.Fatalf("decoded = %q, want passthrough", got)
+	}
+}
+
 // pinInscription builds an aggregator-level pin for the publishedcontent
 // handlers used by these tests.
 func pinInscription(pinId, path, operation, originalId, jsonBody string) *aggregator.PinInscription {

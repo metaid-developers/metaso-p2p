@@ -542,5 +542,18 @@ func decodeRemoteContentBody(text string) []byte {
 			return decoded
 		}
 	}
+	// Plain-text bodies are base64-encoded by MANAPI too. Accept a decoded
+	// candidate only when it is valid UTF-8 and re-encodes to the exact input
+	// (canonical encoding), so raw text that merely looks like base64 is not
+	// mangled.
+	for _, encoding := range encodings {
+		decoded, err := encoding.DecodeString(text)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+		if utf8.Valid(decoded) && encoding.EncodeToString(decoded) == text {
+			return decoded
+		}
+	}
 	return []byte(text)
 }
