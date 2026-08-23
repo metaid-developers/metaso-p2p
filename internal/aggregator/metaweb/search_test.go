@@ -361,3 +361,49 @@ func TestDocumentMatchesAny_WordBoundary(t *testing.T) {
 		t.Fatalf("whole-word match missed")
 	}
 }
+
+func TestProtocolPrior(t *testing.T) {
+	cases := map[string]float64{
+		"simplenote":    1.2,
+		"metaprotocol":  1.2,
+		"simplebuzz":    0.9,
+		"metaapp":       1.0,
+		"metabot-skill": 1.0,
+		"skill-service": 1.0,
+		"unknown-proto": 1.0, // unknown keys default to 1.0
+		"":              1.0,
+	}
+	for key, want := range cases {
+		if got := protocolPrior(key); got != want {
+			t.Errorf("protocolPrior(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestScoreDocument_ProtocolPriorAppliedToFinalScore(t *testing.T) {
+	// Same raw title hit (weight 2, field 5 → raw 10) scales by the prior:
+	// simplenote ×1.2 → 12, simplebuzz ×0.9 → 9, metaprotocol ×1.2 → 12.
+	tokens := []string{"knotwork"}
+	weights := []float64{2}
+	cases := []struct {
+		protocol string
+		want     int
+	}{
+		{"simplenote", 12},
+		{"metaprotocol", 12},
+		{"simplebuzz", 9},
+		{"metabot-skill", 10},
+	}
+	for _, tc := range cases {
+		doc := metawebdoc.Document{ProtocolKey: tc.protocol, Title: "knotwork notes"}
+		if got := scoreDocument(&doc, tokens, weights, "q"); got != tc.want {
+			t.Errorf("%s: score = %d, want %d", tc.protocol, got, tc.want)
+		}
+	}
+
+	// The prior never resurrects a zero-score document.
+	doc := metawebdoc.Document{ProtocolKey: "simplenote", Title: "unrelated"}
+	if got := scoreDocument(&doc, tokens, weights, "q"); got != 0 {
+		t.Fatalf("zero score with prior = %d, want 0", got)
+	}
+}

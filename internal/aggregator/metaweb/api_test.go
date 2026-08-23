@@ -416,3 +416,103 @@ func TestHandleSearch_ChineseQueryRegression(t *testing.T) {
 		t.Fatalf("items = %+v", envelope.Data.Items)
 	}
 }
+
+func TestHandleSearch_ProtocolPriorNearTie(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-note:i0",
+			ChainName:      "mvc",
+			Title:          "knotwork intro",
+			Tags:           []string{},
+			ContentExcerpt: "intro body",
+			CreatedAt:      1755000000,
+		},
+		{
+			ProtocolKey:    "simplebuzz",
+			SourcePinId:    "pin-buzz:i0",
+			ChainName:      "mvc",
+			Title:          "knotwork chatter",
+			Tags:           []string{},
+			ContentExcerpt: "chatter body",
+			CreatedAt:      1756000000,
+		},
+		{
+			ProtocolKey:    "metaprotocol",
+			SourcePinId:    "pin-unrelated:i0",
+			ChainName:      "mvc",
+			Title:          "unrelated spec",
+			Tags:           []string{},
+			ContentExcerpt: "nothing relevant",
+			CreatedAt:      1757000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	// Equal raw score (title-only hit of "knotwork", halved IDF weight 2 →
+	// raw 10 each; the two-token query avoids the exact-phrase boost): the
+	// simplenote prior ×1.2 beats the simplebuzz prior ×0.9, and the
+	// reported scores are prior-adjusted (12 vs 9).
+	envelope := doSearch(t, router, "q=knotwork%20guide")
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data.Items) != 2 {
+		t.Fatalf("items = %+v", envelope.Data.Items)
+	}
+	if envelope.Data.Items[0].PinId != "pin-note:i0" || envelope.Data.Items[0].Score != 12 {
+		t.Fatalf("first item = %+v, want pin-note:i0 score 12", envelope.Data.Items[0])
+	}
+	if envelope.Data.Items[1].PinId != "pin-buzz:i0" || envelope.Data.Items[1].Score != 9 {
+		t.Fatalf("second item = %+v, want pin-buzz:i0 score 9", envelope.Data.Items[1])
+	}
+
+	// sort=newest is untouched by priors: createdAt order, score 0.
+	envelope = doSearch(t, router, "q=knotwork%20guide&sort=newest")
+	if len(envelope.Data.Items) != 2 || envelope.Data.Items[0].PinId != "pin-buzz:i0" {
+		t.Fatalf("newest items = %+v", envelope.Data.Items)
+	}
+	for _, item := range envelope.Data.Items {
+		if item.Score != 0 {
+			t.Fatalf("newest score = %d, want 0", item.Score)
+		}
+	}
+}
+
+func TestHandleSearch_ProtocolPriorDoesNotOverrideClearLead(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:    "simplenote",
+			SourcePinId:    "pin-note:i0",
+			ChainName:      "mvc",
+			Title:          "knotwork intro",
+			Tags:           []string{},
+			ContentExcerpt: "intro body",
+			CreatedAt:      1755000000,
+		},
+		{
+			ProtocolKey:    "simplebuzz",
+			SourcePinId:    "pin-buzz:i0",
+			ChainName:      "mvc",
+			Title:          "knotwork deep dive",
+			Summary:        "knotwork summary",
+			Tags:           []string{"knotwork"},
+			ContentExcerpt: "knotwork body",
+			CreatedAt:      1756000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	// Raw 22 (all-field hit) × 0.9 = 19 still beats raw 10 × 1.2 = 12: the
+	// prior breaks near-ties, it does not override a clear signal lead.
+	envelope := doSearch(t, router, "q=knotwork%20guide")
+	if len(envelope.Data.Items) != 2 || envelope.Data.Items[0].PinId != "pin-buzz:i0" {
+		t.Fatalf("items = %+v", envelope.Data.Items)
+	}
+	if envelope.Data.Items[0].Score != 19 || envelope.Data.Items[1].Score != 12 {
+		t.Fatalf("scores = %d, %d; want 19, 12",
+			envelope.Data.Items[0].Score, envelope.Data.Items[1].Score)
+	}
+}

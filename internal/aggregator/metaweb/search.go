@@ -55,6 +55,25 @@ const (
 	idfHighFreqFactor    = 0.5
 )
 
+// protocolPriors is the per-protocol-key prior multiplier applied to the
+// final relevance score (2026-08-23, IDBots P2): knowledge-carrier protocols
+// win near-ties over chatter. Unknown keys default to 1.0.
+var protocolPriors = map[string]float64{
+	"simplenote":    1.2, // curated knowledge carrier
+	"metaprotocol":  1.2, // curated knowledge carrier
+	"simplebuzz":    0.9, // stream content
+	"metaapp":       1.0, // neutral
+	"metabot-skill": 1.0, // neutral
+	"skill-service": 1.0, // neutral
+}
+
+func protocolPrior(protocolKey string) float64 {
+	if prior, ok := protocolPriors[protocolKey]; ok {
+		return prior
+	}
+	return 1.0
+}
+
 // tokenizeQuery turns the query into the deduplicated, lowercased match-token
 // set — identical rules to botsearch:
 //   - whitespace-split into segments;
@@ -318,7 +337,9 @@ func scoreDocument(doc *metawebdoc.Document, tokens []string, weights []float64,
 			}
 		}
 	}
-	return int(score)
+	// The protocol prior multiplies the final score; multiplying a zero
+	// score stays zero, so the admission rule is unaffected.
+	return int(score * protocolPrior(doc.ProtocolKey))
 }
 
 // documentMatchesAny is the sort=newest admission filter: scoring is
