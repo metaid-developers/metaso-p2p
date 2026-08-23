@@ -164,11 +164,11 @@ HTTP status is always 200. Error envelopes carry no `data` field (standard `api.
 - Target: search p95 < 500 ms at the current corpus (order of 10⁵–10⁶ pins per protocol worst case; realistic phase-1 corpus is far smaller — measured after backfill).
 - `processingTime` (milliseconds) is populated on every success response by the standard timing middleware.
 - **Slow-query log**: the handler logs a warn line when elapsed > 300 ms, including `q`, active filters, result count, and elapsed ms.
-- Measured numbers (to be filled in after implementation + backfill; spec updated in place):
+- Measured numbers:
 
 | Corpus (searchable docs) | p50 | p95 | Note |
 | --- | --- | --- | --- |
-| TBD | TBD | TBD | Measured on staging after SimpleNote/metaprotocol backfill |
+| 115 docs (86 simplenote + 29 metaprotocol, local dev node after full-history backfill) | ~1 ms | ~2 ms | `processingTime` observed on single queries; staging numbers to be re-measured after production backfill |
 
 ## Open-Question Decisions
 
