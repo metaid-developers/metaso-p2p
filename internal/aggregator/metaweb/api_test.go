@@ -516,3 +516,229 @@ func TestHandleSearch_ProtocolPriorDoesNotOverrideClearLead(t *testing.T) {
 			envelope.Data.Items[0].Score, envelope.Data.Items[1].Score)
 	}
 }
+
+// Q1b end-to-end: same-publisher duplicates collapse to one row with
+// extra.duplicateCount, while a cross-publisher identical copy is kept
+// (quote/citation reposts are out of scope).
+func TestHandleSearch_DedupeEndToEnd(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:           "simplenote",
+			SourcePinId:           "pin-dup1:i0",
+			CurrentPinId:          "pin-dup1:i0",
+			ChainName:             "mvc",
+			Title:                 "dedupe target tutorial",
+			ContentExcerpt:        "identical body text",
+			PublisherGlobalMetaId: "gid-same",
+			CreatedAt:             1755000000,
+			Extra:                 map[string]any{"contentType": "text/markdown"},
+		},
+		{
+			ProtocolKey:           "simplenote",
+			SourcePinId:           "pin-dup2:i0",
+			CurrentPinId:          "pin-dup2:i0",
+			ChainName:             "mvc",
+			Title:                 "dedupe target tutorial",
+			ContentExcerpt:        "identical body text",
+			PublisherGlobalMetaId: "gid-same",
+			CreatedAt:             1754000000,
+		},
+		{
+			ProtocolKey:           "simplebuzz",
+			SourcePinId:           "pin-quote:i0",
+			CurrentPinId:          "pin-quote:i0",
+			ChainName:             "mvc",
+			Title:                 "dedupe target tutorial",
+			ContentExcerpt:        "identical body text",
+			PublisherGlobalMetaId: "gid-quoter",
+			CreatedAt:             1754500000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	envelope := doSearch(t, router, "q=dedupe%20target")
+	if len(envelope.Data.Items) != 2 {
+		t.Fatalf("items = %d, want 2 (one collapsed row + cross-publisher copy)", len(envelope.Data.Items))
+	}
+	first := envelope.Data.Items[0]
+	if first.PinId != "pin-dup1:i0" {
+		t.Fatalf("representative = %s, want pin-dup1:i0 (highest score, then newest)", first.PinId)
+	}
+	if got, ok := first.Extra["duplicateCount"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("extra.duplicateCount = %v, want 1", first.Extra["duplicateCount"])
+	}
+	if first.Extra["contentType"] != "text/markdown" {
+		t.Fatalf("protocol extra lost: %v", first.Extra)
+	}
+	if _, ok := first.Extra["versions"]; ok {
+		t.Fatalf("hard collapse must not carry versions: %v", first.Extra)
+	}
+	if _, ok := envelope.Data.Items[1].Extra["duplicateCount"]; ok {
+		t.Fatalf("cross-publisher copy must not be annotated: %v", envelope.Data.Items[1].Extra)
+	}
+}
+
+// Q1b end-to-end: explicit version markers form one versions-group row,
+// representative = newest, every member listed newest first.
+func TestHandleSearch_DedupeVersionsGroupEndToEnd(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:           "simplenote",
+			SourcePinId:           "pin-v1:i0",
+			CurrentPinId:          "pin-v1:i0",
+			ChainName:             "mvc",
+			Title:                 "versioned report（v1）",
+			ContentExcerpt:        "versioned body v1",
+			PublisherGlobalMetaId: "gid-same",
+			CreatedAt:             1754000000,
+		},
+		{
+			ProtocolKey:           "simplenote",
+			SourcePinId:           "pin-v2:i0",
+			CurrentPinId:          "pin-v2:i0",
+			ChainName:             "mvc",
+			Title:                 "versioned report（v2）",
+			ContentExcerpt:        "versioned body v2",
+			PublisherGlobalMetaId: "gid-same",
+			CreatedAt:             1755000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	envelope := doSearch(t, router, "q=versioned%20report")
+	if len(envelope.Data.Items) != 1 {
+		t.Fatalf("items = %d, want 1 versions-group row", len(envelope.Data.Items))
+	}
+	item := envelope.Data.Items[0]
+	if item.PinId != "pin-v2:i0" {
+		t.Fatalf("representative = %s, want pin-v2:i0 (newest)", item.PinId)
+	}
+	if got, ok := item.Extra["duplicateCount"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("extra.duplicateCount = %v, want 1", item.Extra["duplicateCount"])
+	}
+	versions, ok := item.Extra["versions"].([]any)
+	if !ok || len(versions) != 2 {
+		t.Fatalf("extra.versions = %v, want 2 entries", item.Extra["versions"])
+	}
+	v0 := versions[0].(map[string]any)
+	if v0["pinId"] != "pin-v2:i0" || v0["version"] != "v2" {
+		t.Fatalf("versions[0] = %v, want pin-v2:i0 / v2", v0)
+	}
+	v1 := versions[1].(map[string]any)
+	if v1["pinId"] != "pin-v1:i0" || v1["version"] != "v1" {
+		t.Fatalf("versions[1] = %v, want pin-v1:i0 / v1", v1)
+	}
+}
+
+// Q1b cursor semantics: suppression happens before slicing, so walking the
+// cursor visits every deduped row exactly once and hasMore terminates.
+func TestHandleSearch_DedupePaginationTerminates(t *testing.T) {
+	docs := []metawebdoc.Document{}
+	// Three duplicate pairs (same publisher, identical title+body) plus two
+	// singletons: 8 matches, 5 deduped rows.
+	for _, pair := range []string{"alpha", "beta", "gamma"} {
+		for _, suffix := range []string{"a", "b"} {
+			docs = append(docs, metawebdoc.Document{
+				ProtocolKey:           "simplebuzz",
+				SourcePinId:           "pin-" + pair + "-" + suffix + ":i0",
+				CurrentPinId:          "pin-" + pair + "-" + suffix + ":i0",
+				ChainName:             "mvc",
+				Title:                 "walk " + pair + " tutorial",
+				ContentExcerpt:        "walk " + pair + " body",
+				PublisherGlobalMetaId: "gid-walk",
+				CreatedAt:             1755000000,
+			})
+		}
+	}
+	docs = append(docs,
+		metawebdoc.Document{
+			ProtocolKey:           "simplebuzz",
+			SourcePinId:           "pin-solo-1:i0",
+			CurrentPinId:          "pin-solo-1:i0",
+			ChainName:             "mvc",
+			Title:                 "walk solo one",
+			ContentExcerpt:        "walk solo body one",
+			PublisherGlobalMetaId: "gid-walk",
+			CreatedAt:             1755000001,
+		},
+		metawebdoc.Document{
+			ProtocolKey:           "simplebuzz",
+			SourcePinId:           "pin-solo-2:i0",
+			CurrentPinId:          "pin-solo-2:i0",
+			ChainName:             "mvc",
+			Title:                 "walk solo two",
+			ContentExcerpt:        "walk solo body two",
+			PublisherGlobalMetaId: "gid-walk",
+			CreatedAt:             1755000002,
+		},
+	)
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: docs})
+	router := newTestRouter(agg)
+
+	seen := map[string]int{}
+	cursor := ""
+	pages := 0
+	for {
+		query := "q=walk&sort=newest&size=2"
+		if cursor != "" {
+			query += "&cursor=" + cursor
+		}
+		envelope := doSearch(t, router, query)
+		pages++
+		if pages > 10 {
+			t.Fatalf("pagination did not terminate")
+		}
+		for _, item := range envelope.Data.Items {
+			seen[item.PinId]++
+		}
+		if !envelope.Data.HasMore {
+			if envelope.Data.NextCursor != nil {
+				t.Fatalf("last page must carry null nextCursor")
+			}
+			break
+		}
+		cursor = *envelope.Data.NextCursor
+	}
+	if len(seen) != 5 {
+		t.Fatalf("walked %d rows, want 5 deduped rows: %v", len(seen), seen)
+	}
+	for pinId, count := range seen {
+		if count != 1 {
+			t.Fatalf("row %s visited %d times", pinId, count)
+		}
+	}
+}
+
+// Q1a regression: one modify chain is one search document — only the latest
+// version is linked, and no second row can appear for older versions.
+func TestHandleSearch_ModifyChainCollapse(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.SetDocumentSources(&fakeDocSource{docs: []metawebdoc.Document{
+		{
+			ProtocolKey:           "simplenote",
+			SourcePinId:           "pin-chain-v1:i0",
+			CurrentPinId:          "pin-chain-v3:i0",
+			ChainName:             "mvc",
+			Title:                 "chained document",
+			ContentExcerpt:        "chained body",
+			PublisherGlobalMetaId: "gid-chain",
+			CreatedAt:             1755000000,
+		},
+	}})
+	router := newTestRouter(agg)
+
+	envelope := doSearch(t, router, "q=chained")
+	if len(envelope.Data.Items) != 1 {
+		t.Fatalf("items = %d, want exactly 1 row per modify chain", len(envelope.Data.Items))
+	}
+	item := envelope.Data.Items[0]
+	if item.PinId != "pin-chain-v1:i0" || item.CurrentPinId != "pin-chain-v3:i0" {
+		t.Fatalf("pin fields = %s / %s", item.PinId, item.CurrentPinId)
+	}
+	if item.Links["pin"] != "/api/metaweb/pin/pin-chain-v3:i0" {
+		t.Fatalf("links.pin = %v, want latest version", item.Links["pin"])
+	}
+}
