@@ -55,13 +55,30 @@ Scorer-internal; no response-schema changes.
 
 ## Q3 — Inverted-Index Decision Checkpoint (2026-09-02)
 
-Answers to the base spec's open question 1, with current numbers:
+Answers to the base spec's open question 1, with measured numbers.
 
-- **Corpus size per indexed protocol**: see table below (measured on the production node via a `record:`-prefix scan of the Pebble stores / backfill reports; method in Implementation Notes).
-- **Measured search latency**: benchmark table below (`internal/aggregator/metaweb/search_bench_test.go`, synthetic corpora through the full handler path including dedupe). Production p95 is observable via the per-response `processingTime` field and the 300 ms slow-query warn log; no latency histogram exists yet.
-- **Decision**: substring scoring over the in-memory snapshot remains acceptable at the projected 12-month corpus. **Trigger to build the dedicated Pebble inverted index** (unchanged from the base spec, reaffirmed): any of (a) search p95 > 400 ms sustained over 24 h, (b) searchable documents > 300 k, (c) snapshot heap contribution > 512 MB.
+**Corpus size per indexed protocol** — counted by a `record:`-prefix scan over the node's Pebble stores (method in Implementation Notes). The local full-history backfill data copy (2026-08-23) holds the phase-1 knowledge protocols:
 
-<!-- TODO(step 4): measured corpus table + benchmark table land here before merge -->
+| Protocol key | Pins (2026-08-23 backfill copy) |
+| --- | --- |
+| simplenote | 86 |
+| metaprotocol | 29 |
+| skill-service | 0 |
+| **Total in copy** | **115** |
+
+The stream protocols (simplebuzz / metaapp / metabot-skill) live in the node's primary stores and are not part of that backfill copy; production totals are larger but still orders of magnitude below the trigger thresholds — the 2026-09-02 evidence pages return ≤ 10 rows per query, and no protocol shows multi-page result sets in the IDBots measurements. Growth rate is not yet tracked; the backfill tool's completion report (pins fetched per path) is the current counting source.
+
+**Measured search latency** — `BenchmarkMetaWebSearch` (`internal/aggregator/metaweb/search_bench_test.go`, full handler path: per-request IDF corpus scan + scoring + dedupe + page assembly; synthetic docs with ~100-rune CJK excerpts, 10% match rate, 10% of matches duplicated; Apple M-series, `go test -bench`):
+
+| Corpus (searchable docs) | Latency (ns/op) | ≈ per query |
+| --- | --- | --- |
+| 1,000 | 6,182,900 | ~6 ms |
+| 10,000 | 61,231,917 | ~61 ms |
+| 100,000 | 599,028,958 | ~600 ms |
+
+Scaling is linear in corpus size (three corpus sweeps: df scan, scoring, match-set dedupe/sort). Production p95 remains observable via the per-response `processingTime` field and the 300 ms slow-query warn log; no latency histogram exists yet.
+
+**Decision**: substring scoring over the in-memory snapshot remains acceptable at the projected 12-month corpus (thousands of docs ⇒ single-digit-ms p95). One adjustment to the base spec's trigger list, driven by the measurement above: at 100 k docs the worst-case query (10% match rate, heavy excerpts) already takes ~600 ms > the 500 ms contract, so the document-count trigger tightens from 300 k to 100 k. **Trigger to build the dedicated Pebble inverted index**: any of (a) search p95 > 400 ms sustained over 24 h, (b) searchable documents > **100 k**, (c) snapshot heap contribution > 512 MB. A cheaper intermediate step is available before the full index: cache per-protocol-key df stats instead of rescanning the corpus per request (removes one of the three sweeps).
 
 ## Performance
 
