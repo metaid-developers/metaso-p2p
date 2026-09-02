@@ -83,10 +83,6 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	// filters and computes the scores with each doc's own namespace weights.
 	weights := tokenIDFWeights(a.sources, tokens)
 
-	type scoredDoc struct {
-		doc   metawebdoc.Document
-		score int
-	}
 	matches := make([]scoredDoc, 0)
 
 	// Pass 2: score over one merged snapshot per request; filters apply
@@ -149,11 +145,18 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 		})
 	}
 
+	// Content-level dedupe (2026-09-02, Q1b) runs over the full sorted match
+	// list BEFORE page slicing, so the offset cursor walks the deduped rows:
+	// no group is skipped or returned twice and hasMore terminates at the
+	// deduped list end. Modify-chain collapse (Q1a) is already guaranteed at
+	// index time — snapshots carry one document per chain.
+	groups := dedupeMatches(matches)
+
 	offset := params.offset
-	if offset > len(matches) {
-		offset = len(matches)
+	if offset > len(groups) {
+		offset = len(groups)
 	}
-	page := matches[offset:]
+	page := groups[offset:]
 	hasMore := len(page) > params.size
 	if hasMore {
 		page = page[:params.size]
@@ -161,7 +164,8 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 
 	// Enrich only the returned page with publisher name/avatar.
 	items := make([]searchItem, 0, len(page))
-	for _, match := range page {
+	for _, group := range page {
+		match := group.rep
 		doc := match.doc
 		currentPinId := doc.CurrentPinId
 		if currentPinId == "" {
@@ -171,9 +175,18 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 		if tags == nil {
 			tags = []string{}
 		}
-		extra := doc.Extra
-		if extra == nil {
-			extra = map[string]any{}
+		// Copy the snapshot's extra map before annotating: the snapshot is
+		// shared and immutable, so duplicateCount/versions must never be
+		// written into it.
+		extra := make(map[string]any, len(doc.Extra)+2)
+		for k, v := range doc.Extra {
+			extra[k] = v
+		}
+		if group.duplicateCount > 0 {
+			extra["duplicateCount"] = group.duplicateCount
+		}
+		if group.versions != nil {
+			extra["versions"] = group.versions
 		}
 		publisher := publisherInfo{
 			GlobalMetaId: doc.PublisherGlobalMetaId,

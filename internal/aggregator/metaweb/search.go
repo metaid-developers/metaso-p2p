@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -22,10 +23,18 @@ import (
 // any tag, or the content excerpt.
 //
 // Ranking hardening (2026-08-23): latin tokens only hit on word boundaries,
-// English stopwords are excluded from scoring (stopwords.go), and a token
-// whose document frequency within a protocol key exceeds
-// idfHighFreqThreshold gets its weight multiplied by idfHighFreqFactor for
-// that protocol key's docs.
+// and stopwords (English function words, plus CJK tokens made purely of
+// Chinese function characters — stopwords.go) are excluded from scoring.
+// Each token's weight is scaled by a smooth per-protocol-key IDF multiplier
+// (2026-09-02, replacing the 2026-08-23 binary halving at 30% df):
+//
+//	multiplier = ln(1 + N/df) / ln(1 + N)
+//
+// where N is the protocol key's document count and df the token's document
+// frequency in that namespace. df = 1 yields 1.0; df = N yields
+// ln2/ln(1+N) — small but non-zero, so a direct query for a ubiquitous term
+// (e.g. "metaid") still works, while corpus-common tokens stop pinning the
+// page to one saturated plateau score.
 const (
 	defaultSearchSize = 10
 	maxSearchSize     = 50
@@ -44,15 +53,6 @@ const (
 	// logs a warn line with the query, active filters, result count, and
 	// elapsed milliseconds.
 	slowSearchThresholdMs = 300
-)
-
-// Lightweight IDF: a non-stopword token present in more than 30% of the
-// documents of one protocol key carries less signal within that namespace,
-// so its weight is halved for that protocol key's docs — not zeroed, so a
-// direct query for a ubiquitous term (e.g. "metaid") still works.
-const (
-	idfHighFreqThreshold = 0.30
-	idfHighFreqFactor    = 0.5
 )
 
 // protocolPriors is the per-protocol-key prior multiplier applied to the
@@ -233,12 +233,13 @@ func documentTextUnion(doc *metawebdoc.Document) string {
 }
 
 // tokenIDFWeights computes the per-request weight of each scoring token per
-// protocol key: the base weight min(runeCount(token), 4), halved when the
-// token's document frequency within that protocol key's namespace exceeds
-// idfHighFreqThreshold. Namespacing is by protocol key (not source
-// aggregator), so a token ubiquitous in metabot-skill docs is halved only
-// when scoring metabot-skill docs. In-memory only; the scan is one pass over
-// the corpus.
+// protocol key: the base weight min(runeCount(token), 4) scaled by the smooth
+// IDF multiplier ln(1+N/df)/ln(1+N) of that protocol key's namespace.
+// Namespacing is by protocol key (not source aggregator), so a token
+// ubiquitous in metabot-skill docs is down-weighted only when scoring
+// metabot-skill docs. A token absent from a namespace (df = 0) keeps its
+// full base weight, matching the weightsForProtocol fallback. In-memory
+// only; the scan is one pass over the corpus.
 func tokenIDFWeights(sources []DocumentSource, tokens []string) map[string][]float64 {
 	weights := make(map[string][]float64)
 	if len(tokens) == 0 {
@@ -272,8 +273,8 @@ func tokenIDFWeights(sources []DocumentSource, tokens []string) map[string][]flo
 		w := make([]float64, len(tokens))
 		for j, token := range tokens {
 			weight := float64(tokenWeight(token))
-			if total > 0 && float64(vec[j]) > idfHighFreqThreshold*float64(total) {
-				weight *= idfHighFreqFactor
+			if total > 0 && vec[j] > 0 {
+				weight *= math.Log1p(float64(total)/float64(vec[j])) / math.Log1p(float64(total))
 			}
 			w[j] = weight
 		}
@@ -283,7 +284,7 @@ func tokenIDFWeights(sources []DocumentSource, tokens []string) map[string][]flo
 }
 
 // weightsForProtocol returns the IDF-adjusted weight vector of one protocol
-// key, defaulting to full (unhalved) weights when the key has no stats — e.g.
+// key, defaulting to full (unscaled) weights when the key has no stats — e.g.
 // a doc that entered the snapshot between the df scan and the scoring pass.
 func weightsForProtocol(weights map[string][]float64, protocolKey string, tokens []string) []float64 {
 	if w, ok := weights[protocolKey]; ok {
