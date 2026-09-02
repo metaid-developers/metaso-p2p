@@ -450,10 +450,11 @@ func TestHandleSearch_ProtocolPriorNearTie(t *testing.T) {
 	}})
 	router := newTestRouter(agg)
 
-	// Equal raw score (title-only hit of "knotwork", halved IDF weight 2 →
-	// raw 10 each; the two-token query avoids the exact-phrase boost): the
-	// simplenote prior ×1.2 beats the simplebuzz prior ×0.9, and the
-	// reported scores are prior-adjusted (12 vs 9).
+	// Equal raw score (title-only hit of "knotwork"; each namespace has a
+	// single doc, so df=1 keeps the full weight 4 → raw 20 each; the
+	// two-token query avoids the exact-phrase boost): the simplenote prior
+	// ×1.2 beats the simplebuzz prior ×0.9, and the reported scores are
+	// prior-adjusted (24 vs 18).
 	envelope := doSearch(t, router, "q=knotwork%20guide")
 	if envelope.Code != 0 {
 		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
@@ -461,11 +462,11 @@ func TestHandleSearch_ProtocolPriorNearTie(t *testing.T) {
 	if len(envelope.Data.Items) != 2 {
 		t.Fatalf("items = %+v", envelope.Data.Items)
 	}
-	if envelope.Data.Items[0].PinId != "pin-note:i0" || envelope.Data.Items[0].Score != 12 {
-		t.Fatalf("first item = %+v, want pin-note:i0 score 12", envelope.Data.Items[0])
+	if envelope.Data.Items[0].PinId != "pin-note:i0" || envelope.Data.Items[0].Score != 24 {
+		t.Fatalf("first item = %+v, want pin-note:i0 score 24", envelope.Data.Items[0])
 	}
-	if envelope.Data.Items[1].PinId != "pin-buzz:i0" || envelope.Data.Items[1].Score != 9 {
-		t.Fatalf("second item = %+v, want pin-buzz:i0 score 9", envelope.Data.Items[1])
+	if envelope.Data.Items[1].PinId != "pin-buzz:i0" || envelope.Data.Items[1].Score != 18 {
+		t.Fatalf("second item = %+v, want pin-buzz:i0 score 18", envelope.Data.Items[1])
 	}
 
 	// sort=newest is untouched by priors: createdAt order, score 0.
@@ -505,14 +506,15 @@ func TestHandleSearch_ProtocolPriorDoesNotOverrideClearLead(t *testing.T) {
 	}})
 	router := newTestRouter(agg)
 
-	// Raw 22 (all-field hit) × 0.9 = 19 still beats raw 10 × 1.2 = 12: the
-	// prior breaks near-ties, it does not override a clear signal lead.
+	// Raw 44 (all-field hit, full weight 4: each namespace has one doc, df=1)
+	// × 0.9 = 39 still beats raw 20 × 1.2 = 24: the prior breaks near-ties,
+	// it does not override a clear signal lead.
 	envelope := doSearch(t, router, "q=knotwork%20guide")
 	if len(envelope.Data.Items) != 2 || envelope.Data.Items[0].PinId != "pin-buzz:i0" {
 		t.Fatalf("items = %+v", envelope.Data.Items)
 	}
-	if envelope.Data.Items[0].Score != 19 || envelope.Data.Items[1].Score != 12 {
-		t.Fatalf("scores = %d, %d; want 19, 12",
+	if envelope.Data.Items[0].Score != 39 || envelope.Data.Items[1].Score != 24 {
+		t.Fatalf("scores = %d, %d; want 39, 24",
 			envelope.Data.Items[0].Score, envelope.Data.Items[1].Score)
 	}
 }

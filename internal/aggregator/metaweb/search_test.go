@@ -1,6 +1,7 @@
 package metaweb
 
 import (
+	"math"
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb/metawebdoc"
@@ -15,6 +16,17 @@ func fullWeights(tokens []string) []float64 {
 	}
 	return weights
 }
+
+// smoothIDFWeight mirrors the scorer's per-namespace formula for test
+// expectations: tokenWeight × ln(1+N/df)/ln(1+N); df=0 keeps the base weight.
+func smoothIDFWeight(token string, total, df int) float64 {
+	if total <= 0 || df <= 0 {
+		return float64(tokenWeight(token))
+	}
+	return float64(tokenWeight(token)) * math.Log1p(float64(total)/float64(df)) / math.Log1p(float64(total))
+}
+
+func almostEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 func TestTokenizeQuery_SingleCJKCharRun(t *testing.T) {
 	// A single-CJK-char run yields that char; the segment also yields itself.
@@ -220,7 +232,7 @@ func TestScoringTokens_StopwordsExcluded(t *testing.T) {
 	if tokens := scoringTokens(tokenizeQuery("what is")); len(tokens) != 0 {
 		t.Fatalf("tokens = %v, want empty", tokens)
 	}
-	// CJK tokens are never stopwords.
+	// CJK tokens mixing function and content characters still score.
 	tokens = scoringTokens(tokenizeQuery("是什么"))
 	want := []string{"是什么", "是什", "什么"}
 	if len(tokens) != len(want) {
@@ -249,9 +261,36 @@ func TestScoreDocument_StopwordTokenContributesZero(t *testing.T) {
 	}
 }
 
-func TestTokenIDFWeights_HighFrequencyHalved(t *testing.T) {
-	// 10 simplenote docs: "common" in 4 (40% > 30%) → halved; "rare" in 3
-	// (30%, the threshold is strict) → full weight.
+// Chinese stopwords (2026-09-02): a CJK token composed entirely of function
+// characters contributes no score; mixed tokens keep scoring.
+func TestScoringTokens_ChineseFunctionTokens(t *testing.T) {
+	// "我们" is all function chars and drops; "学习" stays.
+	tokens := scoringTokens(tokenizeQuery("我们 学习"))
+	if len(tokens) != 1 || tokens[0] != "学习" {
+		t.Fatalf("tokens = %v, want [学习]", tokens)
+	}
+	// An all-function CJK query yields no scoring tokens (matches nothing).
+	if tokens := scoringTokens(tokenizeQuery("我们")); len(tokens) != 0 {
+		t.Fatalf("tokens = %v, want empty", tokens)
+	}
+
+	stopwordTokens := []string{"我们", "一个", "是", "的了", "吗", "也有"}
+	for _, token := range stopwordTokens {
+		if !isStopwordToken(token) {
+			t.Errorf("isStopwordToken(%q) = false, want true", token)
+		}
+	}
+	contentTokens := []string{"视频", "一样", "是什", "什么", "学习", "不只"}
+	for _, token := range contentTokens {
+		if isStopwordToken(token) {
+			t.Errorf("isStopwordToken(%q) = true, want false", token)
+		}
+	}
+}
+
+func TestTokenIDFWeights_SmoothDownweighting(t *testing.T) {
+	// 10 simplenote docs: "common" in 4, "rare" in 3. The smooth multiplier
+	// ln(1+N/df)/ln(1+N) grades both below full weight, the commoner lower.
 	docs := make([]metawebdoc.Document, 0, 10)
 	for i := 0; i < 4; i++ {
 		docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "common doc"})
@@ -265,26 +304,75 @@ func TestTokenIDFWeights_HighFrequencyHalved(t *testing.T) {
 	sources := []DocumentSource{&fakeDocSource{docs: docs}}
 
 	weights := tokenIDFWeights(sources, []string{"common", "rare"})["simplenote"]
-	if got, want := weights[0], 2.0; got != want {
-		t.Fatalf("common weight = %v, want %v (halved from 4)", got, want)
+	if want := smoothIDFWeight("common", 10, 4); !almostEqual(weights[0], want) {
+		t.Fatalf("common weight = %v, want %v", weights[0], want)
 	}
-	if got, want := weights[1], 4.0; got != want {
-		t.Fatalf("rare weight = %v, want %v (full)", got, want)
+	if want := smoothIDFWeight("rare", 10, 3); !almostEqual(weights[1], want) {
+		t.Fatalf("rare weight = %v, want %v", weights[1], want)
+	}
+	if !(weights[0] < weights[1] && weights[1] < 4.0) {
+		t.Fatalf("weights not graded: common=%v rare=%v full=4", weights[0], weights[1])
 	}
 
-	// The halved weight halves the resulting score: title hit of "common".
-	doc := metawebdoc.Document{Title: "common term"}
-	if got, want := scoreDocument(&doc, []string{"common"}, weights[:1], "q"), 5*2; got != want {
-		t.Fatalf("halved score = %d, want %d", got, want)
+	// Boundaries: df=1 keeps the full base weight; df=N yields
+	// tokenWeight × ln2/ln(1+N) — small but non-zero, so direct queries for
+	// ubiquitous terms still work.
+	single := []DocumentSource{&fakeDocSource{docs: []metawebdoc.Document{
+		{ProtocolKey: "simplenote", Title: "unique term"},
+	}}}
+	if got := tokenIDFWeights(single, []string{"unique"})["simplenote"][0]; got != 4.0 {
+		t.Fatalf("df=1 weight = %v, want 4.0 (full)", got)
 	}
-	if got, want := scoreDocument(&doc, []string{"common"}, []float64{4}, "q"), 5*4; got != want {
-		t.Fatalf("full score = %d, want %d", got, want)
+	if got, want := weights[0], 0.0; got <= want {
+		t.Fatalf("df<N weight must stay positive, got %v", got)
+	}
+	allHit := make([]metawebdoc.Document, 0, 10)
+	for i := 0; i < 10; i++ {
+		allHit = append(allHit, metawebdoc.Document{ProtocolKey: "simplenote", Title: "everywhere doc"})
+	}
+	got := tokenIDFWeights([]DocumentSource{&fakeDocSource{docs: allHit}}, []string{"everywhere"})["simplenote"][0]
+	if want := 4 * math.Log(2) / math.Log1p(10); !almostEqual(got, want) {
+		t.Fatalf("df=N weight = %v, want %v (ln2/ln(1+N) scaled)", got, want)
+	}
+
+	// The scaled weight scales the resulting score: title hit of "common".
+	doc := metawebdoc.Document{Title: "common term"}
+	if got, want := scoreDocument(&doc, []string{"common"}, weights[:1], "q"), int(5*weights[0]); got != want {
+		t.Fatalf("scaled score = %d, want %d", got, want)
+	}
+}
+
+// Acceptance analog for the 2026-09-02 q=skill/q=metaweb saturation report:
+// in a corpus where every doc carries the common token, a doc matching the
+// rare token outranks the common-only docs by a wide, non-plateau margin.
+func TestScoreDocument_RareTokenOutranksCorpusCommon(t *testing.T) {
+	docs := make([]metawebdoc.Document, 0, 10)
+	for i := 0; i < 9; i++ {
+		docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "metaweb weekly"})
+	}
+	docs = append(docs, metawebdoc.Document{ProtocolKey: "simplenote", Title: "metaweb 入门教程"})
+	sources := []DocumentSource{&fakeDocSource{docs: docs}}
+	tokens := []string{"metaweb", "教程"}
+	weights := weightsForProtocol(tokenIDFWeights(sources, tokens), "simplenote", tokens)
+
+	common := metawebdoc.Document{ProtocolKey: "simplenote", Title: "metaweb weekly"}
+	rare := metawebdoc.Document{ProtocolKey: "simplenote", Title: "metaweb 入门教程"}
+	// No doc contains the whole phrase, so no exact-phrase boost applies.
+	scoreCommon := scoreDocument(&common, tokens, weights, "metaweb 教程")
+	scoreRare := scoreDocument(&rare, tokens, weights, "metaweb 教程")
+	// Common-only: 5 × (4 × ln2/ln11) × 1.2 prior → 6.
+	// Rare: (that + 5×2 title hit of 教程) × 1.2 → 18.
+	if scoreCommon != 6 || scoreRare != 18 {
+		t.Fatalf("scores = %d, %d; want 6, 18", scoreCommon, scoreRare)
+	}
+	if scoreRare <= scoreCommon {
+		t.Fatalf("rare-token doc must outrank corpus-common-only docs")
 	}
 }
 
 func TestTokenIDFWeights_PerProtocolKey(t *testing.T) {
-	// "skill" is ubiquitous within metabot-skill (4 of 4 = 100% > 30%) but
-	// rare within simplenote (1 of 4 = 25%): halved only for metabot-skill.
+	// "skill" is ubiquitous within metabot-skill (4 of 4) but rare within
+	// simplenote (1 of 4): down-weighted only for metabot-skill.
 	docs := []metawebdoc.Document{
 		{ProtocolKey: "metabot-skill", Title: "skill one"},
 		{ProtocolKey: "metabot-skill", Title: "skill two"},
@@ -296,11 +384,11 @@ func TestTokenIDFWeights_PerProtocolKey(t *testing.T) {
 		{ProtocolKey: "simplenote", Title: "reading notes"},
 	}
 	weights := tokenIDFWeights([]DocumentSource{&fakeDocSource{docs: docs}}, []string{"skill"})
-	if got, want := weights["metabot-skill"][0], 2.0; got != want {
-		t.Fatalf("metabot-skill weight = %v, want %v (halved)", got, want)
+	if got, want := weights["metabot-skill"][0], smoothIDFWeight("skill", 4, 4); !almostEqual(got, want) {
+		t.Fatalf("metabot-skill weight = %v, want %v (df=N)", got, want)
 	}
 	if got, want := weights["simplenote"][0], 4.0; got != want {
-		t.Fatalf("simplenote weight = %v, want %v (full)", got, want)
+		t.Fatalf("simplenote weight = %v, want %v (df=1, full)", got, want)
 	}
 }
 
@@ -316,9 +404,9 @@ func TestTokenIDFWeights_CrossKeyIsolation(t *testing.T) {
 		{ProtocolKey: "metabot-skill", Title: "voice tool"},
 	}
 	weights := tokenIDFWeights([]DocumentSource{&fakeDocSource{docs: docs}}, []string{"metaid"})
-	// simplebuzz: df 2/2 = 100% > 30% → halved.
-	if got, want := weights["simplebuzz"][0], 2.0; got != want {
-		t.Fatalf("simplebuzz weight = %v, want %v (halved)", got, want)
+	// simplebuzz: df 2/2 → ln2/ln3 scaled.
+	if got, want := weights["simplebuzz"][0], smoothIDFWeight("metaid", 2, 2); !almostEqual(got, want) {
+		t.Fatalf("simplebuzz weight = %v, want %v", got, want)
 	}
 	// metabot-skill: df 0/4 → full weight despite the simplebuzz frequency.
 	if got, want := weights["metabot-skill"][0], 4.0; got != want {
@@ -336,8 +424,8 @@ func TestTokenIDFWeights_MergedAcrossSources(t *testing.T) {
 	}
 	sources := []DocumentSource{&fakeDocSource{docs: half}, &fakeDocSource{docs: half}}
 	weights := tokenIDFWeights(sources, []string{"metaid"})
-	// df = 4 of 6 (67% > 30%) → halved.
-	if got, want := weights["simplenote"][0], 2.0; got != want {
+	// df = 4 of 6 → ln(1+6/4)/ln(7) scaled.
+	if got, want := weights["simplenote"][0], smoothIDFWeight("metaid", 6, 4); !almostEqual(got, want) {
 		t.Fatalf("metaid weight = %v, want %v", got, want)
 	}
 }
