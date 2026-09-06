@@ -3,11 +3,13 @@
 package publishedcontent
 
 const (
-	PathSimpleBuzz   = "/protocols/simplebuzz"
-	PathMetaApp      = "/protocols/metaapp"
-	PathMetaBotSkill = "/protocols/metabot-skill"
-	PathSimpleNote   = "/protocols/simplenote"
-	PathMetaProtocol = "/protocols/metaprotocol"
+	PathSimpleBuzz     = "/protocols/simplebuzz"
+	PathMetaApp        = "/protocols/metaapp"
+	PathMetaBotSkill   = "/protocols/metabot-skill"
+	PathSimpleNote     = "/protocols/simplenote"
+	PathMetaProtocol   = "/protocols/metaprotocol"
+	PathSimpleQuestion = "/protocols/simplequestion"
+	PathSimpleAnswer   = "/protocols/simpleanswer"
 )
 
 const (

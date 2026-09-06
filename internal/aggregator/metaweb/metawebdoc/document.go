@@ -17,31 +17,37 @@ import "strings"
 // the path constants in publishedcontent / skillservice; they are duplicated
 // here because this leaf package cannot import the aggregators.
 const (
-	PathSimpleNote   = "/protocols/simplenote"
-	PathSimpleBuzz   = "/protocols/simplebuzz"
-	PathMetaApp      = "/protocols/metaapp"
-	PathMetaBotSkill = "/protocols/metabot-skill"
-	PathSkillService = "/protocols/skill-service"
-	PathMetaProtocol = "/protocols/metaprotocol"
+	PathSimpleNote     = "/protocols/simplenote"
+	PathSimpleBuzz     = "/protocols/simplebuzz"
+	PathMetaApp        = "/protocols/metaapp"
+	PathMetaBotSkill   = "/protocols/metabot-skill"
+	PathSkillService   = "/protocols/skill-service"
+	PathMetaProtocol   = "/protocols/metaprotocol"
+	PathSimpleQuestion = "/protocols/simplequestion"
+	PathSimpleAnswer   = "/protocols/simpleanswer"
 )
 
 // Protocol keys of the unified search contract.
 const (
-	KeySimpleNote   = "simplenote"
-	KeySimpleBuzz   = "simplebuzz"
-	KeyMetaApp      = "metaapp"
-	KeyMetaBotSkill = "metabot-skill"
-	KeySkillService = "skill-service"
-	KeyMetaProtocol = "metaprotocol"
+	KeySimpleNote     = "simplenote"
+	KeySimpleBuzz     = "simplebuzz"
+	KeyMetaApp        = "metaapp"
+	KeyMetaBotSkill   = "metabot-skill"
+	KeySkillService   = "skill-service"
+	KeyMetaProtocol   = "metaprotocol"
+	KeySimpleQuestion = "simplequestion"
+	KeySimpleAnswer   = "simpleanswer"
 )
 
 var protocolKeysByPath = map[string]string{
-	PathSimpleNote:   KeySimpleNote,
-	PathSimpleBuzz:   KeySimpleBuzz,
-	PathMetaApp:      KeyMetaApp,
-	PathMetaBotSkill: KeyMetaBotSkill,
-	PathSkillService: KeySkillService,
-	PathMetaProtocol: KeyMetaProtocol,
+	PathSimpleNote:     KeySimpleNote,
+	PathSimpleBuzz:     KeySimpleBuzz,
+	PathMetaApp:        KeyMetaApp,
+	PathMetaBotSkill:   KeyMetaBotSkill,
+	PathSkillService:   KeySkillService,
+	PathMetaProtocol:   KeyMetaProtocol,
+	PathSimpleQuestion: KeySimpleQuestion,
+	PathSimpleAnswer:   KeySimpleAnswer,
 }
 
 // Document is one searchable projection of an indexed record. Derived fields

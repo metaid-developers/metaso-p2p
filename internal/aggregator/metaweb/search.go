@@ -59,12 +59,14 @@ const (
 // final relevance score (2026-08-23, IDBots P2): knowledge-carrier protocols
 // win near-ties over chatter. Unknown keys default to 1.0.
 var protocolPriors = map[string]float64{
-	"simplenote":    1.2, // curated knowledge carrier
-	"metaprotocol":  1.2, // curated knowledge carrier
-	"simplebuzz":    0.9, // stream content
-	"metaapp":       1.0, // neutral
-	"metabot-skill": 1.0, // neutral
-	"skill-service": 1.0, // neutral
+	"simplenote":     1.2, // curated knowledge carrier
+	"metaprotocol":   1.2, // curated knowledge carrier
+	"simplequestion": 1.2, // curated knowledge carrier (on-chain Q&A)
+	"simpleanswer":   1.2, // curated knowledge carrier (on-chain Q&A)
+	"simplebuzz":     0.9, // stream content
+	"metaapp":        1.0, // neutral
+	"metabot-skill":  1.0, // neutral
+	"skill-service":  1.0, // neutral
 }
 
 func protocolPrior(protocolKey string) float64 {
