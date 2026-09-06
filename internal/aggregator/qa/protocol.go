@@ -257,11 +257,18 @@ func likeValue(raw any) (int, bool) {
 	return 0, false
 }
 
-// commentPayload is the parsed /protocols/paycomment body (content is not
-// indexed; only the count matters).
+// commentPayload is the parsed /protocols/paycomment body. Content is stored
+// in full (capped at commentContentMaxRunes at index time) so the comment
+// thread endpoint can serve readable bodies.
 type commentPayload struct {
-	CommentTo string
+	CommentTo   string
+	Content     string
+	ContentType string
 }
+
+// commentContentMaxRunes caps the stored comment body; comments are short and
+// this endpoint is the only place to read them (see the v2 contract).
+const commentContentMaxRunes = 2000
 
 func parseComment(pin *aggregator.PinInscription) (*commentPayload, error) {
 	obj, err := payloadObjectFromPin(pin)
@@ -269,8 +276,14 @@ func parseComment(pin *aggregator.PinInscription) (*commentPayload, error) {
 		return nil, fmt.Errorf("paycomment %s: %w", pin.Id, err)
 	}
 	target := stringField(obj, "commentTo", "comment_to", "targetPinId")
-	if target == "" {
+	if target == "" && operationOf(pin) == OperationCreate {
 		return nil, fmt.Errorf("paycomment %s: commentTo is required: %w", pin.Id, ErrMalformedPayload)
 	}
-	return &commentPayload{CommentTo: target}, nil
+	// A modify/revoke payload may omit commentTo (the version-target already
+	// identifies the comment); an empty value keeps the previous target.
+	return &commentPayload{
+		CommentTo:   target,
+		Content:     metawebdoc.CapRunes(stringField(obj, "content"), commentContentMaxRunes),
+		ContentType: stringField(obj, "contentType"),
+	}, nil
 }

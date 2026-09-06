@@ -12,21 +12,25 @@ import (
 //
 //	q:<chain>:<questionSourcePinId>                  question record (JSON)
 //	a:<chain>:<answerSourcePinId>                    answer record (JSON)
+//	cr:<chain>:<commentSourcePinId>                  comment record (JSON)
 //	pin:<pinId>                                      any-version pin → record locator
 //	qa:<chain>:<questionSrc>:<invTs>:<answerSrc>     answers of a question, newest first
 //	pending:<answerTo>:<chain>:<answerSrc>           answers awaiting their question
 //	likest:<targetSrcPinId>:<actor>                  last like state per (target, actor)
-//	cmt:<targetSrcPinId>:<commentPinId>              comment markers per target
+//	ct:<targetSrcPinId>:<invTs>:<commentSrc>         visible comments per target, newest first
 //	qtime:<invCreatedAt>:<chain>:<questionSrc>       visible questions, newest first
+//	atime:<invCreatedAt>:<chain>:<answerSrc>         visible answers across questions, newest first
 const (
-	keyQuestion  = "q:"
-	keyAnswer    = "a:"
-	keyPinMap    = "pin:"
-	keyAnswerIdx = "qa:"
-	keyPending   = "pending:"
-	keyLikeState = "likest:"
-	keyComment   = "cmt:"
-	keyTime      = "qtime:"
+	keyQuestion     = "q:"
+	keyAnswer       = "a:"
+	keyCommentRec   = "cr:"
+	keyPinMap       = "pin:"
+	keyAnswerIdx    = "qa:"
+	keyPending      = "pending:"
+	keyLikeState    = "likest:"
+	keyCommentIndex = "ct:"
+	keyTime         = "qtime:"
+	keyAnswerTime   = "atime:"
 )
 
 func questionKey(chainName, sourcePinId string) []byte {
@@ -65,12 +69,34 @@ func likeStatePrefix(targetSourcePinId string) []byte {
 	return []byte(keyLikeState + targetSourcePinId + ":")
 }
 
-func commentKey(targetSourcePinId, commentPinId string) []byte {
-	return []byte(keyComment + targetSourcePinId + ":" + commentPinId)
+func commentRecordKey(chainName, sourcePinId string) []byte {
+	return []byte(keyCommentRec + chainName + ":" + sourcePinId)
 }
 
-func commentPrefix(targetSourcePinId string) []byte {
-	return []byte(keyComment + targetSourcePinId + ":")
+func commentIndexKey(targetSourcePinId string, createdAt int64, commentSourcePinId string) []byte {
+	return []byte(keyCommentIndex + targetSourcePinId + ":" + invertedTimestamp(createdAt) + ":" + commentSourcePinId)
+}
+
+func commentIndexPrefix(targetSourcePinId string) []byte {
+	return []byte(keyCommentIndex + targetSourcePinId + ":")
+}
+
+func answerTimeKey(createdAt int64, chainName, sourcePinId string) []byte {
+	return []byte(keyAnswerTime + invertedTimestamp(createdAt) + ":" + chainName + ":" + sourcePinId)
+}
+
+func answerTimePrefix() []byte {
+	return []byte(keyAnswerTime)
+}
+
+// parseAnswerTimeKey extracts chainName and sourcePinId from an atime key.
+func parseAnswerTimeKey(key []byte) (chainName, sourcePinId string, ok bool) {
+	rest := strings.TrimPrefix(string(key), keyAnswerTime)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }
 
 func questionTimeKey(createdAt int64, chainName, sourcePinId string) []byte {
@@ -129,11 +155,32 @@ func (a *Aggregator) loadAnswer(chainName, sourcePinId string) (*AnswerRecord, e
 	return &rec, nil
 }
 
+func (a *Aggregator) loadComment(chainName, sourcePinId string) (*CommentRecord, error) {
+	if chainName == "" || sourcePinId == "" {
+		return nil, nil
+	}
+	raw, err := a.store.Get(Namespace, commentRecordKey(chainName, sourcePinId))
+	if err != nil || raw == nil {
+		return nil, nil
+	}
+	var rec CommentRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return nil, fmt.Errorf("loadComment: corrupt record %s/%s: %w", chainName, sourcePinId, err)
+	}
+	return &rec, nil
+}
+
 // recordLocator is the value of the pin map: a record family plus its key.
 type recordLocator struct {
-	kind        string // "q" or "a"
+	kind        string // "q", "a" or "c"
 	chainName   string
 	sourcePinId string
+}
+
+// isQATarget reports whether the locator is a valid comment/like target of
+// this aggregator (questions and answers; comment pins never are).
+func (l recordLocator) isQATarget() bool {
+	return l.kind == "q" || l.kind == "a"
 }
 
 func (l recordLocator) String() string {
@@ -142,7 +189,7 @@ func (l recordLocator) String() string {
 
 func parseRecordLocator(raw []byte) (recordLocator, bool) {
 	parts := strings.SplitN(strings.TrimSpace(string(raw)), ":", 3)
-	if len(parts) != 3 || (parts[0] != "q" && parts[0] != "a") || parts[1] == "" || parts[2] == "" {
+	if len(parts) != 3 || (parts[0] != "q" && parts[0] != "a" && parts[0] != "c") || parts[1] == "" || parts[2] == "" {
 		return recordLocator{}, false
 	}
 	return recordLocator{kind: parts[0], chainName: parts[1], sourcePinId: parts[2]}, true
@@ -198,6 +245,17 @@ func (a *Aggregator) saveAnswer(rec *AnswerRecord) error {
 		return err
 	}
 	return a.store.Set(Namespace, answerKey(rec.ChainName, rec.SourcePinId), raw)
+}
+
+func (a *Aggregator) saveComment(rec *CommentRecord) error {
+	if rec == nil {
+		return errors.New("saveComment: nil record")
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return a.store.Set(Namespace, commentRecordKey(rec.ChainName, rec.SourcePinId), raw)
 }
 
 func mustJSON(value any) []byte {

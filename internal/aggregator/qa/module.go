@@ -101,6 +101,8 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/qa/questions", a.handleQuestions)
 	router.GET("/qa/questions/:pinId", a.handleQuestionDetail)
 	router.GET("/qa/questions/:pinId/answers", a.handleQuestionAnswers)
+	router.GET("/qa/answers", a.handleAnswers)
+	router.GET("/qa/pins/:pinId/comments", a.handlePinComments)
 }
 
 // SetProfileNamer wires the userinfo-backed publisher profile resolver.
