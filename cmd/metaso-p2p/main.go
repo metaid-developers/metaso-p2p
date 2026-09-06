@@ -19,6 +19,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/qa"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/social"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/socialcontent"
@@ -173,6 +174,15 @@ func main() {
 		}
 		if err := aggRegistry.Register(metawebCandidate); err != nil {
 			log.Printf("WARNING: metaweb aggregator init failed: %v", err)
+		}
+		// qa is the on-chain Q&A read model over SimpleQuestion /
+		// SimpleAnswer with PayLike / PayComment engagement aggregation,
+		// serving /api/qa/*; publisher enrichment reuses the metaweb
+		// userinfo namer (structural interface).
+		qaCandidate := &qa.Aggregator{}
+		qaCandidate.SetProfileNamer(metaweb.NewUserInfoProfileNamer(userinfoAgg))
+		if err := aggRegistry.Register(qaCandidate); err != nil {
+			log.Printf("WARNING: qa aggregator init failed: %v", err)
 		}
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {

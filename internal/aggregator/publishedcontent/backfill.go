@@ -305,6 +305,21 @@ func (c *BackfillClient) ListPath(ctx context.Context, path, cursor string, size
 	return page, nil
 }
 
+// ListPathPins fetches one MANAPI page of a protocol path and converts the
+// pins to aggregator inscriptions. It exposes the shared backfill client to
+// sibling aggregators (the qa backfill) that replay their own namespaces.
+func (c *BackfillClient) ListPathPins(ctx context.Context, path, cursor string, size int) ([]*aggregator.PinInscription, string, error) {
+	page, err := c.ListPath(ctx, path, cursor, size)
+	if err != nil {
+		return nil, "", err
+	}
+	pins := make([]*aggregator.PinInscription, 0, len(page.Pins))
+	for i := range page.Pins {
+		pins = append(pins, page.Pins[i].toAggregatorPin())
+	}
+	return pins, page.NextCursor, nil
+}
+
 func (c *BackfillClient) listURL(path, cursor string, size int) (string, error) {
 	parsed, err := url.Parse(c.baseURL)
 	if err != nil {
