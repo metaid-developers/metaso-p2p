@@ -311,7 +311,7 @@ func isPublishedProtocol(protocolPath string) bool {
 	return false
 }
 
-var publishedProtocolPaths = []string{PathSimpleBuzz, PathMetaApp, PathMetaBotSkill, PathSimpleNote, PathMetaProtocol}
+var publishedProtocolPaths = []string{PathSimpleBuzz, PathMetaApp, PathMetaBotSkill, PathSimpleNote, PathMetaProtocol, PathSimpleQuestion, PathSimpleAnswer}
 
 func isVersionOperation(operation string) bool {
 	switch normaliseOperation(operation) {

@@ -100,6 +100,25 @@ func ExtractPublished(protocolPath string, payload map[string]any, payloadText s
 		out.Title = firstNonEmpty(stringField(payload, "title"), stringField(payload, "protocolName"))
 		out.Summary = stringField(payload, "intro")
 		out.ContentExcerpt = CapRunes(firstNonEmpty(stringField(payload, "content"), out.Summary), ContentMaxRunes)
+	case KeySimpleQuestion:
+		out.Title = stringField(payload, "title")
+		out.Summary = StripMarkdown(stringField(payload, "content"))
+		out.Tags = stringSliceField(payload, "tags")
+		out.ContentExcerpt = CapRunes(stringField(payload, "content"), ContentMaxRunes)
+		if contentType := stringField(payload, "contentType"); contentType != "" {
+			out.Extra["contentType"] = contentType
+		}
+	case KeySimpleAnswer:
+		plain := StripMarkdown(stringField(payload, "content"))
+		titleLine, rest := splitFirstLine(plain)
+		out.Title = CapRunes(strings.TrimSpace(titleLine), SimpleBuzzTitleRunes)
+		out.Summary = CapRunes(strings.TrimSpace(rest), SummaryMaxRunes)
+		if out.Title == "" {
+			out.Title = CapRunes(plain, SimpleBuzzTitleRunes)
+		}
+		out.Tags = stringSliceField(payload, "tags")
+		out.ContentExcerpt = CapRunes(plain, ContentMaxRunes)
+		setNonEmpty(out.Extra, "answerTo", stringField(payload, "answerTo"))
 	default:
 		// Unknown paths (pin-read remote fallback): best-effort generic fields.
 		out.Title = firstNonEmpty(stringField(payload, "title"), stringField(payload, "name"))
@@ -143,7 +162,7 @@ func TextForProtocol(protocolKey string, payload map[string]any, payloadText str
 		return strings.TrimSpace(payloadText)
 	}
 	switch protocolKey {
-	case KeySimpleNote, KeySimpleBuzz, KeyMetaProtocol:
+	case KeySimpleNote, KeySimpleBuzz, KeyMetaProtocol, KeySimpleQuestion, KeySimpleAnswer:
 		return stringField(payload, "content")
 	case KeyMetaBotSkill, KeySkillService:
 		return stringField(payload, "description")
