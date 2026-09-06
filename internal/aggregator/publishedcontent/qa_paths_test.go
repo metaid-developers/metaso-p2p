@@ -74,12 +74,12 @@ func TestSearchDocuments_QAProtocols(t *testing.T) {
 	// Modify the question through a targeted version pin; the document must
 	// reflect the new title while keeping the source pin id.
 	modify := makeContentPin(contentPinOpts{
-		PinId:      "question-modify:i0",
-		Path:       PathSimpleQuestion,
-		Operation:  OperationModify,
-		ChainName:  "mvc",
-		OriginalId: "@question-create:i0",
-		Timestamp:  1755000200,
+		PinId:       "question-modify:i0",
+		Path:        PathSimpleQuestion,
+		Operation:   OperationModify,
+		ChainName:   "mvc",
+		OriginalId:  "@question-create:i0",
+		Timestamp:   1755000200,
 		ContentBody: []byte(`{"title":"Updated question title","content":"Updated body"}`),
 	})
 	if _, err := agg.HandleBlockPin(modify); err != nil {
