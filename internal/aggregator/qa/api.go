@@ -182,6 +182,7 @@ func parseSearchParams(c *gin.Context) (searchParams, string) {
 
 type feedParams struct {
 	tags       []string
+	publisher  string
 	minAnswers int
 	minSet     bool
 	maxAnswers int
@@ -293,6 +294,11 @@ func feedRecordMatches(rec *QuestionRecord, params feedParams) bool {
 	if !tagsMatchAll(rec.Tags, params.tags) {
 		return false
 	}
+	if params.publisher != "" &&
+		!strings.EqualFold(rec.Publisher.GlobalMetaId, params.publisher) &&
+		!strings.EqualFold(rec.Publisher.MetaId, params.publisher) {
+		return false
+	}
 	if params.minSet && rec.AnswerCount < params.minAnswers {
 		return false
 	}
@@ -305,6 +311,7 @@ func feedRecordMatches(rec *QuestionRecord, params feedParams) bool {
 func parseFeedParams(c *gin.Context) (feedParams, string) {
 	params := feedParams{size: defaultFeedSize}
 	params.tags = parseCSVTags(c.Query("tags"))
+	params.publisher = strings.TrimSpace(c.Query("publisher"))
 	if raw := strings.TrimSpace(c.Query("minAnswers")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 0 {

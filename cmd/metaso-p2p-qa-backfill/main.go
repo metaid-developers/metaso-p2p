@@ -2,10 +2,12 @@
 // MANAPI through the qa read model: /protocols/simplequestion,
 // /protocols/simpleanswer, /protocols/paylike and /protocols/paycomment, in
 // that order and oldest-first, so question⇄answer joins settle and the
-// last-state-per-publisher like aggregation converges. The two content
-// protocols additionally replay through the generic publishedcontent
-// pipeline so full bodies are readable via /api/metaweb/pin/:pinId and both
-// become searchable via /api/metaweb/search. Idempotent, safe to re-run.
+// last-state-per-publisher like aggregation converges. The paycomment replay
+// materialises the v2 comment records behind GET /api/qa/pins/:pinId/comments.
+// The two content protocols additionally replay through the generic
+// publishedcontent pipeline so full bodies are readable via
+// /api/metaweb/pin/:pinId and both become searchable via
+// /api/metaweb/search. Idempotent, safe to re-run.
 //
 // Both protocols are new, so backfill scope is full history by default;
 // --since / --lookback exist for operational narrowing. On completion the
@@ -13,7 +15,8 @@
 // for qa; fetched / upserted / modified / revoked / errors for
 // publishedcontent).
 //
-// See docs/specs/2026-09-07-metaweb-qa-api.md.
+// See docs/specs/2026-09-07-metaweb-qa-api.md and
+// docs/specs/2026-09-07-metaweb-qa-comments-author-api.md.
 package main
 
 import (

@@ -64,6 +64,11 @@ func (a *Aggregator) processQuestion(pin *aggregator.PinInscription, chain strin
 
 	rec := a.questionRecordFromPin(pin, chain, payload, previous, isMempool, op)
 	mergeConfirmedReplayWithPendingQuestionCurrent(previous, rec, pin.Id)
+	// A confirmed replay replaces the mempool record whose relay timestamp
+	// keyed the time index; re-key so the feed never serves the question twice.
+	if previous != nil && previous.CreatedAt != rec.CreatedAt {
+		_ = a.store.Delete(Namespace, questionTimeKey(previous.CreatedAt, rec.ChainName, rec.SourcePinId))
+	}
 	if err := a.saveQuestion(rec); err != nil {
 		return err
 	}
@@ -223,6 +228,14 @@ func (a *Aggregator) processAnswer(pin *aggregator.PinInscription, chain string,
 		rec.QuestionPinId = locator.sourcePinId
 	}
 
+	// A confirmed replay replaces the mempool record whose relay timestamp
+	// keyed the per-question and global time indexes; re-key both so no
+	// surface ever serves the answer twice.
+	if previous != nil && previous.CreatedAt != rec.CreatedAt {
+		_ = a.store.Delete(Namespace, answerIndexKey(previous.QuestionChain, previous.QuestionPinId, previous.CreatedAt, rec.SourcePinId))
+		_ = a.store.Delete(Namespace, answerTimeKey(previous.CreatedAt, rec.ChainName, rec.SourcePinId))
+	}
+
 	if err := a.saveAnswer(rec); err != nil {
 		return err
 	}
@@ -232,6 +245,7 @@ func (a *Aggregator) processAnswer(pin *aggregator.PinInscription, chain string,
 
 	if rec.QuestionPinId == "" {
 		// Orphan answer: pending index only, excluded from every surface.
+		_ = a.store.Delete(Namespace, answerTimeKey(rec.CreatedAt, rec.ChainName, rec.SourcePinId))
 		return a.store.Set(Namespace, pendingKey(payload.AnswerTo, rec.ChainName, rec.SourcePinId), []byte{})
 	}
 
@@ -244,7 +258,32 @@ func (a *Aggregator) processAnswer(pin *aggregator.PinInscription, chain string,
 			return err
 		}
 	}
+	if err := a.maintainAnswerTimeIndex(rec); err != nil {
+		return err
+	}
 	return a.refreshQuestion(rec.QuestionChain, rec.QuestionPinId)
+}
+
+// maintainAnswerTimeIndex keeps the global visible-answer list (atime) in
+// step with one answer record: the entry exists exactly when the answer is
+// non-hidden, question-resolved, and its question is not hidden.
+func (a *Aggregator) maintainAnswerTimeIndex(rec *AnswerRecord) error {
+	key := answerTimeKey(rec.CreatedAt, rec.ChainName, rec.SourcePinId)
+	if !a.answerGloballyVisible(rec) {
+		return a.store.Delete(Namespace, key)
+	}
+	return a.store.Set(Namespace, key, []byte{})
+}
+
+// answerGloballyVisible reports whether an answer may appear on the global
+// answer surfaces (GET /api/qa/answers): resolved, non-hidden, and parented
+// by a visible question.
+func (a *Aggregator) answerGloballyVisible(rec *AnswerRecord) bool {
+	if rec == nil || rec.Hidden || rec.QuestionPinId == "" {
+		return false
+	}
+	question, err := a.loadQuestion(rec.QuestionChain, rec.QuestionPinId)
+	return err == nil && question != nil && !question.Hidden
 }
 
 func (a *Aggregator) answerRecordFromPin(pin *aggregator.PinInscription, chain string, payload *answerPayload, previous *AnswerRecord, isMempool bool, op string) *AnswerRecord {
@@ -300,8 +339,9 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string, i
 		return err
 	}
 	locator, ok := a.lookupLocator(payload.LikeTo)
-	if !ok {
-		// Target is not a Q&A pin (simplebuzz targets belong to socialcontent).
+	if !ok || !locator.isQATarget() {
+		// Target is not a Q&A pin (simplebuzz targets belong to socialcontent;
+		// likes on comment pins are out of scope per the v2 contract).
 		return nil
 	}
 	actor := identityFromPin(pin).actorKey()
@@ -336,21 +376,133 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string, i
 	return a.refreshEngagement(locator)
 }
 
+// processComment indexes PayComment pins whose commentTo resolves to a Q&A
+// pin (question or answer, any version) as full comment records. Comments on
+// pins outside the Q&A index stay with socialcontent; comments on comments
+// are out of scope (flat lists only). modify updates the body in place,
+// revoke hides the comment (it leaves comment lists and commentCount).
 func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string, isMempool bool) error {
+	op := operationOf(pin)
 	payload, err := parseComment(pin)
 	if err != nil {
 		return err
 	}
-	locator, ok := a.lookupLocator(payload.CommentTo)
-	if !ok {
-		return nil
+
+	var previous *CommentRecord
+	var target recordLocator
+	if op == OperationCreate {
+		locator, ok := a.lookupLocator(payload.CommentTo)
+		if !ok || !locator.isQATarget() {
+			return nil
+		}
+		target = locator
+		previous, err = a.loadComment(chain, pin.Id)
+		if err != nil {
+			return err
+		}
+		if previous != nil && !(!isMempool && previous.IsMempool) {
+			return nil // already indexed (or newer state already held)
+		}
+	} else {
+		versionTarget := targetPinID(pin)
+		if versionTarget == "" {
+			return nil
+		}
+		locator, ok := a.lookupLocator(versionTarget)
+		if !ok || locator.kind != "c" {
+			return nil
+		}
+		previous, err = a.loadComment(locator.chainName, locator.sourcePinId)
+		if err != nil || previous == nil {
+			return err
+		}
+		target = recordLocator{kind: previous.TargetKind, chainName: previous.TargetChain, sourcePinId: previous.TargetPinId}
+		// A modify that moves the comment to another Q&A pin re-targets it;
+		// an unresolvable new target keeps the current attachment.
+		if payload.CommentTo != "" && payload.CommentTo != previous.CommentTo {
+			if relocated, ok := a.lookupLocator(payload.CommentTo); ok && relocated.isQATarget() {
+				target = relocated
+			}
+		}
 	}
-	// Idempotent marker: re-running the backfill or replaying a block never
-	// double-counts a comment pin.
-	if err := a.store.Set(Namespace, commentKey(locator.sourcePinId, pin.Id), []byte{}); err != nil {
+
+	rec := a.commentRecordFromPin(pin, chain, payload, previous, isMempool, op, target)
+	mergeConfirmedReplayWithPendingCommentCurrent(previous, rec, pin.Id)
+	if err := a.saveComment(rec); err != nil {
 		return err
 	}
-	return a.refreshEngagement(locator)
+	if err := a.mapPin(pin.Id, recordLocator{kind: "c", chainName: rec.ChainName, sourcePinId: rec.SourcePinId}); err != nil {
+		return err
+	}
+
+	// Re-key the per-target list when the pin moves (target change) or the
+	// confirmed block time replaces the relay time it was first keyed under.
+	if previous != nil && previous.CreatedAt != rec.CreatedAt {
+		_ = a.store.Delete(Namespace, commentIndexKey(previous.TargetPinId, previous.CreatedAt, previous.SourcePinId))
+	}
+	if previous != nil && previous.TargetPinId != "" {
+		_ = a.store.Delete(Namespace, commentIndexKey(previous.TargetPinId, rec.CreatedAt, previous.SourcePinId))
+	}
+	if !rec.Hidden && rec.TargetPinId != "" {
+		// The ct value carries the comment pin's own chain (a comment may
+		// live on a different chain than its target).
+		if err := a.store.Set(Namespace, commentIndexKey(rec.TargetPinId, rec.CreatedAt, rec.SourcePinId), []byte(rec.ChainName)); err != nil {
+			return err
+		}
+	}
+
+	if err := a.refreshEngagement(target); err != nil {
+		return err
+	}
+	if previous != nil && (previous.TargetPinId != rec.TargetPinId || previous.TargetKind != rec.TargetKind) {
+		return a.refreshEngagement(recordLocator{kind: previous.TargetKind, chainName: previous.TargetChain, sourcePinId: previous.TargetPinId})
+	}
+	return nil
+}
+
+// commentRecordFromPin builds the record for a create, or the updated record
+// for a modify/revoke, resolved against its Q&A target.
+func (a *Aggregator) commentRecordFromPin(pin *aggregator.PinInscription, chain string, payload *commentPayload, previous *CommentRecord, isMempool bool, op string, target recordLocator) *CommentRecord {
+	ts := metawebdoc.NormalizeUnixSeconds(pin.Timestamp)
+	if op == OperationCreate {
+		return &CommentRecord{
+			SourcePinId:  pin.Id,
+			CurrentPinId: pin.Id,
+			ChainName:    chain,
+			TargetKind:   target.kind,
+			TargetChain:  target.chainName,
+			TargetPinId:  target.sourcePinId,
+			CommentTo:    payload.CommentTo,
+			Content:      payload.Content,
+			ContentType:  payload.ContentType,
+			Publisher:    identityFromPin(pin),
+			Operation:    op,
+			IsMempool:    isMempool,
+			CreatedAt:    ts,
+			UpdatedAt:    ts,
+		}
+	}
+	rec := *previous
+	rec.CurrentPinId = pin.Id
+	rec.IsMempool = isMempool
+	rec.Operation = op
+	rec.UpdatedAt = ts
+	rec.TargetKind = target.kind
+	rec.TargetChain = target.chainName
+	rec.TargetPinId = target.sourcePinId
+	if payload.CommentTo != "" {
+		rec.CommentTo = payload.CommentTo
+	}
+	if payload.Content != "" {
+		rec.Content = payload.Content
+	}
+	if payload.ContentType != "" {
+		rec.ContentType = payload.ContentType
+	}
+	if op == OperationRevoke {
+		rec.Hidden = true
+	}
+	return &rec
 }
 
 // refreshEngagement recomputes like/dislike/comment counts of the located
@@ -375,7 +527,9 @@ func (a *Aggregator) refreshEngagement(locator recordLocator) error {
 		return err
 	}
 	comments := 0
-	if err := a.store.ScanPrefix(Namespace, commentPrefix(locator.sourcePinId), func(_, _ []byte) error {
+	// commentCount is the number of non-hidden comment records targeting the
+	// pin: the per-target list index carries exactly those.
+	if err := a.store.ScanPrefix(Namespace, commentIndexPrefix(locator.sourcePinId), func(_, _ []byte) error {
 		comments++
 		return nil
 	}); err != nil {
@@ -443,7 +597,7 @@ func (a *Aggregator) refreshQuestionEngagementOnly(rec *QuestionRecord) error {
 		return err
 	}
 	comments := 0
-	if err := a.store.ScanPrefix(Namespace, commentPrefix(rec.SourcePinId), func(_, _ []byte) error {
+	if err := a.store.ScanPrefix(Namespace, commentIndexPrefix(rec.SourcePinId), func(_, _ []byte) error {
 		comments++
 		return nil
 	}); err != nil {
@@ -493,8 +647,26 @@ func (a *Aggregator) refreshQuestionAggregate(rec *QuestionRecord) error {
 	} else if err := a.store.Set(Namespace, questionTimeKey(rec.CreatedAt, rec.ChainName, rec.SourcePinId), []byte{}); err != nil {
 		return err
 	}
+	// Question visibility gates the global answer list too: a revoked question
+	// removes all its answers from atime (and a visible one restores them).
+	for _, answer := range answers {
+		if err := a.maintainAnswerTimeIndexForQuestion(answer, rec.Hidden); err != nil {
+			return err
+		}
+	}
 	a.refreshQuestionDoc(rec)
 	return nil
+}
+
+// maintainAnswerTimeIndexForQuestion re-keys one answer's global-list entry
+// under the parent question's visibility (answers scanned here are the
+// non-hidden ones of the question's answer index).
+func (a *Aggregator) maintainAnswerTimeIndexForQuestion(answer *AnswerRecord, questionHidden bool) error {
+	key := answerTimeKey(answer.CreatedAt, answer.ChainName, answer.SourcePinId)
+	if questionHidden {
+		return a.store.Delete(Namespace, key)
+	}
+	return a.store.Set(Namespace, key, []byte{})
 }
 
 // answersExcerpt concatenates answer summaries (index order = newest first)
@@ -587,6 +759,25 @@ func mergeConfirmedReplayWithPendingAnswerCurrent(previous, candidate *AnswerRec
 	candidate.Tags = previous.Tags
 	candidate.ContentType = previous.ContentType
 	candidate.Attachments = previous.Attachments
+	candidate.Operation = previous.Operation
+	candidate.Hidden = previous.Hidden
+	candidate.IsMempool = true
+	candidate.UpdatedAt = previous.UpdatedAt
+}
+
+// mergeConfirmedReplayWithPendingCommentCurrent keeps a newer pending
+// mempool version when an older confirmed pin replays (same scheme as the
+// question/answer merges).
+func mergeConfirmedReplayWithPendingCommentCurrent(previous, candidate *CommentRecord, confirmedPinID string) {
+	if previous == nil || candidate == nil || candidate.IsMempool || !previous.IsMempool {
+		return
+	}
+	if previous.CurrentPinId == "" || previous.CurrentPinId == previous.SourcePinId || previous.CurrentPinId == confirmedPinID {
+		return
+	}
+	candidate.CurrentPinId = previous.CurrentPinId
+	candidate.Content = previous.Content
+	candidate.ContentType = previous.ContentType
 	candidate.Operation = previous.Operation
 	candidate.Hidden = previous.Hidden
 	candidate.IsMempool = true

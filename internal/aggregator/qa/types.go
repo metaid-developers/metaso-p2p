@@ -1,16 +1,20 @@
 // Package qa implements the on-chain Q&A read model over the SimpleQuestion /
 // SimpleAnswer protocols with PayLike / PayComment engagement aggregation, and
 // serves the read-only /api/qa/* endpoints (search, latest-questions feed,
-// question detail with ranked answers).
+// question detail with ranked answers, comment threads on Q&A pins, and the
+// cross-question answer listing of author pages).
 //
 // The generic publishedcontent pipeline additionally stores both content
 // protocols (full bodies stay behind GET /api/metaweb/pin/:pinId and both are
 // searchable via GET /api/metaweb/search); this package owns the Q&A
-// projection: the question⇄answer join, engagement counts, answer ranking and
-// the Q&A-specific surfaces, which return summaries only.
+// projection: the question⇄answer join, engagement counts, answer ranking,
+// Q&A comment threads and the Q&A-specific surfaces, which return summaries
+// only (comment bodies excepted — comments are readable nowhere else).
 //
-// See docs/specs/2026-09-07-metaweb-qa-api.md for the contract and
-// docs/metaid_protocols/08-qanda.md (IDBots repo) for the protocol payloads.
+// See docs/specs/2026-09-07-metaweb-qa-api.md and
+// docs/specs/2026-09-07-metaweb-qa-comments-author-api.md for the contracts
+// and docs/metaid_protocols/08-qanda.md (IDBots repo) for the protocol
+// payloads.
 package qa
 
 import "errors"
@@ -136,6 +140,34 @@ type AnswerRecord struct {
 	CommentCount int `json:"commentCount"`
 }
 
+// CommentRecord is the projection of a PayComment pin whose commentTo
+// resolves to a Q&A pin (question or answer, any version). TargetPinId is the
+// resolved stable source pin id of the target. Comments on pins outside the
+// Q&A index (simplebuzz owns those) and comments on other comments (no
+// threading in this round) are not indexed.
+type CommentRecord struct {
+	SourcePinId  string `json:"sourcePinId"`
+	CurrentPinId string `json:"currentPinId"`
+	ChainName    string `json:"chainName"`
+
+	TargetKind  string `json:"targetKind,omitempty"` // "q" or "a"
+	TargetChain string `json:"targetChain,omitempty"`
+	TargetPinId string `json:"targetPinId,omitempty"`
+	CommentTo   string `json:"commentTo,omitempty"` // raw payload target
+
+	Content     string `json:"content,omitempty"` // full body, capped at index time
+	ContentType string `json:"contentType,omitempty"`
+
+	Publisher Identity `json:"publisher"`
+
+	Operation string `json:"operation"`
+	Hidden    bool   `json:"hidden"`
+	IsMempool bool   `json:"isMempool,omitempty"`
+
+	CreatedAt int64 `json:"createdAt"`
+	UpdatedAt int64 `json:"updatedAt"`
+}
+
 // Score is the ranking value of an answer: likeCount − dislikeCount.
 func (r *AnswerRecord) Score() int {
 	return r.LikeCount - r.DislikeCount
@@ -192,22 +224,51 @@ type QuestionItem struct {
 	HotScore     *int           `json:"hotScore,omitempty"`
 }
 
-// AnswerItem is an answer row of the detail / answers surfaces.
+// AnswerItem is an answer row of the detail / answers surfaces. Question
+// (light parent embed) is carried only by GET /api/qa/answers rows; the
+// per-question surfaces keep the v1 shape unchanged.
 type AnswerItem struct {
-	Protocol      string        `json:"protocol"`
-	PinId         string        `json:"pinId"`
-	CurrentPinId  string        `json:"currentPinId"`
-	QuestionPinId string        `json:"questionPinId"`
-	ChainName     string        `json:"chainName"`
-	Summary       string        `json:"summary"`
-	Tags          []string      `json:"tags"`
-	Publisher     publisherInfo `json:"publisher"`
-	CreatedAt     int64         `json:"createdAt"`
-	IsMempool     bool          `json:"isMempool"`
-	LikeCount     int           `json:"likeCount"`
-	DislikeCount  int           `json:"dislikeCount"`
-	CommentCount  int           `json:"commentCount"`
-	Score         int           `json:"score"`
+	Protocol      string         `json:"protocol"`
+	PinId         string         `json:"pinId"`
+	CurrentPinId  string         `json:"currentPinId"`
+	QuestionPinId string         `json:"questionPinId"`
+	Question      *questionEmbed `json:"question,omitempty"`
+	ChainName     string         `json:"chainName"`
+	Summary       string         `json:"summary"`
+	Tags          []string       `json:"tags"`
+	Publisher     publisherInfo  `json:"publisher"`
+	CreatedAt     int64          `json:"createdAt"`
+	IsMempool     bool           `json:"isMempool"`
+	LikeCount     int            `json:"likeCount"`
+	DislikeCount  int            `json:"dislikeCount"`
+	CommentCount  int            `json:"commentCount"`
+	Score         int            `json:"score"`
+}
+
+// questionEmbed is the light parent-question block of /api/qa/answers rows:
+// identity of the question an answer belongs to, so author pages need no
+// per-row detail call.
+type questionEmbed struct {
+	PinId     string `json:"pinId"`
+	Title     string `json:"title"`
+	ChainName string `json:"chainName"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// CommentItem is a comment row of GET /api/qa/pins/:pinId/comments. Content
+// is the full stored body (capped at index time) — this endpoint is the only
+// place Q&A comment content is readable, so no summary is derived.
+type CommentItem struct {
+	Protocol     string        `json:"protocol"`
+	PinId        string        `json:"pinId"`
+	CurrentPinId string        `json:"currentPinId"`
+	TargetPinId  string        `json:"targetPinId"`
+	ChainName    string        `json:"chainName"`
+	Content      string        `json:"content"`
+	ContentType  string        `json:"contentType,omitempty"`
+	Publisher    publisherInfo `json:"publisher"`
+	CreatedAt    int64         `json:"createdAt"`
+	IsMempool    bool          `json:"isMempool"`
 }
 
 type listData struct {
