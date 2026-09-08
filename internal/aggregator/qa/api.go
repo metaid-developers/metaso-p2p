@@ -220,7 +220,7 @@ func (a *Aggregator) handleQuestions(c *gin.Context) {
 			if err != nil {
 				return err
 			}
-			if rec == nil || rec.Hidden || rec.CreatedAt < windowStart {
+			if !questionVisible(rec) || rec.CreatedAt < windowStart {
 				return nil
 			}
 			if !feedRecordMatches(rec, params) {
@@ -254,7 +254,7 @@ func (a *Aggregator) handleQuestions(c *gin.Context) {
 			if err != nil {
 				return err
 			}
-			if rec == nil || rec.Hidden {
+			if !questionVisible(rec) {
 				return nil
 			}
 			if !feedRecordMatches(rec, params) {
@@ -435,7 +435,7 @@ func (a *Aggregator) resolveQuestionParam(c *gin.Context) (*QuestionRecord, bool
 		api.RespErr(c, codeUnavailable, "aggregation unavailable")
 		return nil, false
 	}
-	if rec == nil || rec.Hidden {
+	if !questionVisible(rec) {
 		api.RespErr(c, codeNotFound, "question not found")
 		return nil, false
 	}

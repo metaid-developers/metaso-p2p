@@ -13,8 +13,8 @@
 //
 // See docs/specs/2026-09-07-metaweb-qa-api.md and
 // docs/specs/2026-09-07-metaweb-qa-comments-author-api.md for the contracts
-// and docs/metaid_protocols/08-qanda.md (IDBots repo) for the protocol
-// payloads.
+// (title rule: docs/specs/2026-09-08-metaweb-qa-question-title-rule.md) and
+// docs/metaid_protocols/08-qanda.md (IDBots repo) for the protocol payloads.
 package qa
 
 import "errors"

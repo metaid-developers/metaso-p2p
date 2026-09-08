@@ -22,7 +22,7 @@ func TestProcessComment_IndexesOnlyQATargets(t *testing.T) {
 	questionId := testPinId("v2-cmt-question")
 	answerId := testPinId("v2-cmt-answer")
 	buzzId := testPinId("v2-cmt-buzz")
-	question := questionPin(questionId, "thread target", "body")
+	question := questionPin(questionId, "thread target?", "body")
 	mustBlock(t, agg, question)
 	mustBlock(t, agg, answerPin(answerId, questionId, "answer body", 1755000100, "answerer"))
 
@@ -85,12 +85,12 @@ func TestProcessComment_IndexesOnlyQATargets(t *testing.T) {
 func TestProcessComment_TargetAnyVersionNormalizes(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-cmt-norm-q")
-	mustBlock(t, agg, questionPin(questionId, "normalisation", "body"))
+	mustBlock(t, agg, questionPin(questionId, "normalisation?", "body"))
 	modifiedId := testPinId("v2-cmt-norm-modify")
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
 		Id: modifiedId, Path: PathSimpleQuestion, Operation: OperationModify,
 		OriginalId: questionId, Timestamp: 1755000100, GlobalMetaId: "asker",
-		Body: `{"title":"normalisation (edited)"}`,
+		Body: `{"title":"normalisation (edited)?"}`,
 	}))
 
 	// commentTo references the modify version; the record normalises to the
@@ -109,7 +109,7 @@ func TestProcessComment_TargetAnyVersionNormalizes(t *testing.T) {
 func TestProcessComment_ModifyAndRevoke(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-cmt-life-q")
-	mustBlock(t, agg, questionPin(questionId, "lifecycle", "body"))
+	mustBlock(t, agg, questionPin(questionId, "lifecycle?", "body"))
 	commentId := testPinId("v2-cmt-life-c")
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
 		Id: commentId, Path: PathPayComment, Timestamp: 1755000100, GlobalMetaId: "commenter",
@@ -145,7 +145,7 @@ func TestProcessComment_ModifyAndRevoke(t *testing.T) {
 func TestProcessComment_ContentCappedAtIndexTime(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-cmt-cap-q")
-	mustBlock(t, agg, questionPin(questionId, "cap", "body"))
+	mustBlock(t, agg, questionPin(questionId, "cap?", "body"))
 	long := strings.Repeat("字", 2500) // 2500 runes > 2000 cap
 	body, _ := json.Marshal(map[string]any{"commentTo": questionId, "content": long})
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
@@ -164,7 +164,7 @@ func TestProcessComment_ContentCappedAtIndexTime(t *testing.T) {
 func TestProcessComment_MempoolThenConfirm(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-cmt-mp-q")
-	mustBlock(t, agg, questionPin(questionId, "mempool", "body"))
+	mustBlock(t, agg, questionPin(questionId, "mempool?", "body"))
 	commentId := testPinId("v2-cmt-mp-c")
 
 	relay := makeQAPin(qaPinOpts{
@@ -218,7 +218,7 @@ func TestProcess_MempoolConfirmRekeysTimeIndexes(t *testing.T) {
 	// Mempool view first (relay time 1755000100), confirmed pin later with a
 	// different block time (1755000090) — the v1 indexes kept the stale key
 	// keyed under the relay timestamp and served the row twice.
-	relayQuestion := questionPin(questionId, "rekey", "body")
+	relayQuestion := questionPin(questionId, "rekey?", "body")
 	relayQuestion.Timestamp = 1755000100
 	if _, err := agg.HandleMempoolPin(relayQuestion); err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestProcess_MempoolConfirmRekeysTimeIndexes(t *testing.T) {
 	if _, err := agg.HandleMempoolPin(relayAnswer); err != nil {
 		t.Fatal(err)
 	}
-	confirmedQuestion := questionPin(questionId, "rekey", "body")
+	confirmedQuestion := questionPin(questionId, "rekey?", "body")
 	confirmedQuestion.Timestamp = 1755000090
 	mustBlock(t, agg, confirmedQuestion)
 	confirmedAnswer := answerPin(answerId, questionId, "rekey answer", 1755000091, "answerer")
@@ -258,7 +258,7 @@ func TestQuestionRevoke_RemovesAnswersFromGlobalIndex(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-rvk-q")
 	answerId := testPinId("v2-rvk-a")
-	mustBlock(t, agg, questionPin(questionId, "revoke cascade", "body"))
+	mustBlock(t, agg, questionPin(questionId, "revoke cascade?", "body"))
 	mustBlock(t, agg, answerPin(answerId, questionId, "will vanish", 1755000100, "answerer"))
 
 	visible := func() int {
@@ -300,7 +300,7 @@ type commentRow struct {
 func seedCommentThread(t *testing.T, agg *Aggregator) (questionId string) {
 	t.Helper()
 	questionId = testPinId("v2-api-cmt-q")
-	mustBlock(t, agg, questionPin(questionId, "api thread", "body"))
+	mustBlock(t, agg, questionPin(questionId, "api thread?", "body"))
 	for i, ts := range []int64{1755000100, 1755000200, 1755000300} {
 		body, _ := json.Marshal(map[string]any{"commentTo": questionId, "content": "comment " + string(rune('A'+i))})
 		mustBlock(t, agg, makeQAPin(qaPinOpts{
@@ -374,7 +374,7 @@ func TestAPI_PinComments_AnswerTargetAndVisibility(t *testing.T) {
 	agg, _ := setupTestAggregator(t)
 	questionId := testPinId("v2-api-cmt-vis-q")
 	answerId := testPinId("v2-api-cmt-vis-a")
-	mustBlock(t, agg, questionPin(questionId, "visibility", "body"))
+	mustBlock(t, agg, questionPin(questionId, "visibility?", "body"))
 	mustBlock(t, agg, answerPin(answerId, questionId, "answer", 1755000100, "answerer"))
 	body, _ := json.Marshal(map[string]any{"commentTo": answerId, "content": "on answer"})
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
@@ -437,8 +437,8 @@ func seedAuthorCorpus(t *testing.T, agg *Aggregator) (q1, q2, a1, a2, a3 string)
 	a2 = testPinId("v2-feed-a2")
 	a3 = testPinId("v2-feed-a3")
 
-	mustBlock(t, agg, questionPin(q1, "author question one", "body"))
-	mustBlock(t, agg, questionPin(q2, "author question two", "body"))
+	mustBlock(t, agg, questionPin(q1, "author question one?", "body"))
+	mustBlock(t, agg, questionPin(q2, "author question two?", "body"))
 
 	// alice answers both questions; bob answers one and earns a like.
 	mustBlock(t, agg, answerPin(a1, q1, "alice answer one", 1755000100, "alice"))
@@ -533,7 +533,7 @@ func TestAPI_QuestionsFeed_PublisherFilter(t *testing.T) {
 	_, _, _, _, _ = seedAuthorCorpus(t, agg)
 	// asker authored both questions; give one to a different asker.
 	otherQ := testPinId("v2-feed-q3")
-	other := questionPin(otherQ, "other asker question", "body")
+	other := questionPin(otherQ, "other asker question?", "body")
 	other.GlobalMetaId = "otherasker"
 	other.MetaId = "metaid_other"
 	mustBlock(t, agg, other)

@@ -203,7 +203,7 @@ func TestProcessLike_LastStatePerPublisherWins(t *testing.T) {
 
 	q1 := testPinId("like-question")
 	a1 := testPinId("like-answer")
-	mustBlock(t, agg, questionPin(q1, "Question", "body"))
+	mustBlock(t, agg, questionPin(q1, "Question?", "body"))
 	mustBlock(t, agg, answerPin(a1, q1, "answer body", 1755000100, "bot-a"))
 
 	// Like then dislike by the same actor: last state wins.
@@ -246,7 +246,7 @@ func TestProcessComment_CountsPerTarget(t *testing.T) {
 
 	q1 := testPinId("comment-question")
 	a1 := testPinId("comment-answer")
-	mustBlock(t, agg, questionPin(q1, "Question", "body"))
+	mustBlock(t, agg, questionPin(q1, "Question?", "body"))
 	mustBlock(t, agg, answerPin(a1, q1, "answer", 1755000100, "bot-a"))
 
 	mustBlock(t, agg, commentPin(testPinId("c1"), q1, 1755001000, "actor-1"))
@@ -272,7 +272,7 @@ func TestProcessQuestion_ModifyRevoke(t *testing.T) {
 	defer store.Close()
 
 	q1 := testPinId("modify-question")
-	mustBlock(t, agg, questionPin(q1, "Original title", "original body", "tag1"))
+	mustBlock(t, agg, questionPin(q1, "Original title?", "original body", "tag1"))
 
 	modifyId := testPinId("modify-question-v2")
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
@@ -281,11 +281,11 @@ func TestProcessQuestion_ModifyRevoke(t *testing.T) {
 		Operation:    OperationModify,
 		OriginalId:   "@" + q1,
 		Timestamp:    1755000100,
-		Body:         `{"title":"Updated title","content":"updated body","tags":["tag2"]}`,
+		Body:         `{"title":"Updated title?","content":"updated body","tags":["tag2"]}`,
 		GlobalMetaId: "asker",
 	}))
 	rec, _ := agg.loadQuestion("mvc", q1)
-	if rec.Title != "Updated title" || rec.CurrentPinId != modifyId || rec.CreatedAt != 1755000000 {
+	if rec.Title != "Updated title?" || rec.CurrentPinId != modifyId || rec.CreatedAt != 1755000000 {
 		t.Fatalf("modified record = %+v", rec)
 	}
 	if len(rec.Tags) != 1 || rec.Tags[0] != "tag2" {
@@ -322,7 +322,7 @@ func TestProcessAnswer_RevokeDropsCount(t *testing.T) {
 	q1 := testPinId("revoke-question")
 	a1 := testPinId("revoke-answer-1")
 	a2 := testPinId("revoke-answer-2")
-	mustBlock(t, agg, questionPin(q1, "Question", "body"))
+	mustBlock(t, agg, questionPin(q1, "Question?", "body"))
 	mustBlock(t, agg, answerPin(a1, q1, "first", 1755000100, "bot-a"))
 	mustBlock(t, agg, answerPin(a2, q1, "second", 1755000200, "bot-b"))
 
@@ -356,7 +356,7 @@ func TestProcess_MempoolFreshnessThenConfirm(t *testing.T) {
 	a1 := testPinId("mempool-answer")
 
 	// Mempool question and answer are visible immediately.
-	if _, err := agg.HandleMempoolPin(questionPin(q1, "Mempool question", "body")); err != nil {
+	if _, err := agg.HandleMempoolPin(questionPin(q1, "Mempool question?", "body")); err != nil {
 		t.Fatalf("mempool question: %v", err)
 	}
 	if _, err := agg.HandleMempoolPin(answerPin(a1, q1, "mempool answer", 1755000100, "bot-a")); err != nil {
@@ -371,7 +371,7 @@ func TestProcess_MempoolFreshnessThenConfirm(t *testing.T) {
 	}
 
 	// Confirmation replaces the mempool records.
-	mustBlock(t, agg, questionPin(q1, "Mempool question", "body"))
+	mustBlock(t, agg, questionPin(q1, "Mempool question?", "body"))
 	mustBlock(t, agg, answerPin(a1, q1, "mempool answer", 1755000100, "bot-a"))
 	rec, _ = agg.loadQuestion("mvc", q1)
 	if rec.IsMempool {

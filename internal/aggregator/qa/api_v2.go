@@ -111,7 +111,8 @@ func commentItemsToAny(items []CommentItem) []any {
 // resolveCommentTarget validates the :pinId path parameter as a visible Q&A
 // pin (question or answer) and returns the locator of its stable record,
 // writing the error response itself. An answer whose parent question is
-// revoked is not visible anywhere, comment threads included.
+// revoked — or de-indexed by the R7 title rule — is not visible anywhere,
+// comment threads included.
 func (a *Aggregator) resolveCommentTarget(c *gin.Context, pinId string) (recordLocator, bool) {
 	locator, ok := a.lookupLocator(pinId)
 	if !ok || !locator.isQATarget() {
@@ -125,7 +126,7 @@ func (a *Aggregator) resolveCommentTarget(c *gin.Context, pinId string) (recordL
 			api.RespErr(c, codeUnavailable, "aggregation unavailable")
 			return recordLocator{}, false
 		}
-		if rec == nil || rec.Hidden {
+		if !questionVisible(rec) {
 			api.RespErr(c, codeNotFound, "Q&A pin not found")
 			return recordLocator{}, false
 		}
@@ -144,7 +145,7 @@ func (a *Aggregator) resolveCommentTarget(c *gin.Context, pinId string) (recordL
 			api.RespErr(c, codeUnavailable, "aggregation unavailable")
 			return recordLocator{}, false
 		}
-		if question == nil || question.Hidden {
+		if !questionVisible(question) {
 			api.RespErr(c, codeNotFound, "Q&A pin not found")
 			return recordLocator{}, false
 		}

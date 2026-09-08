@@ -71,6 +71,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if err := a.rebuildSearchDocs(); err != nil {
 		log.Printf("WARNING: qa search document snapshot build failed: %v", err)
 	}
+	// Re-evaluate the visible-questions index against the R7 title rule so
+	// pre-upgrade records whose title lacks a question mark drop out without
+	// waiting for their pins to replay. Non-fatal the same way.
+	if err := a.reconcileQuestionVisibility(); err != nil {
+		log.Printf("WARNING: qa question visibility reconciliation failed: %v", err)
+	}
 	return nil
 }
 
@@ -117,10 +123,11 @@ func (a *Aggregator) SetNow(now func() int64) {
 }
 
 // questionDocFromRecord projects a question onto its search document.
-// Hidden/revoked questions are excluded (ok=false); mempool questions are
-// included per the freshness contract.
+// Revoked questions and titles without a trailing question mark (R7) are
+// excluded (ok=false); mempool questions are included per the freshness
+// contract.
 func questionDocFromRecord(rec *QuestionRecord) (questionDoc, bool) {
-	if rec == nil || rec.Hidden || rec.Title == "" {
+	if !questionVisible(rec) {
 		return questionDoc{}, false
 	}
 	currentPinId := rec.CurrentPinId
@@ -168,6 +175,43 @@ func (a *Aggregator) rebuildSearchDocs() error {
 		return err
 	}
 	a.swapSearchDocs(docs)
+	return nil
+}
+
+// reconcileQuestionVisibility re-evaluates the visible-questions time index
+// against the current visibility rule at startup — a record revoked, or since
+// R7 a title without a trailing question mark, must drop out of the feed
+// index together with its answers' global-list entries without waiting for
+// its pins to replay. Stale candidates are collected before any mutation so
+// the scan iterator never observes writes.
+func (a *Aggregator) reconcileQuestionVisibility() error {
+	if a.store == nil {
+		return nil
+	}
+	type staleQuestion struct{ chainName, sourcePinId string }
+	stale := make([]staleQuestion, 0)
+	if err := a.store.ScanPrefix(Namespace, questionTimePrefix(), func(key, _ []byte) error {
+		chainName, sourcePinId, ok := parseQuestionTimeKey(key)
+		if !ok {
+			return nil
+		}
+		rec, err := a.loadQuestion(chainName, sourcePinId)
+		if err != nil {
+			return err
+		}
+		if questionVisible(rec) {
+			return nil
+		}
+		stale = append(stale, staleQuestion{chainName: chainName, sourcePinId: sourcePinId})
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, question := range stale {
+		if err := a.refreshQuestion(question.chainName, question.sourcePinId); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

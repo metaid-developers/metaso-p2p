@@ -116,13 +116,13 @@ func seedSearchCorpus(t *testing.T, agg *Aggregator) (walletPin, mvcPin, chinese
 	chinesePin = testPinId("search-chinese")
 	answerId = testPinId("search-answer")
 
-	mustBlock(t, agg, questionPin(walletPin, "wallet recovery guide", "mnemonic and recovery words", "wallet", "recovery"))
-	mustBlock(t, agg, questionPin(mvcPin, "mvc fee rate", "what is the current fee", "mvc"))
+	mustBlock(t, agg, questionPin(walletPin, "wallet recovery guide?", "mnemonic and recovery words", "wallet", "recovery"))
+	mustBlock(t, agg, questionPin(mvcPin, "mvc fee rate?", "what is the current fee", "mvc"))
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
 		Id:           chinesePin,
 		Path:         PathSimpleQuestion,
 		Timestamp:    1755000500,
-		Body:         `{"title":"钱包恢复方法","content":"助记词丢失后如何恢复钱包","tags":["wallet"]}`,
+		Body:         `{"title":"钱包恢复方法？","content":"助记词丢失后如何恢复钱包","tags":["wallet"]}`,
 		GlobalMetaId: "asker",
 	}))
 	// Answer content participates via matched-question aggregation.
@@ -333,12 +333,12 @@ func TestAPI_QuestionsHot(t *testing.T) {
 	// Clock fixed inside the window; both questions eligible.
 	agg.SetNow(func() int64 { return 1755000000 + 3600 })
 
-	mustBlock(t, agg, questionPin(qNew, "hot new question", "body"))
+	mustBlock(t, agg, questionPin(qNew, "hot new question?", "body"))
 	mustBlock(t, agg, makeQAPin(qaPinOpts{
 		Id:           qOld,
 		Path:         PathSimpleQuestion,
 		Timestamp:    1755000000 - 8*24*3600, // outside the 7-day window
-		Body:         `{"title":"hot old question","content":"body"}`,
+		Body:         `{"title":"hot old question?","content":"body"}`,
 		GlobalMetaId: "asker",
 	}))
 	mustBlock(t, agg, answerPin(answerId, qNew, "an answer", 1755000100, "bot-a"))
@@ -362,7 +362,7 @@ func TestAPI_QuestionsHot(t *testing.T) {
 	defer store2.Close()
 	agg2.SetNow(func() int64 { return 1755000000 + 3600 })
 	for i := 0; i < 3; i++ {
-		mustBlock(t, agg2, questionPin(testPinId("hotpage-"+string(rune('a'+i))), "q", "body"))
+		mustBlock(t, agg2, questionPin(testPinId("hotpage-"+string(rune('a'+i))), "q?", "body"))
 	}
 	router2 := newTestRouter(agg2)
 	_, env = doRequest(t, router2, "/api/qa/questions?sort=hot&size=2")
@@ -380,7 +380,7 @@ func TestAPI_QuestionDetailAndAnswers(t *testing.T) {
 	a2 := testPinId("detail-answer-2")
 	a3 := testPinId("detail-answer-3")
 
-	mustBlock(t, agg, questionPin(q1, "Detail question", "body"))
+	mustBlock(t, agg, questionPin(q1, "Detail question?", "body"))
 	mustBlock(t, agg, answerPin(a1, q1, "first answer", 1755000100, "bot-a"))
 	mustBlock(t, agg, answerPin(a2, q1, "second answer", 1755000200, "bot-b"))
 	mustBlock(t, agg, answerPin(a3, q1, "third answer", 1755000300, "bot-b"))
@@ -398,7 +398,7 @@ func TestAPI_QuestionDetailAndAnswers(t *testing.T) {
 		Operation:    OperationModify,
 		OriginalId:   "@" + q1,
 		Timestamp:    1755000400,
-		Body:         `{"title":"Detail question v2","content":"body"}`,
+		Body:         `{"title":"Detail question v2?","content":"body"}`,
 		GlobalMetaId: "asker",
 	}))
 	_, env := doRequest(t, router, "/api/qa/questions/"+modifyId)
@@ -409,7 +409,7 @@ func TestAPI_QuestionDetailAndAnswers(t *testing.T) {
 	if err := json.Unmarshal(env.Data, &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if detail.Question.PinId != q1 || detail.Question.Title != "Detail question v2" {
+	if detail.Question.PinId != q1 || detail.Question.Title != "Detail question v2?" {
 		t.Fatalf("detail question = %+v", detail.Question)
 	}
 	if len(detail.Answers) != 3 {
@@ -466,7 +466,7 @@ func TestAPI_QuestionItemShape(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
 	q1 := testPinId("shape-question")
-	mustBlock(t, agg, questionPin(q1, "Shape question", "body with **markdown**"))
+	mustBlock(t, agg, questionPin(q1, "Shape question?", "body with **markdown**"))
 	router := newTestRouter(agg)
 
 	_, env := doRequest(t, router, "/api/qa/questions")

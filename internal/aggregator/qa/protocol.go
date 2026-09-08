@@ -135,6 +135,15 @@ type questionPayload struct {
 	Attachments []string
 }
 
+// titleEndsWithQuestionMark reports whether the trimmed title ends with the
+// half-width `?` (U+003F) or the full-width `？` (U+FF1F) — the R7 rule that a
+// question's title must be a question (both authoring conventions are
+// first-class).
+func titleEndsWithQuestionMark(title string) bool {
+	title = strings.TrimSpace(title)
+	return strings.HasSuffix(title, "?") || strings.HasSuffix(title, "？")
+}
+
 func parseQuestion(pin *aggregator.PinInscription) (*questionPayload, error) {
 	obj, err := payloadObjectFromPin(pin)
 	if err != nil {
