@@ -33,7 +33,7 @@ var backfillPaths = []string{PathSimpleQuestion, PathSimpleAnswer, PathPayLike, 
 type BackfillChainStats struct {
 	Fetched int64
 	Applied int64 // pins that produced a read-model change
-	Skipped int64 // out-of-scope pins (empty title, orphan, non-QA target, stale)
+	Skipped int64 // out-of-scope pins (empty or question-mark-less title, orphan, non-QA target, stale)
 	Errors  int64
 }
 

@@ -70,7 +70,7 @@ func TestBackfillReplaysAllFourPathsAndReportsCounts(t *testing.T) {
 			manapiQAPinForTest(a1, PathSimpleAnswer, map[string]any{"answerTo": q1, "content": "backfilled answer"}, OperationCreate, now.Add(-2*time.Hour)),
 		},
 		PathSimpleQuestion: {
-			manapiQAPinForTest(q1, PathSimpleQuestion, map[string]any{"title": "Backfilled question", "content": "body"}, OperationCreate, now.Add(-3*time.Hour)),
+			manapiQAPinForTest(q1, PathSimpleQuestion, map[string]any{"title": "Backfilled question?", "content": "body"}, OperationCreate, now.Add(-3*time.Hour)),
 		},
 	}
 	server := newQABackfillMANAPIServer(t, pins)

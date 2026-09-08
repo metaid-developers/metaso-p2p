@@ -35,9 +35,10 @@ func (a *Aggregator) processQuestion(pin *aggregator.PinInscription, chain strin
 
 	var previous *QuestionRecord
 	if op == OperationCreate {
-		// A question with a missing or empty title is skipped from the Q&A
-		// index (it stays a valid on-chain pin in the generic pipeline).
-		if payload.Title == "" {
+		// A question whose title is missing, empty, or does not end with a
+		// question mark is skipped from the Q&A index (R7; it stays a valid
+		// on-chain pin in the generic pipeline).
+		if !titleEndsWithQuestionMark(payload.Title) {
 			return nil
 		}
 		previous, err = a.loadQuestion(chain, pin.Id)
@@ -275,6 +276,15 @@ func (a *Aggregator) maintainAnswerTimeIndex(rec *AnswerRecord) error {
 	return a.store.Set(Namespace, key, []byte{})
 }
 
+// questionVisible reports whether a question record qualifies for the Q&A
+// surfaces: not revoked, and its current title ends with a question mark
+// (R7). A title without one is treated exactly like the empty-title rule.
+// The predicate is derived, never stored, so a modify that restores the
+// question mark restores visibility with it.
+func questionVisible(rec *QuestionRecord) bool {
+	return rec != nil && !rec.Hidden && titleEndsWithQuestionMark(rec.Title)
+}
+
 // answerGloballyVisible reports whether an answer may appear on the global
 // answer surfaces (GET /api/qa/answers): resolved, non-hidden, and parented
 // by a visible question.
@@ -283,7 +293,7 @@ func (a *Aggregator) answerGloballyVisible(rec *AnswerRecord) bool {
 		return false
 	}
 	question, err := a.loadQuestion(rec.QuestionChain, rec.QuestionPinId)
-	return err == nil && question != nil && !question.Hidden
+	return err == nil && questionVisible(question)
 }
 
 func (a *Aggregator) answerRecordFromPin(pin *aggregator.PinInscription, chain string, payload *answerPayload, previous *AnswerRecord, isMempool bool, op string) *AnswerRecord {
@@ -642,15 +652,16 @@ func (a *Aggregator) refreshQuestionAggregate(rec *QuestionRecord) error {
 	if err := a.saveQuestion(rec); err != nil {
 		return err
 	}
-	if rec.Hidden {
+	if !questionVisible(rec) {
 		_ = a.store.Delete(Namespace, questionTimeKey(rec.CreatedAt, rec.ChainName, rec.SourcePinId))
 	} else if err := a.store.Set(Namespace, questionTimeKey(rec.CreatedAt, rec.ChainName, rec.SourcePinId), []byte{}); err != nil {
 		return err
 	}
-	// Question visibility gates the global answer list too: a revoked question
-	// removes all its answers from atime (and a visible one restores them).
+	// Question visibility gates the global answer list too: a revoked or
+	// de-indexed (R7 title without a question mark) question removes all its
+	// answers from atime (and a visible one restores them).
 	for _, answer := range answers {
-		if err := a.maintainAnswerTimeIndexForQuestion(answer, rec.Hidden); err != nil {
+		if err := a.maintainAnswerTimeIndexForQuestion(answer, !questionVisible(rec)); err != nil {
 			return err
 		}
 	}
@@ -661,9 +672,9 @@ func (a *Aggregator) refreshQuestionAggregate(rec *QuestionRecord) error {
 // maintainAnswerTimeIndexForQuestion re-keys one answer's global-list entry
 // under the parent question's visibility (answers scanned here are the
 // non-hidden ones of the question's answer index).
-func (a *Aggregator) maintainAnswerTimeIndexForQuestion(answer *AnswerRecord, questionHidden bool) error {
+func (a *Aggregator) maintainAnswerTimeIndexForQuestion(answer *AnswerRecord, questionExcluded bool) error {
 	key := answerTimeKey(answer.CreatedAt, answer.ChainName, answer.SourcePinId)
-	if questionHidden {
+	if questionExcluded {
 		return a.store.Delete(Namespace, key)
 	}
 	return a.store.Set(Namespace, key, []byte{})
