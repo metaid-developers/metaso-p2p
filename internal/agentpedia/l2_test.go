@@ -1,6 +1,8 @@
 package agentpedia
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -252,4 +254,75 @@ func TestEditorEndpointAndContractDeltas(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("CORS preflight status %d", rec.Code)
 	}
+}
+
+// TestSyncRecoversEmptyContentBodyFromPinRead locks the real-pull fallback
+// (reader v0.2.2 report): the manapi list endpoint omits contentBody, so
+// SyncOnce must recover each payload via the per-pin envelope read; empty
+// payloads must never enter the replay stream.
+func TestSyncRecoversEmptyContentBodyFromPinRead(t *testing.T) {
+	founders := []string{"idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", "idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz"}
+	const hexAB = "abababababababababababababababababababababababababababababababab"
+	genesisPayload := map[string]any{
+		"v": 1.0, "revision": 0.0, "prevConstitution": nil, "proposalPin": nil,
+		"founders": founders, "params": paramsToAny(defaultsForTest()),
+		"algoVersions": map[string]any{"adoption": "adoption-algo-v1", "reputation": "reputation-algo-v1", "arbiterDraw": "arbiter-draw-v1"},
+	}
+	b64 := mustB64(genesisPayload)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/pin/path/list", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		list := []any{}
+		if path == PathConstitution {
+			list = append(list, map[string]any{
+				"id": "gpin", "genesisHeight": 10, "txIndex": 0,
+				"globalMetaId": founders[0], "contentBody": "", // the real-pull shape: body omitted
+			})
+		}
+		if path == PathRev {
+			revPayload := map[string]any{
+				"v": 1.0, "type": "create", "lang": "zh", "slug": "metaid", "title": "MetaID",
+				"content": "body", "contentHash": hexAB,
+			}
+			list = append(list, map[string]any{
+				"id": "rpin", "genesisHeight": 11, "txIndex": 0,
+				"globalMetaId": founders[0], "contentBody": mustB64(revPayload),
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 1, "data": map[string]any{"list": list, "nextCursor": "", "total": len(list)}})
+	})
+	mux.HandleFunc("/pin/gpin", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"code": 1, "data": map[string]any{"contentBody": b64}})
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	l := NewL2(fake.URL)
+	cursors, err := l.SyncOnce(context.Background())
+	if err != nil {
+		t.Fatalf("SyncOnce: %v", err)
+	}
+	if cursors[PathConstitution] != "" {
+		t.Fatalf("cursor = %q", cursors[PathConstitution])
+	}
+	view := l.View()
+	if len(view.Founders) != 2 {
+		t.Fatalf("genesis not applied: founders = %v", view.Founders)
+	}
+	if view.Params["stakeAmountSat"] != 100000 {
+		t.Fatalf("genesis params missing: %v", view.Params["stakeAmountSat"])
+	}
+	en, ok := view.Entries["zh:metaid"]
+	if !ok || en.Head != "rpin" {
+		t.Fatalf("entry not built from recovered payload: %+v", view.Entries)
+	}
+	if len(l.lastSyncSkipped) != 0 {
+		t.Fatalf("unexpected skipped pins: %v", l.lastSyncSkipped)
+	}
+}
+
+func mustB64(v any) string {
+	raw, _ := json.Marshal(v)
+	return base64.StdEncoding.EncodeToString(raw)
 }

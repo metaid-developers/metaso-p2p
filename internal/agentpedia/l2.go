@@ -21,15 +21,16 @@ import (
 // engine, and serves the read-side queries. Zero write paths by design — the
 // human-facing reader contract.
 type L2 struct {
-	mu       sync.Mutex
-	view     *View
-	events   []Event
-	pinMeta  map[string]pinMeta // pinId -> chain position/author
-	contents map[string]string  // rev pinId -> inline content (backlinks)
-	cursors  map[string]string  // path -> manapi nextCursor (lastCursor)
-	seenPins map[string]bool
-	manapi   string
-	client   *http.Client
+	mu              sync.Mutex
+	view            *View
+	events          []Event
+	pinMeta         map[string]pinMeta // pinId -> chain position/author
+	contents        map[string]string  // rev pinId -> inline content (backlinks)
+	cursors         map[string]string  // path -> manapi nextCursor (lastCursor)
+	seenPins        map[string]bool
+	manapi          string
+	client          *http.Client
+	lastSyncSkipped []map[string]any // pins whose payload could not be recovered (reported, never replayed)
 }
 
 type pinMeta struct {
@@ -127,6 +128,7 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	applied := 0
+	var skipped []map[string]any
 	for _, path := range syncPaths {
 		cursor := l.cursors[path]
 		for {
@@ -142,11 +144,22 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 				if pin.GenesisHeight < 0 {
 					continue // mempool: visible but not ordered (F6)
 				}
-				payload := map[string]any{}
-				if body, ok := pin.ContentBody.(string); ok && body != "" {
-					if raw, err := base64.StdEncoding.DecodeString(body); err == nil {
-						_ = json.Unmarshal(raw, &payload)
+				payload := decodePayload(pin.ContentBody)
+				if len(payload) == 0 {
+					// The list endpoint omits contentBody for most pins
+					// (second deliverable §1.1; the first real-pull run
+					// tripped on exactly this) — recover via the per-pin
+					// envelope read. Unrecoverable pins are SKIPPED and
+					// reported: an empty payload must never enter the
+					// replay stream (it would pollute the graveyard).
+					env, envErr := l.fetchPinEnvelope(ctx, pin.ID)
+					if envErr == nil {
+						payload = decodePayload(env.Data.ContentBody)
 					}
+				}
+				if len(payload) == 0 {
+					skipped = append(skipped, map[string]any{"pin": pin.ID, "reason": "payload unrecoverable via /pin/ read"})
+					continue
 				}
 				l.events = append(l.events, Event{
 					Pin: pin.ID, Path: path, Height: pin.GenesisHeight,
@@ -165,7 +178,58 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 	if applied > 0 {
 		l.rebuildLocked()
 	}
+	l.lastSyncSkipped = skipped
 	return l.snapshotCursorsLocked(), nil
+}
+
+// decodePayload turns a pin contentBody (base64 JSON, occasionally raw JSON)
+// into the payload map; empty/undecodable bodies yield nil.
+func decodePayload(contentBody any) map[string]any {
+	body, ok := contentBody.(string)
+	if !ok || body == "" {
+		return nil
+	}
+	payload := map[string]any{}
+	if raw, err := base64.StdEncoding.DecodeString(body); err == nil {
+		if json.Unmarshal(raw, &payload) == nil {
+			return payload
+		}
+	}
+	// defensive: some channels deliver raw JSON instead of base64
+	if json.Unmarshal([]byte(body), &payload) == nil {
+		return payload
+	}
+	return nil
+}
+
+type pinEnvelope struct {
+	Code int `json:"code"`
+	Data struct {
+		ContentBody any `json:"contentBody"`
+	} `json:"data"`
+}
+
+// fetchPinEnvelope reads one pin's full envelope via /pin/<id> (contentBody is
+// always populated there, unlike the list endpoint).
+func (l *L2) fetchPinEnvelope(ctx context.Context, pinID string) (*pinEnvelope, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.manapi+"/pin/"+pinID, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	var env pinEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("pin %s: decode %q: %w", pinID, truncate(string(body), 120), err)
+	}
+	return &env, nil
 }
 
 func (l *L2) snapshotCursorsLocked() map[string]string {
@@ -606,9 +670,13 @@ func (l *L2) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	l.mu.Lock()
 	total := len(l.events)
+	skipped := l.lastSyncSkipped
+	if skipped == nil {
+		skipped = []map[string]any{}
+	}
 	l.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"lastCursor": l.Cursors(), "applied": true, "events": total,
+		"lastCursor": l.Cursors(), "applied": true, "events": total, "skipped": skipped,
 	})
 }
 
