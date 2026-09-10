@@ -73,7 +73,7 @@ type Entry struct {
 // EditorState is the registry/reputation view of one MetaID.
 type EditorState struct {
 	Status       string  `json:"status"` // active | pending | none
-	Tier         string  `json:"tier"`   // T0 | T0+ | T1 | T2 | "" (unregistered)
+	Tier         *string `json:"tier"`   // T0 | T0+ | T1 | T2; null when unregistered/suspended (reference-view parity, B1)
 	Reputation   float64 `json:"reputation"`
 	ValidRevs    int     `json:"validRevs"`
 	RegisteredAt *int64  `json:"registeredAt"`
@@ -1047,9 +1047,11 @@ func Replay(events []Event, opts Options) *View {
 		case ed.registerH != 0:
 			status = "pending"
 		}
-		tier := ""
+		var tier *string
 		if len(ordered) > 0 {
-			tier = s.tierOf(id, lastHeight)
+			if t := s.tierOf(id, lastHeight); t != "" {
+				tier = &t // null (not "") for unregistered/suspended — reference-view parity (B1)
+			}
 		}
 		view.Editors[id] = &EditorState{
 			Status: status, Tier: tier, Reputation: ed.reputation, ValidRevs: ed.validRevs,
