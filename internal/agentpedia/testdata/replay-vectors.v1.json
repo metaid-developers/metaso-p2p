@@ -1,0 +1,4 @@
+{
+ "note": "superseded filename — the live fixture is agentpedia-replay-vectors.v1.json (same directory). This file only records the rename to avoid stale dual fixtures.",
+ "supersededBy": "agentpedia-replay-vectors.v1.json"
+}
