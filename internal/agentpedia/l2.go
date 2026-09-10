@@ -130,20 +130,42 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 	applied := 0
 	var skipped []map[string]any
 	for _, path := range syncPaths {
-		cursor := l.cursors[path]
-		for {
+		// manapi pins_by_path pages NEWEST-FIRST: page one (empty cursor)
+		// carries the freshest pins and nextCursor walks toward the oldest.
+		// A stored continuation cursor therefore only ever pulls OLDER pins
+		// and new confirmations would never arrive (real-run defect #2,
+		// reader v0.2.2 report). Each sweep thus pulls from the front and
+		// dedupes through seenPins, terminating as soon as the page reaches
+		// known territory.
+		cursor := ""
+		reachedKnown := false
+		pages := 0
+		for !reachedKnown {
+			pages++
+			if pages > 50 { // safety bound: never page without end
+				break
+			}
 			page, err := l.fetchPage(ctx, path, cursor)
 			if err != nil {
 				return l.snapshotCursorsLocked(), err
 			}
+			if len(page.Data.List) == 0 {
+				l.cursors[path] = page.Data.NextCursor
+				break
+			}
 			for _, pin := range page.Data.List {
 				if l.seenPins[pin.ID] {
+					// Newest-first ordering: everything after a known pin is
+					// older and known — this page (and deeper pages) hold no
+					// news. Mempool pins are tracked separately below so a
+					// not-yet-confirmed sighting never counts as known.
+					reachedKnown = true
 					continue
 				}
-				l.seenPins[pin.ID] = true
 				if pin.GenesisHeight < 0 {
-					continue // mempool: visible but not ordered (F6)
+					continue // mempool: visible but not ordered (F6); retried next sweep
 				}
+				l.seenPins[pin.ID] = true
 				payload := decodePayload(pin.ContentBody)
 				if len(payload) == 0 {
 					// The list endpoint omits contentBody for most pins
@@ -167,7 +189,7 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 				})
 				applied++
 			}
-			if page.Data.NextCursor == "" || len(page.Data.List) == 0 {
+			if reachedKnown || page.Data.NextCursor == "" {
 				l.cursors[path] = page.Data.NextCursor
 				break
 			}

@@ -326,3 +326,83 @@ func mustB64(v any) string {
 	raw, _ := json.Marshal(v)
 	return base64.StdEncoding.EncodeToString(raw)
 }
+
+// TestSyncIncrementalFrontPull locks real-run defect #2: manapi pages
+// newest-first, so each sweep must pull from the front and dedupe — a newly
+// confirmed challenge on its OWN path is collected on the next sweep even
+// though its list body is empty (envelope fallback) and any stored
+// continuation cursor would point at older pages.
+func TestSyncIncrementalFrontPull(t *testing.T) {
+	founders := []string{"idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", "idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz"}
+	const hexAB = "abababababababababababababababababababababababababababababababab"
+	genesisPayload := map[string]any{
+		"v": 1.0, "revision": 0.0, "prevConstitution": nil, "proposalPin": nil,
+		"founders": founders, "params": paramsToAny(defaultsForTest()),
+		"algoVersions": map[string]any{"adoption": "adoption-algo-v1", "reputation": "reputation-algo-v1", "arbiterDraw": "arbiter-draw-v1"},
+	}
+	revPayload := map[string]any{
+		"v": 1.0, "type": "create", "lang": "zh", "slug": "metaid", "title": "MetaID",
+		"content": "body", "contentHash": hexAB,
+	}
+	challengePayload := map[string]any{
+		"v": 1.0, "targetRev": "rpin", "reason": "factual", "detail": "incremental front-pull fixture dispute",
+	}
+	revFront := []map[string]any{
+		{"id": "rpin", "genesisHeight": 11, "txIndex": 0, "globalMetaId": founders[0], "contentBody": mustB64(revPayload)},
+	}
+	challengeFront := []map[string]any{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/pin/path/list", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		var list []any
+		switch path {
+		case PathConstitution:
+			list = []any{map[string]any{"id": "gpin", "genesisHeight": 10, "txIndex": 0, "globalMetaId": founders[0], "contentBody": mustB64(genesisPayload)}}
+		case PathRev:
+			list = []any{}
+			for _, pin := range revFront {
+				list = append(list, pin)
+			}
+		case PathChallenge:
+			list = []any{}
+			for _, pin := range challengeFront {
+				list = append(list, pin)
+			}
+		default:
+			list = []any{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 1, "data": map[string]any{"list": list, "nextCursor": "", "total": len(list)}})
+	})
+	mux.HandleFunc("/pin/cpin", func(w http.ResponseWriter, _ *http.Request) {
+		// the challenge rides its own path list with an empty body — the
+		// per-pin envelope read is the recovery channel under test
+		writeJSON(w, http.StatusOK, map[string]any{"code": 1, "data": map[string]any{"contentBody": mustB64(challengePayload)}})
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	l := NewL2(fake.URL)
+	if _, err := l.SyncOnce(context.Background()); err != nil {
+		t.Fatalf("sync #1: %v", err)
+	}
+	if got := len(l.View().Entries); got != 1 {
+		t.Fatalf("after sync #1 entries = %d, want 1", got)
+	}
+
+	// a new challenge confirms on its own path with an empty list body
+	challengeFront = append(challengeFront, map[string]any{
+		"id": "cpin", "genesisHeight": 12, "txIndex": 0, "globalMetaId": founders[1], "contentBody": "",
+	})
+	if _, err := l.SyncOnce(context.Background()); err != nil {
+		t.Fatalf("sync #2: %v", err)
+	}
+
+	view := l.View()
+	en, ok := view.Entries["zh:metaid"]
+	if !ok {
+		t.Fatalf("entry missing after sync #2")
+	}
+	if len(en.Disputed) != 1 || en.Disputed[0] != "rpin" {
+		t.Fatalf("challenge from incremental sweep not applied: disputed = %v", en.Disputed)
+	}
+}
