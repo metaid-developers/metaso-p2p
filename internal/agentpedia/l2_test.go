@@ -406,3 +406,63 @@ func TestSyncIncrementalFrontPull(t *testing.T) {
 		t.Fatalf("challenge from incremental sweep not applied: disputed = %v", en.Disputed)
 	}
 }
+
+// Regression (2026-09-11 production incident): read endpoints hit before the
+// first sync must answer with well-formed responses — never panic, and never
+// leave the mutex locked (the old entry_list unlocked without defer, so a
+// nil-view panic deadlocked every later request for minutes).
+func TestReadEndpointsBeforeFirstSyncAreSafe(t *testing.T) {
+	l2 := NewL2("https://manapi.metaid.io")
+	srv := httptest.NewServer(l2.Handler())
+	defer srv.Close()
+	client := srv.Client()
+
+	getJSON := func(path string, out any) int {
+		resp, err := client.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		if out != nil {
+			if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+				t.Fatalf("GET %s: decode: %v", path, err)
+			}
+		}
+		return resp.StatusCode
+	}
+
+	// Pre-sync: an empty view, not a nil one. entry_list twice proves the
+	// mutex survived call one (the old bug deadlocked call two).
+	var list struct {
+		Total  int              `json:"total"`
+		Items  []map[string]any `json:"items"`
+		Cursor string           `json:"cursor"`
+	}
+	for i := 0; i < 2; i++ {
+		if code := getJSON("/api/agentpedia/entry_list?lang=zh", &list); code != http.StatusOK {
+			t.Fatalf("entry_list call %d: got %d, want 200", i+1, code)
+		}
+		if list.Total != 0 || len(list.Items) != 0 || list.Cursor != "" {
+			t.Fatalf("entry_list call %d: want empty view, got total=%d items=%d cursor=%q", i+1, list.Total, len(list.Items), list.Cursor)
+		}
+	}
+	var entry map[string]any
+	if code := getJSON("/api/agentpedia/entry?lang=zh&slug=nope", &entry); code != http.StatusNotFound {
+		t.Fatalf("entry pre-sync: got %d, want 404", code)
+	}
+	if code := getJSON("/api/agentpedia/backlinks?lang=zh&slug=nope", &map[string]any{}); code != http.StatusOK {
+		t.Fatalf("backlinks pre-sync: got %d, want 200", code)
+	}
+	if code := getJSON("/api/agentpedia/editor?metaid=idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", &map[string]any{}); code != http.StatusNotFound {
+		t.Fatalf("editor pre-sync: got %d, want 404", code)
+	}
+
+	// After a rebuild the same paths serve real data (view invariant intact).
+	l2.Seed(fixtureEvents())
+	if code := getJSON("/api/agentpedia/entry_list?lang=zh", &list); code != http.StatusOK {
+		t.Fatalf("entry_list post-seed: got %d, want 200", code)
+	}
+	if list.Total == 0 {
+		t.Fatalf("entry_list post-seed: want non-empty, got total=0")
+	}
+}

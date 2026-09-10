@@ -44,6 +44,7 @@ type pinMeta struct {
 // NewL2 builds an aggregator against a manapi base URL (e.g. https://manapi.metaid.io).
 func NewL2(manapiBase string) *L2 {
 	return &L2{
+		view:     &View{}, // never-nil invariant: pre-sync queries see an empty view, not a nil pointer
 		pinMeta:  map[string]pinMeta{},
 		contents: map[string]string{},
 		cursors:  map[string]string{},
@@ -603,25 +604,25 @@ func (l *L2) handleEntry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detail)
 }
 
-func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	langFilter := q.Get("lang")
-	sortBy := q.Get("sort")
-	if sortBy == "" {
-		sortBy = "updated"
-	}
+type entryListItem struct {
+	Lang      string `json:"lang"`
+	Slug      string `json:"slug"`
+	EntryKey  string `json:"entryKey"`
+	Head      string `json:"head"`
+	Status    string `json:"status"`
+	Title     string `json:"title,omitempty"`
+	Featured  bool   `json:"featured"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+// entryListItems snapshots the entry list under lock; sorting and cursor paging
+// stay lock-free in the handler. The unlock is deferred so a panic inside the
+// snapshot can never poison the mutex (2026-09-11: entry_list before the first
+// sync panicked and the plain Unlock was skipped, deadlocking later requests).
+func (l *L2) entryListItems(langFilter string) []entryListItem {
 	l.mu.Lock()
-	type item struct {
-		Lang      string `json:"lang"`
-		Slug      string `json:"slug"`
-		EntryKey  string `json:"entryKey"`
-		Head      string `json:"head"`
-		Status    string `json:"status"`
-		Title     string `json:"title,omitempty"`
-		Featured  bool   `json:"featured"`
-		UpdatedAt int64  `json:"updatedAt"`
-	}
-	items := []item{}
+	defer l.mu.Unlock()
+	items := []entryListItem{}
 	for key, en := range l.view.Entries {
 		parts := strings.SplitN(key, ":", 2)
 		if len(parts) != 2 {
@@ -636,9 +637,19 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 			updatedAt = meta.height
 			title = meta.title
 		}
-		items = append(items, item{Lang: parts[0], Slug: parts[1], EntryKey: key, Head: en.Head, Status: en.Status, Title: title, Featured: false, UpdatedAt: updatedAt})
+		items = append(items, entryListItem{Lang: parts[0], Slug: parts[1], EntryKey: key, Head: en.Head, Status: en.Status, Title: title, Featured: false, UpdatedAt: updatedAt})
 	}
-	l.mu.Unlock()
+	return items
+}
+
+func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	langFilter := q.Get("lang")
+	sortBy := q.Get("sort")
+	if sortBy == "" {
+		sortBy = "updated"
+	}
+	items := l.entryListItems(langFilter)
 	if sortBy == "updated" {
 		sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt > items[j].UpdatedAt })
 	} else {
