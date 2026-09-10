@@ -40,7 +40,7 @@ func main() {
 	}
 
 	log.Printf("agentpedia L2 listening on %s (manapi %s)", *addr, *manapi)
-	if err := http.ListenAndServe(*addr, l2.ServeMux()); err != nil {
+	if err := http.ListenAndServe(*addr, l2.Handler()); err != nil {
 		log.Fatal(err)
 	}
 }
