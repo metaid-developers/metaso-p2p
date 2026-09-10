@@ -58,6 +58,26 @@ func (l *L2) Seed(events []Event) {
 	l.rebuildLocked()
 }
 
+// Append injects an incremental batch and rebuilds. This is the cross-path
+// merge contract made explicit (loop blind-spot warning
+// pin://281098079ee3b95382f986f09ed9eae47f8ccdd0bddfc1ee7f92c43611d749bei0):
+// batches arrive in per-path pull order, but the rebuild re-sorts the ENTIRE
+// pooled stream by (genesisHeight, txIndex) before replay, so pull order never
+// leaks into the view — incremental views equal full-replay views.
+func (l *L2) Append(events []Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, events...)
+	l.rebuildLocked()
+}
+
+// View returns the current replay view (shared struct; treat as read-only).
+func (l *L2) View() *View {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.view
+}
+
 func (l *L2) rebuildLocked() {
 	opts := Options{BlocksPerHour: 6, BlocksPerDay: 144}
 	l.view = Replay(l.events, opts)
@@ -265,6 +285,30 @@ func (l *L2) entryDetail(lang, slug string) (map[string]any, bool) {
 		breakdownList = append(breakdownList, editorBreakdownItem{Editor: editor, Revisions: revisions})
 	}
 	sort.Slice(breakdownList, func(i, j int) bool { return breakdownList[i].Editor < breakdownList[j].Editor })
+	// Tier B (AC-F2): lastReviewedRevId — the highest-chain-order rev carrying at
+	// least one recorded review. Deterministically derived from the replay stream
+	// (review pins sorted by chain position); no external queries (E3-5a).
+	type reviewAt struct {
+		rev    string
+		height int64
+		tx     int
+	}
+	var reviews []reviewAt
+	for _, ev := range l.events {
+		if ev.Path != PathReview {
+			continue
+		}
+		rev := str(ev.Payload, "targetRev")
+		if _, exists := en.Versions[rev]; exists {
+			reviews = append(reviews, reviewAt{rev: rev, height: ev.Height, tx: ev.TxIndex})
+		}
+	}
+	sort.Slice(reviews, func(i, j int) bool {
+		if reviews[i].height != reviews[j].height {
+			return reviews[i].height < reviews[j].height
+		}
+		return reviews[i].tx < reviews[j].tx
+	})
 	out := map[string]any{
 		"entryKey":        entryKey,
 		"head":            head,
@@ -276,6 +320,9 @@ func (l *L2) entryDetail(lang, slug string) (map[string]any, bool) {
 		"editorBreakdown": breakdownList,
 		"contests":        en.Contests,
 		"redirect":        en.Redirect,
+	}
+	if len(reviews) > 0 {
+		out["lastReviewedRevId"] = reviews[len(reviews)-1].rev // Tier B: omitted when no review exists
 	}
 	return out, true
 }

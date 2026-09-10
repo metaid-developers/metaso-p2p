@@ -26,6 +26,19 @@ incremental lastCursor".
   only — replay never queries an indexer; Web2 URLs neither count nor block
   writes; the engine performs NO refs consistency validation (dumb-pipe
   contract, locked by vectors).
+- **Cross-path merge (G8 contract, locked by
+  `TestCrossPathMergeIncrementalEqualsFull`)**: the incremental puller fetches
+  the seven paths independently with per-path lastCursors, but every batch is
+  pooled and the WHOLE stream is re-sorted by (genesisHeight, txIndex) before
+  replay — pull order never leaks into the view. Incremental views equal
+  full-replay views even when pull order contradicts chain order (e.g. a
+  challenge pulled after the ruling referencing it). Pins sharing the same
+  (genesisHeight, txIndex) fall back to arrival order; the spec's own ordering
+  key ends at txIndex, so this residual is spec-bounded and documented.
+- **lastReviewedRevId (Tier B, AC-F2)**: entry detail reports the
+  highest-chain-order rev carrying at least one recorded review — derived
+  deterministically from the review pins' chain positions, omitted when no
+  review exists. `head.pin` remains the unique headRevId.
 
 ## Layout
 
