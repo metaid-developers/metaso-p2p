@@ -33,9 +33,11 @@ type L2 struct {
 }
 
 type pinMeta struct {
-	height int64
-	sender string
-	path   string
+	height  int64
+	txIndex int
+	sender  string
+	path    string
+	title   string
 }
 
 // NewL2 builds an aggregator against a manapi base URL (e.g. https://manapi.metaid.io).
@@ -84,12 +86,16 @@ func (l *L2) rebuildLocked() {
 	l.pinMeta = map[string]pinMeta{}
 	l.contents = map[string]string{}
 	for _, ev := range l.events {
-		l.pinMeta[ev.Pin] = pinMeta{height: ev.Height, sender: ev.Sender, path: ev.Path}
+		meta := pinMeta{height: ev.Height, txIndex: ev.TxIndex, sender: ev.Sender, path: ev.Path}
 		if ev.Path == PathRev {
+			if title, ok := ev.Payload["title"].(string); ok {
+				meta.title = title
+			}
 			if c, ok := ev.Payload["content"].(string); ok && c != "" {
 				l.contents[ev.Pin] = c
 			}
 		}
+		l.pinMeta[ev.Pin] = meta
 	}
 }
 
@@ -224,10 +230,14 @@ type headInfo struct {
 }
 
 type historyItem struct {
-	Pin    string `json:"pin"`
-	Author string `json:"author"`
-	Height int64  `json:"height"`
-	Type   string `json:"type"`
+	Pin       string `json:"pin"`
+	Author    string `json:"author"`
+	Height    int64  `json:"height"`
+	TxIndex   int    `json:"txIndex"`
+	Type      string `json:"type"`
+	ParentRev string `json:"parentRev,omitempty"` // AC-F1: history is a DAG — parent edges are load-bearing
+	BasedOn   string `json:"basedOn,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type editorBreakdownItem struct {
@@ -268,14 +278,20 @@ func (l *L2) entryDetail(lang, slug string) (map[string]any, bool) {
 	breakdown := map[string]int{}
 	for _, pin := range en.History {
 		author := ""
+		ver := en.Versions[pin]
 		if v, ok := en.Versions[pin]; ok {
 			author = v.Author
 		}
 		height := int64(0)
+		txIndex := 0
 		if meta, ok := l.pinMeta[pin]; ok {
 			height = meta.height
+			txIndex = meta.txIndex
 		}
-		history = append(history, historyItem{Pin: pin, Author: author, Height: height, Type: revType(l.events, pin)})
+		history = append(history, historyItem{
+			Pin: pin, Author: author, Height: height, TxIndex: txIndex,
+			Type: revType(l.events, pin), ParentRev: ver.ParentRev, BasedOn: ver.BasedOn, Summary: ver.Summary,
+		})
 		if author != "" {
 			breakdown[author]++
 		}
@@ -389,11 +405,95 @@ func (l *L2) ServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/agentpedia/entry", l.handleEntry)
 	mux.HandleFunc("/api/agentpedia/entry_list", l.handleEntryList)
 	mux.HandleFunc("/api/agentpedia/backlinks", l.handleBacklinks)
+	mux.HandleFunc("/api/agentpedia/editor", l.handleEditor)
 	mux.HandleFunc("/api/agentpedia/sync", l.handleSync)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	return mux
+}
+
+// Handler wraps the mux with permissive CORS so the on-chain reader MetaApp
+// (browser origin) can fetch the L2 endpoints directly — the reader is
+// read-only, so "*" exposes nothing.
+func (l *L2) Handler() http.Handler {
+	mux := l.ServeMux()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// editorDetail assembles the editor profile view (second deliverable §4.1
+// "GET editor"): registry state from the replay view, recent revs and
+// endorsement list derived deterministically from the pooled stream.
+func (l *L2) editorDetail(metaid string) (map[string]any, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ed, ok := l.view.Editors[metaid]
+	if !ok {
+		return nil, false
+	}
+	type revItem struct {
+		Pin    string `json:"pin"`
+		Height int64  `json:"height"`
+		Type   string `json:"type"`
+	}
+	recent := []revItem{}
+	endorsedBy := []string{}
+	for _, ev := range l.events {
+		if ev.Sender == metaid && ev.Path == PathRev {
+			evt, _ := ev.Payload["type"].(string)
+			recent = append(recent, revItem{Pin: ev.Pin, Height: ev.Height, Type: evt})
+		}
+		if ev.Path == PathEditor {
+			if action, _ := ev.Payload["action"].(string); action == "endorse" && str(ev.Payload, "editor") == metaid {
+				endorsedBy = append(endorsedBy, ev.Sender)
+			}
+		}
+	}
+	sort.Slice(recent, func(i, j int) bool {
+		if recent[i].Height != recent[j].Height {
+			return recent[i].Height > recent[j].Height
+		}
+		return recent[i].Pin < recent[j].Pin
+	})
+	if len(recent) > 10 {
+		recent = recent[:10]
+	}
+	out := map[string]any{
+		"metaid":       metaid,
+		"status":       ed.Status,
+		"tier":         ed.Tier,
+		"reputation":   ed.Reputation,
+		"validRevs":    ed.ValidRevs,
+		"registeredAt": ed.RegisteredAt,
+		"revoked":      ed.Revoked,
+		"banned":       ed.Banned,
+		"recentRevs":   recent,
+		"endorsedBy":   endorsedBy,
+	}
+	return out, true
+}
+
+func (l *L2) handleEditor(w http.ResponseWriter, r *http.Request) {
+	metaid := r.URL.Query().Get("metaid")
+	if metaid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "metaid is required"})
+		return
+	}
+	detail, ok := l.editorDetail(metaid)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "editor not found", "metaid": metaid})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -431,6 +531,8 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 		EntryKey  string `json:"entryKey"`
 		Head      string `json:"head"`
 		Status    string `json:"status"`
+		Title     string `json:"title,omitempty"`
+		Featured  bool   `json:"featured"`
 		UpdatedAt int64  `json:"updatedAt"`
 	}
 	items := []item{}
@@ -443,10 +545,12 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		updatedAt := int64(0)
+		title := ""
 		if meta, ok := l.pinMeta[en.Head]; ok {
 			updatedAt = meta.height
+			title = meta.title
 		}
-		items = append(items, item{Lang: parts[0], Slug: parts[1], EntryKey: key, Head: en.Head, Status: en.Status, UpdatedAt: updatedAt})
+		items = append(items, item{Lang: parts[0], Slug: parts[1], EntryKey: key, Head: en.Head, Status: en.Status, Title: title, Featured: false, UpdatedAt: updatedAt})
 	}
 	l.mu.Unlock()
 	if sortBy == "updated" {

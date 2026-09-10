@@ -41,6 +41,8 @@ type Version struct {
 	ContentHash  string `json:"contentHash,omitempty"`
 	Author       string `json:"author,omitempty"`
 	ParentRev    string `json:"parentRev,omitempty"`
+	BasedOn      string `json:"basedOn,omitempty"`
+	Summary      string `json:"summary,omitempty"`
 	EntryKey     string `json:"entryKey,omitempty"`
 	EquivalentOf string `json:"equivalentOf,omitempty"`
 }
@@ -781,7 +783,8 @@ func (s *replayState) applyRev(ev Event, h int64) {
 		en.head = ev.Pin
 		en.history = append(en.history, ev.Pin)
 		contentHash, _ := payload["contentHash"].(string)
-		en.versions[ev.Pin] = Version{ContentHash: contentHash, Author: ev.Sender, EntryKey: entryKey}
+		summary, _ := payload["summary"].(string)
+		en.versions[ev.Pin] = Version{ContentHash: contentHash, Author: ev.Sender, Summary: summary, EntryKey: entryKey}
 		s.countRev(ev, en, h)
 	case "edit":
 		if en.head == "" {
@@ -795,9 +798,10 @@ func (s *replayState) applyRev(ev Event, h int64) {
 		}
 		parentRev := str(payload, "parentRev")
 		contentHash := str(payload, "contentHash")
+		summary, _ := payload["summary"].(string)
 		en.head = ev.Pin
 		en.history = append(en.history, ev.Pin)
-		en.versions[ev.Pin] = Version{ContentHash: contentHash, Author: ev.Sender, ParentRev: parentRev, EntryKey: entryKey}
+		en.versions[ev.Pin] = Version{ContentHash: contentHash, Author: ev.Sender, ParentRev: parentRev, BasedOn: basedOn, Summary: summary, EntryKey: entryKey}
 		s.countRev(ev, en, h)
 	case "revert":
 		if en.head == "" {

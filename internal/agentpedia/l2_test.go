@@ -178,3 +178,78 @@ func TestL2Endpoints(t *testing.T) {
 		t.Fatalf("sync lastCursor missing: %v", sync)
 	}
 }
+
+func TestEditorEndpointAndContractDeltas(t *testing.T) {
+	l := NewL2("http://manapi.invalid")
+	l.Seed(fixtureEvents())
+	handler := l.Handler() // CORS-wrapped handler
+	mux := l.ServeMux()
+
+	// editor endpoint: registry view + derived recentRevs/endorsedBy
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/editor?metaid=idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("editor status %d: %s", rec.Code, rec.Body.String())
+	}
+	var ed map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &ed); err != nil {
+		t.Fatalf("decode editor: %v", err)
+	}
+	if ed["status"] != "active" || ed["tier"] != "T2" {
+		t.Fatalf("editor = %v", ed)
+	}
+	if len(ed["recentRevs"].([]any)) != 2 {
+		t.Fatalf("recentRevs = %v", ed["recentRevs"])
+	}
+
+	// 404 for unknown editor
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/editor?metaid=idq1missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown editor status %d", rec.Code)
+	}
+
+	// contract deltas: history nodes carry parentRev/txIndex; entry_list carries title/featured
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/entry?lang=zh&slug=metaid", nil))
+	var detail map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	history := detail["history"].([]any)
+	last := history[len(history)-1].(map[string]any)
+	if last["parentRev"] != "t1" || last["basedOn"] != "t1" {
+		t.Fatalf("history node edges = %v", last)
+	}
+	if _, ok := last["txIndex"]; !ok {
+		t.Fatalf("history node missing txIndex: %v", last)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/entry_list?lang=zh", nil))
+	var list map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, raw := range list["items"].([]any) {
+		item := raw.(map[string]any)
+		if _, ok := item["title"]; !ok {
+			t.Fatalf("entry_list item missing title: %v", item)
+		}
+		if _, ok := item["featured"]; !ok {
+			t.Fatalf("entry_list item missing featured: %v", item)
+		}
+	}
+
+	// CORS: Handler() sets Access-Control-Allow-Origin on every endpoint
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("CORS header missing: %v", rec.Header())
+	}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodOptions, "/api/agentpedia/entry", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("CORS preflight status %d", rec.Code)
+	}
+}
