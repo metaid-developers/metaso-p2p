@@ -642,6 +642,20 @@ func (l *L2) entryListItems(langFilter string) []entryListItem {
 	return items
 }
 
+// graveyardSummary aggregates replay rejection reasons so silent view gaps
+// (e.g. a new editor's whole batch rejected t0-no-rev during the cold-start
+// window) are visible to clients instead of discoverable only by hand-pulling
+// the stream (2026-09-11 production verification round).
+func (l *L2) graveyardSummary() map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	reasons := map[string]int{}
+	for _, g := range l.view.Graveyard {
+		reasons[g.Reason]++
+	}
+	return map[string]any{"total": len(l.view.Graveyard), "reasons": reasons}
+}
+
 func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	langFilter := q.Get("lang")
@@ -650,6 +664,7 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 		sortBy = "updated"
 	}
 	items := l.entryListItems(langFilter)
+	graveyard := l.graveyardSummary()
 	if sortBy == "updated" {
 		sort.Slice(items, func(i, j int) bool { return items[i].UpdatedAt > items[j].UpdatedAt })
 	} else {
@@ -675,6 +690,7 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total": len(items), "items": items[offset:end], "cursor": nextCursor, "sort": sortBy,
+		"graveyard": graveyard,
 	})
 }
 

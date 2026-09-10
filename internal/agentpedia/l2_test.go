@@ -466,3 +466,48 @@ func TestReadEndpointsBeforeFirstSyncAreSafe(t *testing.T) {
 		t.Fatalf("entry_list post-seed: want non-empty, got total=0")
 	}
 }
+
+// The entry_list contract exposes a graveyard summary so replay-rejected
+// events (e.g. a whole batch rejected t0-no-rev during a new editor's
+// cold-start window) are visible to clients instead of showing up only as a
+// mysteriously small total (2026-09-11 production verification round).
+func TestEntryListExposesGraveyardSummary(t *testing.T) {
+	l2 := NewL2("https://manapi.metaid.io")
+	evts := append(fixtureEvents(), Event{
+		Pin: "ghost", Path: PathRev, Sender: "idq1ghost0000000000000000000000000000000000", Height: 50, TxIndex: 0,
+		Payload: map[string]any{
+			"v": 1.0, "type": "create", "lang": "zh", "slug": "ghost", "title": "Ghost",
+			"content": "x", "contentHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		},
+	})
+	l2.Seed(evts) // the ghost rev from an unregistered sender is replay-rejected
+
+	srv := httptest.NewServer(l2.Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/api/agentpedia/entry_list?lang=zh")
+	if err != nil {
+		t.Fatalf("GET entry_list: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("entry_list: got %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Total     int            `json:"total"`
+		Graveyard map[string]any `json:"graveyard"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total == 0 {
+		t.Fatalf("want fixture entries in the list, got total=0")
+	}
+	gy, _ := body.Graveyard["total"].(float64)
+	if gy != 1 {
+		t.Fatalf("graveyard total = %v, want 1", body.Graveyard["total"])
+	}
+	reasons, _ := body.Graveyard["reasons"].(map[string]any)
+	if reasons["unregistered"].(float64) != 1 {
+		t.Fatalf("graveyard reasons = %v, want unregistered=1", reasons)
+	}
+}
