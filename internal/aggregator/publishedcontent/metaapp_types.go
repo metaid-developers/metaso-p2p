@@ -30,6 +30,7 @@ type MetaAppItem struct {
 	Version    string   `json:"version"`
 	Content    string   `json:"content"`
 	IndexFile  string   `json:"indexFile"`
+	Prompt     string   `json:"prompt"`
 	ForkedFrom string   `json:"forkedFrom"`
 	Disabled   bool     `json:"disabled"`
 
@@ -47,7 +48,6 @@ type MetaAppItem struct {
 // need fields outside the normalized set.
 type MetaAppDetail struct {
 	MetaAppItem
-	Prompt  string         `json:"prompt"`
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
@@ -98,6 +98,7 @@ func metaAppItemFromRecord(rec *Record) MetaAppItem {
 		Version:    payloadString(payload, "version"),
 		Content:    payloadString(payload, "content"),
 		IndexFile:  indexFile,
+		Prompt:     payloadString(payload, "prompt"),
 		ForkedFrom: payloadString(payload, "forkedfrom", "forkedFrom"),
 		Disabled:   payloadBool(payload, "disabled"),
 
@@ -116,7 +117,6 @@ func metaAppDetailFromRecord(rec *Record) *MetaAppDetail {
 	}
 	return &MetaAppDetail{
 		MetaAppItem: metaAppItemFromRecord(rec),
-		Prompt:      payloadString(rec.PayloadJSON, "prompt"),
 		Payload:     rec.PayloadJSON,
 	}
 }
