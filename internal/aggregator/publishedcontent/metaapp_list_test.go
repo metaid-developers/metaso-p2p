@@ -198,14 +198,14 @@ func TestMetaAppListModifyCollapsesToLatest(t *testing.T) {
 	agg, store := setupTestAggregator(t)
 	defer store.Close()
 
-	mustProcessMetaApp(t, agg, "app-1:i0", 1000, `{"title":"Old Title"}`)
+	mustProcessMetaApp(t, agg, "app-1:i0", 1000, `{"title":"Old Title","prompt":"old prompt"}`)
 	mustProcess(t, agg, makeContentPin(contentPinOpts{
 		PinId:        "app-1-b:i0",
 		Path:         PathMetaApp + "@app-1:i0",
 		Operation:    OperationModify,
 		Timestamp:    2000,
 		ContentType:  "application/json",
-		ContentBody:  []byte(`{"title":"New Title"}`),
+		ContentBody:  []byte(`{"title":"New Title","prompt":"new prompt"}`),
 		GlobalMetaId: "gid-app-1:i0",
 		MetaId:       "meta-app-1:i0",
 		Address:      "addr-app-1:i0",
@@ -224,6 +224,9 @@ func TestMetaAppListModifyCollapsesToLatest(t *testing.T) {
 	}
 	if item.Title != "New Title" || item.UpdatedAt != 2000 || item.CreatedAt != 1000 {
 		t.Fatalf("payload/timestamps: %+v", item)
+	}
+	if item.Prompt != "new prompt" {
+		t.Fatalf("Prompt should come from the latest version: %+v", item)
 	}
 }
 
@@ -255,6 +258,49 @@ func TestMetaAppListCursorPagination(t *testing.T) {
 
 	if _, err := agg.ListMetaApps(MetaAppListParams{Cursor: "!!!bad"}); err == nil || !strings.Contains(err.Error(), "invalid cursor") {
 		t.Fatalf("bad cursor should error: %v", err)
+	}
+}
+
+func TestMetaAppListAndForksExposePrompt(t *testing.T) {
+	agg, store := setupTestAggregator(t)
+	defer store.Close()
+
+	mustProcessMetaApp(t, agg, "parent:i0", 1000, `{"title":"Parent"}`)
+	mustProcessMetaApp(t, agg, "child:i0", 2000, `{"title":"Child","forkedfrom":"parent:i0","prompt":"a tiny game"}`)
+	mustProcessMetaApp(t, agg, "bare:i0", 3000, `{"title":"Bare"}`)
+
+	// List items carry prompt; a missing payload key surfaces as empty string.
+	result, err := agg.ListMetaApps(MetaAppListParams{})
+	if err != nil {
+		t.Fatalf("ListMetaApps: %v", err)
+	}
+	wantPrompt := map[string]string{"bare:i0": "", "child:i0": "a tiny game", "parent:i0": ""}
+	if len(result.Items) != len(wantPrompt) {
+		t.Fatalf("len: got %d want %d (%+v)", len(result.Items), len(wantPrompt), result.Items)
+	}
+	for _, item := range result.Items {
+		if item.Prompt != wantPrompt[item.PinID] {
+			t.Fatalf("item %s Prompt: got %q want %q", item.PinID, item.Prompt, wantPrompt[item.PinID])
+		}
+	}
+
+	// Forks items carry prompt too.
+	forks, found, err := agg.ListMetaAppForks("parent:i0", "", 20, "")
+	if err != nil || !found {
+		t.Fatalf("ListMetaAppForks: %v %v", err, found)
+	}
+	if len(forks.Items) != 1 || forks.Items[0].PinID != "child:i0" || forks.Items[0].Prompt != "a tiny game" {
+		t.Fatalf("fork prompt: %+v", forks.Items)
+	}
+
+	// Keyword corpus still excludes prompt: a token present only in the
+	// prompt must not recall the app.
+	result, err = agg.ListMetaApps(MetaAppListParams{Keyword: "tiny"})
+	if err != nil {
+		t.Fatalf("ListMetaApps(keyword): %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("prompt-only token should not match keyword search: %+v", result.Items)
 	}
 }
 

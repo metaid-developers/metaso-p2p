@@ -8,8 +8,9 @@
 - 响应封装：`{code, data, message, processingTime}`，成功 `code=0`；业务错误 `40000`（参数/游标非法）、`40400`（不存在）、`50000`（内部错误）；HTTP 恒 200
 - 三个接口：
   - `GET /api/metaapp/list` — 列表 / 检索（核心）
-  - `GET /api/metaapp/detail/:pinId` — 完整 manifest（含 `prompt` 与原始 `payload`）
+  - `GET /api/metaapp/detail/:pinId` — 完整 manifest（在 item 字段外另含原始 `payload`）
   - `GET /api/metaapp/forks/:pinId` — 直接子代派生列表
+- 三个接口的 item 均带 `prompt`（发布时写入 payload 的 AI 提示词，缺失为空串，2026-09-13 起）。安装链路可直接把 `item.prompt` 落到本地 `ai-prompt` 键（IDBots 已安装卡片的 AI Prompt 展示/复制即读它），无需再按条调 detail；`keyword` 检索语料仍不含 `prompt`。
 - 打开应用：用返回的 `pinId` 构造 `metaapp://<pinId>`，走宿主现有 MetaApp 打开链路（IDBots 内即 `bot_browser_open_uri`）；`content`（`metafile://....zip`）+ `indexFile` 也可自行下载渲染。**`pinId` 是版本链的稳定根 pin（source pin）**——MetaID 的 modify/revoke 锚定在原始 pin 上，与 Bot Homepage v3 的 `pinId` 语义一致；`currentPinId` 是最新版本 pin，可用于检测应用是否有新版本。从未修改的应用两者相同。
 - 时间字段为 unix 秒；游标分页用返回的 `nextCursor` 原样回传
 
@@ -60,7 +61,7 @@ tool(
 
 handler 侧建议：
 
-- **裁剪后再喂回 LLM**。完整 item 字段较多，工具返回时建议每条只保留 `pinId / title / appName / intro / tags / runtime / version / updatedAt / publisherName / publisherAvatarId / forkedFrom`（展示发布者时用名字而非 globalMetaId，人类可读性更好），纯文本或紧凑 JSON 列表（仿 `formatBotBrowserTabs` 风格），控制上下文体积。
+- **裁剪后再喂回 LLM**。完整 item 字段较多，工具返回时建议每条只保留 `pinId / title / appName / intro / tags / runtime / version / updatedAt / publisherName / publisherAvatarId / forkedFrom`（展示发布者时用名字而非 globalMetaId，人类可读性更好），纯文本或紧凑 JSON 列表（仿 `formatBotBrowserTabs` 风格），控制上下文体积。`prompt` 太长且噪声大，不要回喂 LLM；只在安装链路持久化到本地 `ai-prompt`。
 - **空结果降级**：`keyword` 无结果时，去掉分词中较弱的一个重试一次；仍无则回报「链上暂无匹配应用」，不要编造。
 - **路由提示词**：在 system prompt 加一条——「用户想找/发现某类应用（而非打开已知应用）时，先调 `search_metaapps`；从候选中选一个后用 `bot_browser_open_uri` 以 `metaapp://<pinId>` 打开；用户问某应用的派生/二创时用 `search_metaapps` 的 forks 模式」。
 - 「最近 N 天」类意图由工具实现把 `sinceDays` 换算成 `since = now - N*86400`。

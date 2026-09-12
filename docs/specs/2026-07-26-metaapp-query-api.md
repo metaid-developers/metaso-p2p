@@ -13,7 +13,7 @@ The API style follows the metaso-p2p house convention: a `{code, data, message, 
 - The aggregator only does declarative data aggregation: indexing, folding, field normalization, filtering, sorting. It makes no subjective judgments such as "is this app good/safe".
 - Semantic understanding lives in the host LLM layer: the aggregator provides structured retrieval by keyword/tag/time/publisher/derivation; "which app best matches the intent" is decided by the host LLM from the candidates.
 - The default list only returns latest, non-revoked, `disabled != true` apps; this is a filter over on-chain declared state.
-- The search corpus is `title/appName/intro/tags` and **excludes `prompt`** (AI generation prompts are too long and noisy; only returned by detail).
+- The search corpus is `title/appName/intro/tags` and **excludes `prompt`** (AI generation prompts are too long and noisy for keyword matching). The `prompt` field itself is returned in every list/forks/detail item as a normalized field (empty string when the payload has none) — revision 2026-09-13, so IDBots can persist it as the installed app's `ai-prompt` at install time without a per-item detail call; the search corpus is unchanged.
 - No vector/semantic search in v1. If keyword recall becomes insufficient as the app count grows, extend later (direction: embeddings via a configurable external HTTP service, vectors in a Pebble namespace, in-memory cosine similarity, as an optional module with no heavy external dependencies).
 
 ## API 1: MetaApp List / Search
@@ -70,6 +70,7 @@ The global MetaApp feed and intent search. With no filters it is the "latest app
         "version": "1.0.0",
         "content": "metafile://<pinId>.zip",
         "indexFile": "index.html",
+        "prompt": "You are an AI...",
         "forkedFrom": "",
         "disabled": false,
         "publisherGlobalMetaId": "...",
@@ -90,6 +91,7 @@ The global MetaApp feed and intent search. With no filters it is the "latest app
 - `pinId` is the version chain's **stable root pin** (source pin, identical to `sourcePinId`) — MetaID modify/revoke operations anchor to the original pin, so hosts should build open URLs as `metaapp://<pinId>` (the original pin). This matches the `pinId` semantics of Bot Homepage v3 section items. `currentPinId` is the latest version pin and can be used to detect app updates; for never-modified apps all three are equal.
 - List-item payload fields (title/intro/tags, etc.) come from the version chain's **latest** record, combined with the stable pinId.
 - `icon/coverImg/content` are returned as raw `metafile://` URIs; callers resolve and download them via the existing metafile chain.
+- `prompt` is the AI generation prompt written into the payload at publish time; returned in every item (empty string when absent) so install flows can persist it without a detail call. It stays outside the keyword corpus.
 - `publisherName` / `publisherAvatarId` come from userinfo profile enrichment (avatar pinId, downloadable via the metafile chain); both fields are absent when the publisher has no profile.
 - `createdAt/updatedAt` are unix seconds.
 
@@ -111,7 +113,7 @@ Fetch the complete manifest before opening an app. `:pinId` accepts any version 
 
 ### Response
 
-`data` is a superset of the list-item fields, plus:
+`data` is a superset of the list-item fields, plus the raw payload:
 
 ```json
 {
@@ -119,8 +121,7 @@ Fetch the complete manifest before opening an app. `:pinId` accepts any version 
   "message": "ok",
   "data": {
     "pinId": "...",
-    "...": "(all list-item fields)",
-    "prompt": "You are an AI...",
+    "...": "(all list-item fields, including prompt)",
     "payload": { "(raw on-chain payload JSON)" }
   }
 }
@@ -157,7 +158,7 @@ On-chain payload field names come in several spellings; the aggregator normalize
 | `appName` | `appName` → `appname` |
 | `intro` | `intro` → `description` → `summary` |
 | `tags` | `tags` (array elements stringified) |
-| `icon` / `coverImg` / `runtime` / `version` / `content` | same-name key |
+| `icon` / `coverImg` / `runtime` / `version` / `content` / `prompt` | same-name key |
 | `indexFile` | `indexFile`, defaults to `index.html` |
 | `forkedFrom` | `forkedfrom` → `forkedFrom` |
 | `disabled` | `disabled` (tolerates `true` and `"true"`) |
@@ -181,3 +182,8 @@ Capability searches like "a MetaApp that can display simplebuzz" or "an app that
 - URL rewriting for assets such as icon/cover (returned as raw `metafile://`).
 - Recursing the full derivation tree in forks.
 - New configuration items.
+
+## Revision History
+
+- 2026-07-26: initial spec; `prompt` returned by detail only.
+- 2026-09-13: `prompt` promoted to a normalized item field returned by list/forks/detail (IDBots community install flow persists it as `ai-prompt`; previously silent loss for installs made through the aggregated list). Keyword corpus still excludes `prompt`.
