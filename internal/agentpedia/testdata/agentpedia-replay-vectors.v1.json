@@ -4,7 +4,7 @@
     "version": "v1.0",
     "algoVersion": "adoption-algo-v1",
     "pipelineCount": 25,
-    "supplementaryCount": 12,
+    "supplementaryCount": 16,
     "compatibilityStatement": "25/25 pipeline vectors must pass to claim adoption-algo-v1 compatibility (v0.1.6 §2).",
     "sources": {
       "specLayers": [
@@ -37,6 +37,16 @@
           "layer": "v0.1.6",
           "pin": "pin://1f88cf0cf41a2974edc5df7231be908a66a0ba729bbb6b1fc1ed95c57c7db2c7i0",
           "role": "V25 promoted to mandatory (24->25); supersedes v0.1 §10.3 alternation wording"
+        },
+        {
+          "layer": "errata E-4 (endorse target)",
+          "pin": "pin://5b9f218085c0d421f84c3145e6900797f755f8663dbe5ba293d96ca5fb946dbci0",
+          "role": "deterministic endorse target selection (R1/R2); locked by S13-S15"
+        },
+        {
+          "layer": "errata E-5 (entryKey attribution)",
+          "pin": "pin://e0de20f3b73a88dd61b289622f63f74f34d5e08de99a3f29924f81094a0704aci0",
+          "role": "write-time entryKey attribution + lexicographic fallback (A1/A2); locked by S16"
         },
         {
           "layer": "fact card F1-F9",
@@ -85,7 +95,8 @@
       "Reputation deltas (confirm-goodfaith +1 etc.) are engine constants pending reputation-algo-v1 pinning; V24 exercises direction only.",
       "Event payloads here are minimal engine-facing shapes with synthetic ids; wire-level draft-07 validation against the 6-layer schema composite is G1's job (ajv) on tool-generated payloads.",
       "Supplementary vectors S1-S12 are NOT part of the 25/25 pipeline: S1-S6 cover AC-C2 exemption boundaries and AC-D6 protected conjunction; S7-S12 lock the coverage gaps requested by the M1 report (C3 cluster merging via clusterAliases injection, C8 insufficient stake, C10 forged baselineRev, D2 PoC timeout, D4 self-appointment reverse cases, D5 bootstrap-window expiry + E-2 basic-right persistence).",
-      "E-2 conformance (pin://892ce8b2889cf20d2901dc955182b0674c5c7c85eccc055230bef205f377cca3i0): tier output is T0/T0+/T1/T2; T0 forbids revs (graveyard reason t0-no-rev), T0+ carries the basic edit right; V20/V21/S6/S12 assert the tier states."
+      "E-2 conformance (pin://892ce8b2889cf20d2901dc955182b0674c5c7c85eccc055230bef205f377cca3i0): tier output is T0/T0+/T1/T2; T0 forbids revs (graveyard reason t0-no-rev), T0+ carries the basic edit right; V20/V21/S6/S12 assert the tier states.",
+      "S13-S16 were added with the E-4/E-5 implementation batch (2026-09-12): S13 = a declared registerPin selects the later of two stakeOk registers; S14 = fallback selects the earliest register on normal order; S15 = fallback selects the earliest REGISTER when challenge order contradicts it (reversed cycles, regB@120); S16 = write-time entryKey under a transfer-slug alias incl. the revert write-path return (head=rv_x::eq), with alpha created first to distinguish insertion order from write-time attribution."
     ],
     "determinismDeclarations": [
       "clusterAliases: production replay default = EMPTY set; alias tables are TEST-INJECTION ONLY (scenario-level option, same class as frozenArbiterOverrides). Production replay is a pure function of the pin stream — same stream, same view (loop ruling pin://63a2164522c53d6e81908865c3fdc4b6dcd58a9899e8bf42b3fa9d847b693846i0). An on-chain carrier for cluster tables is a v1.x open question (X11 forbids new MVP event types).",
@@ -4886,6 +4897,799 @@
       ],
       "expect": {
         "editors.E1.tier": "T0+"
+      }
+    },
+    {
+      "id": "S13",
+      "title": "E-4 R1: two stakeOk registers for one applicant; endorsements follow the declared registerPin (the later register)",
+      "source": "pin://5b9f218085c0d421f84c3145e6900797f755f8663dbe5ba293d96ca5fb946dbci0 R1",
+      "events": [
+        {
+          "pin": "c0",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "base",
+            "title": "Base",
+            "contentHash": "h1"
+          }
+        },
+        {
+          "pin": "r1ch",
+          "path": "editor",
+          "sender": "E1",
+          "height": 20,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "r1rv",
+          "path": "review",
+          "sender": "X",
+          "height": 21,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "r1poc",
+          "path": "editor",
+          "sender": "X",
+          "height": 22,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "r1ch",
+            "responsePin": "r1rv"
+          }
+        },
+        {
+          "pin": "r1reg",
+          "path": "editor",
+          "sender": "X",
+          "height": 23,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "r1ch",
+            "responsePin": "r1rv",
+            "stake": {
+              "txid": "aa",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "r2ch",
+          "path": "editor",
+          "sender": "E1",
+          "height": 30,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "r2rv",
+          "path": "review",
+          "sender": "X",
+          "height": 31,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "r2poc",
+          "path": "editor",
+          "sender": "X",
+          "height": 32,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "r2ch",
+            "responsePin": "r2rv"
+          }
+        },
+        {
+          "pin": "r2reg",
+          "path": "editor",
+          "sender": "X",
+          "height": 33,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "r2ch",
+            "responsePin": "r2rv",
+            "stake": {
+              "txid": "bb",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "en1",
+          "path": "editor",
+          "sender": "E1",
+          "height": 40,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X",
+            "registerPin": "r2reg"
+          }
+        },
+        {
+          "pin": "en2",
+          "path": "editor",
+          "sender": "E2",
+          "height": 41,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X",
+            "registerPin": "r2reg"
+          }
+        },
+        {
+          "pin": "en3",
+          "path": "editor",
+          "sender": "E3",
+          "height": 42,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X",
+            "registerPin": "r2reg"
+          }
+        },
+        {
+          "pin": "en4",
+          "path": "editor",
+          "sender": "E4",
+          "height": 43,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X",
+            "registerPin": "r2reg"
+          }
+        }
+      ],
+      "expect": {
+        "editors.X.status": "active",
+        "editors.X.registeredAt": 33
+      }
+    },
+    {
+      "id": "S14",
+      "title": "E-4 R2 fallback: registerPin absent; target is the applicant's earliest stakeOk register",
+      "source": "pin://5b9f218085c0d421f84c3145e6900797f755f8663dbe5ba293d96ca5fb946dbci0 R2",
+      "events": [
+        {
+          "pin": "c0",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "base",
+            "title": "Base",
+            "contentHash": "h1"
+          }
+        },
+        {
+          "pin": "r1ch",
+          "path": "editor",
+          "sender": "E1",
+          "height": 20,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "r1rv",
+          "path": "review",
+          "sender": "X",
+          "height": 21,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "r1poc",
+          "path": "editor",
+          "sender": "X",
+          "height": 22,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "r1ch",
+            "responsePin": "r1rv"
+          }
+        },
+        {
+          "pin": "r1reg",
+          "path": "editor",
+          "sender": "X",
+          "height": 23,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "r1ch",
+            "responsePin": "r1rv",
+            "stake": {
+              "txid": "aa",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "r2ch",
+          "path": "editor",
+          "sender": "E1",
+          "height": 30,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "r2rv",
+          "path": "review",
+          "sender": "X",
+          "height": 31,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "r2poc",
+          "path": "editor",
+          "sender": "X",
+          "height": 32,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "r2ch",
+            "responsePin": "r2rv"
+          }
+        },
+        {
+          "pin": "r2reg",
+          "path": "editor",
+          "sender": "X",
+          "height": 33,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "r2ch",
+            "responsePin": "r2rv",
+            "stake": {
+              "txid": "bb",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "en1",
+          "path": "editor",
+          "sender": "E1",
+          "height": 40,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en2",
+          "path": "editor",
+          "sender": "E2",
+          "height": 41,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en3",
+          "path": "editor",
+          "sender": "E3",
+          "height": 42,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en4",
+          "path": "editor",
+          "sender": "E4",
+          "height": 43,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        }
+      ],
+      "expect": {
+        "editors.X.status": "active",
+        "editors.X.registeredAt": 23
+      }
+    },
+    {
+      "id": "S15",
+      "title": "E-4 R2 fallback under reversed cycles: earliest REGISTER (regB@120) wins, not the earlier challenge's later register",
+      "source": "pin://5b9f218085c0d421f84c3145e6900797f755f8663dbe5ba293d96ca5fb946dbci0 R2",
+      "events": [
+        {
+          "pin": "c0",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "base",
+            "title": "Base",
+            "contentHash": "h1"
+          }
+        },
+        {
+          "pin": "chA",
+          "path": "editor",
+          "sender": "E1",
+          "height": 100,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "chB",
+          "path": "editor",
+          "sender": "E1",
+          "height": 110,
+          "payload": {
+            "v": 1,
+            "action": "challenge",
+            "editor": "X",
+            "nonce": "0123456789abcdef"
+          }
+        },
+        {
+          "pin": "rvA",
+          "path": "review",
+          "sender": "X",
+          "height": 101,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "rvB",
+          "path": "review",
+          "sender": "X",
+          "height": 111,
+          "payload": {
+            "v": 1,
+            "targetRev": "c0",
+            "score": 4,
+            "dimensions": {
+              "accuracy": 4,
+              "citation": 4,
+              "neutrality": 4
+            }
+          }
+        },
+        {
+          "pin": "pocA",
+          "path": "editor",
+          "sender": "X",
+          "height": 102,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "chA",
+            "responsePin": "rvA"
+          }
+        },
+        {
+          "pin": "pocB",
+          "path": "editor",
+          "sender": "X",
+          "height": 112,
+          "payload": {
+            "v": 1,
+            "action": "poc-response",
+            "editor": "X",
+            "challengePin": "chB",
+            "responsePin": "rvB"
+          }
+        },
+        {
+          "pin": "regB",
+          "path": "editor",
+          "sender": "X",
+          "height": 120,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "chB",
+            "responsePin": "rvB",
+            "stake": {
+              "txid": "bb",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "regA",
+          "path": "editor",
+          "sender": "X",
+          "height": 130,
+          "payload": {
+            "v": 1,
+            "action": "register",
+            "editor": "X",
+            "challengePin": "chA",
+            "responsePin": "rvA",
+            "stake": {
+              "txid": "aa",
+              "amountSat": 100000
+            }
+          }
+        },
+        {
+          "pin": "en1",
+          "path": "editor",
+          "sender": "E1",
+          "height": 200,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en2",
+          "path": "editor",
+          "sender": "E2",
+          "height": 201,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en3",
+          "path": "editor",
+          "sender": "E3",
+          "height": 202,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        },
+        {
+          "pin": "en4",
+          "path": "editor",
+          "sender": "E4",
+          "height": 203,
+          "payload": {
+            "v": 1,
+            "action": "endorse",
+            "editor": "X"
+          }
+        }
+      ],
+      "expect": {
+        "editors.X.status": "active",
+        "editors.X.registeredAt": 120
+      }
+    },
+    {
+      "id": "S16",
+      "title": "E-5 A1+A2: entryKey attribution is write-time; transfer-slug alias cannot swing challenge/proposal attribution; revert write-path returns head=rv_x::eq",
+      "source": "pin://e0de20f3b73a88dd61b289622f63f74f34d5e08de99a3f29924f81094a0704aci0 A1/A2",
+      "events": [
+        {
+          "pin": "c_alpha",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "alpha",
+            "title": "alpha",
+            "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        {
+          "pin": "c_zulu",
+          "path": "rev",
+          "sender": "E1",
+          "height": 11,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "zulu",
+            "title": "zulu",
+            "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "pin": "chx",
+          "path": "challenge",
+          "sender": "E2",
+          "height": 12,
+          "payload": {
+            "v": 1,
+            "targetRev": "c_zulu",
+            "reason": "other",
+            "detail": "e4/e5 lock"
+          }
+        },
+        {
+          "pin": "prop",
+          "path": "ruling",
+          "sender": "E1",
+          "height": 13,
+          "payload": {
+            "v": 1,
+            "action": "proposal",
+            "challengePin": "chx",
+            "seed": "chx",
+            "outcome": "transfer-slug",
+            "params": {
+              "fromEntry": "zh:zulu",
+              "toEntry": "zh:alpha"
+            }
+          }
+        },
+        {
+          "pin": "v0",
+          "path": "ruling",
+          "sender": "A1",
+          "height": 14,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "v1",
+          "path": "ruling",
+          "sender": "A2",
+          "height": 15,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "v2",
+          "path": "ruling",
+          "sender": "A3",
+          "height": 16,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "v3",
+          "path": "ruling",
+          "sender": "A4",
+          "height": 17,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "v4",
+          "path": "ruling",
+          "sender": "A5",
+          "height": 18,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "ch_post",
+          "path": "challenge",
+          "sender": "E2",
+          "height": 40,
+          "payload": {
+            "v": 1,
+            "targetRev": "c_zulu",
+            "reason": "other",
+            "detail": "e4/e5 lock"
+          }
+        },
+        {
+          "pin": "prop2",
+          "path": "ruling",
+          "sender": "E1",
+          "height": 41,
+          "payload": {
+            "v": 1,
+            "action": "proposal",
+            "challengePin": "ch_post",
+            "seed": "ch_post",
+            "outcome": "revert-to",
+            "params": {
+              "revertTo": "c_zulu"
+            }
+          }
+        },
+        {
+          "pin": "w0",
+          "path": "ruling",
+          "sender": "A1",
+          "height": 42,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop2",
+            "approve": true
+          }
+        },
+        {
+          "pin": "w1",
+          "path": "ruling",
+          "sender": "A2",
+          "height": 43,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop2",
+            "approve": true
+          }
+        },
+        {
+          "pin": "w2",
+          "path": "ruling",
+          "sender": "A3",
+          "height": 44,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop2",
+            "approve": true
+          }
+        },
+        {
+          "pin": "w3",
+          "path": "ruling",
+          "sender": "A4",
+          "height": 45,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop2",
+            "approve": true
+          }
+        },
+        {
+          "pin": "w4",
+          "path": "ruling",
+          "sender": "A5",
+          "height": 46,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "prop2",
+            "approve": true
+          }
+        },
+        {
+          "pin": "rv_x",
+          "path": "rev",
+          "sender": "E1",
+          "height": 60,
+          "payload": {
+            "v": 1,
+            "type": "revert",
+            "lang": "zh",
+            "slug": "zulu",
+            "title": "zulu",
+            "revertTo": "prop2::rev",
+            "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "expect": {
+        "proposals.prop.entryKey": "zh:zulu",
+        "proposals.prop2.entryKey": "zh:zulu",
+        "entries.zh:zulu.head": "rv_x::eq",
+        "entries.zh:alpha.head": "rv_x::eq",
+        "graveyard.length": 0
       }
     }
   ]
