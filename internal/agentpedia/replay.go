@@ -163,12 +163,14 @@ type challengeRec struct {
 }
 
 type regChallengeRec struct {
-	applicant  string
-	challenger string
-	h          int64
-	pocOk      bool
-	stakeOk    bool
-	registerH  int64
+	applicant   string
+	challenger  string
+	h           int64
+	pocOk       bool
+	stakeOk     bool
+	registerH   int64
+	registerT   int    // E-4 R2: chain position (txIndex) of the satisfying register
+	registerPin string // E-4 R1: the register event that satisfied this challenge
 }
 
 type proposalRec struct {
@@ -530,17 +532,49 @@ func (s *replayState) applyEditor(ev Event, h int64) {
 		}
 		rc.stakeOk = true
 		rc.registerH = h
+		rc.registerT = ev.TxIndex // E-4 R2
+		rc.registerPin = ev.Pin   // E-4 R1
 		s.editorOf(ev.Sender).registerH = h
 	case "endorse":
 		if !s.isActive(ev.Sender, h) || s.tierOf(ev.Sender, h) != "T2" {
 			s.grave(ev.Pin, "endorser-not-t2") // v0.1.3 §2: endorsers are T2 only
 			return
 		}
+		// Target resolution (deterministic, errata E-4 R1): the endorse's
+		// registerPin names the register it endorses (v0.1 §7 schema: required
+		// for action=endorse). Only when it is absent or does not resolve do we
+		// fall back to a total order over the applicant's stakeOk registers —
+		// never to Go map iteration order.
+		declared := str(payload, "registerPin")
 		var target *regChallengeRec
-		for _, rc := range s.regChallenges {
-			if rc.applicant == applicant && rc.stakeOk {
-				target = rc
-				break
+		if declared != "" {
+			for _, rc := range s.regChallenges {
+				// register event pins are unique, so at most one record can
+				// match: the scan is order-independent despite ranging a map.
+				if rc.applicant == applicant && rc.stakeOk && rc.registerPin == declared {
+					target = rc
+					break
+				}
+			}
+		}
+		if target == nil {
+			// Deterministic total order per E-4 R2: earliest (registerH,
+			// registerTxIndex), then lexicographically smallest REGISTER pin as
+			// the final tie-break (the frozen text pins the tie-break to the
+			// register pinId, not the challenge pin).
+			bestH, bestT := int64(0), 0
+			bestRegPin := ""
+			for _, rc := range s.regChallenges {
+				if rc.applicant != applicant || !rc.stakeOk {
+					continue
+				}
+				better := target == nil ||
+					rc.registerH < bestH ||
+					(rc.registerH == bestH && rc.registerT < bestT) ||
+					(rc.registerH == bestH && rc.registerT == bestT && rc.registerPin < bestRegPin)
+				if better {
+					target, bestH, bestT, bestRegPin = rc, rc.registerH, rc.registerT, rc.registerPin
+				}
 			}
 		}
 		if target == nil {
@@ -584,19 +618,52 @@ func (s *replayState) applyEditor(ev Event, h int64) {
 	}
 }
 
+// entryKeyOfRev resolves a rev to the entryKey it belongs to (errata E-5 A1).
+// Attribution is a write-time fact: every rev records the entryKey it was
+// written under (Version.EntryKey). The scans below are order-independent: all
+// matching keys point at the SAME *entryRec (transfer-slug aliases one record
+// under several keys), so the value read never depends on iteration order; only
+// the fallback key choice could, and that is pinned to the lexicographically
+// smallest key.
+func (s *replayState) entryKeyOfRev(rev string) string {
+	if rev == "" {
+		return ""
+	}
+	recorded := ""
+	for _, en := range s.entries {
+		if v, ok := en.versions[rev]; ok {
+			recorded = v.EntryKey
+			break
+		}
+	}
+	if recorded != "" {
+		if en, ok := s.entries[recorded]; ok {
+			if _, ok := en.versions[rev]; ok {
+				return recorded
+			}
+		}
+	}
+	best := ""
+	for key, en := range s.entries {
+		if _, ok := en.versions[rev]; !ok {
+			continue
+		}
+		if best == "" || key < best {
+			best = key
+		}
+	}
+	return best
+}
+
 func (s *replayState) applyReview(ev Event) {
 	if !s.isActive(ev.Sender, ev.Height) {
 		// No membership gate at record time: the registration PoC is itself a
 		// review pinned by the not-yet-registered applicant (v0.1 §7.2).
 	}
 	targetRev := str(ev.Payload, "targetRev")
-	targetKey := ""
-	for key, en := range s.entries {
-		if _, ok := en.versions[targetRev]; ok {
-			targetKey = key
-			break
-		}
-	}
+	// E-5 A1: attribution is a write-time fact; resolve through the rev's
+	// recorded entryKey, never through map iteration order.
+	targetKey := s.entryKeyOfRev(targetRev)
 	if targetKey == "" {
 		s.grave(ev.Pin, "review-target-unresolvable")
 		return
@@ -611,13 +678,9 @@ func (s *replayState) applyReview(ev Event) {
 
 func (s *replayState) applyChallenge(ev Event) {
 	targetRev := str(ev.Payload, "targetRev")
-	targetKey := ""
-	for key, en := range s.entries {
-		if _, ok := en.versions[targetRev]; ok {
-			targetKey = key
-			break
-		}
-	}
+	// E-5 A1: attribution is a write-time fact; resolve through the rev's
+	// recorded entryKey, never through map iteration order.
+	targetKey := s.entryKeyOfRev(targetRev)
 	if targetKey == "" {
 		s.grave(ev.Pin, "challenge-target-unresolvable")
 		return
