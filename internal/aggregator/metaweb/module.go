@@ -135,6 +135,7 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.POST("/metaweb/pins:batch", a.handlePinBatch)
 	router.GET("/metaweb/fresh", a.handleFresh)
 	router.GET("/metaweb/interactions", a.handleInteractions)
+	router.GET("/metaweb/protocols", a.handleProtocols)
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {

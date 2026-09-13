@@ -193,7 +193,6 @@ Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw p
 |---|---|
 | `size` | `1`–`100`, default `50`. |
 | `cursor` | Same opaque key cursor as R1 (registry shares the fresh-index ordering). |
-| `includeRevoked` | `true` keeps revoked descriptor records (default: excluded). |
 
 ```json
 {
@@ -217,7 +216,7 @@ Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw p
 }
 ```
 
-Validation (a record failing any check is excluded from `items` and appended to the page's `rejected` audit list with a reason):
+Revoked descriptors are excluded by construction (the fresh index never contains them). Validation (a record failing any check is excluded from `items` and appended to the page's `rejected` audit list with a reason):
 
 1. The record carries an exposed JSON payload.
 2. `payload.path` matches `^/protocols/[a-z0-9_]+(/[a-z0-9_]+)*$` — this rejects the observed poisoned payloads (upstream error text landing in the `path` field).
