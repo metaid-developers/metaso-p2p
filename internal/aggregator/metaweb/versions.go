@@ -46,21 +46,41 @@ type chainEntry struct {
 }
 
 // versionInfo is the version block of pin-read data (R2): the current pin id
-// plus the attributed version count (omitted when unknown).
+// plus the attributed version count. Count is omitted when the chain cannot
+// be attributed (contract: the key is absent, never null).
 type versionInfo struct {
 	Latest string `json:"latest"`
-	Count  *int   `json:"count"`
+	Count  *int   `json:"count,omitempty"`
+}
+
+// Version attribution markers of the versions endpoint (R4).
+const (
+	// versionAttributionChain = resolved from the chain projection's
+	// modify_history; matches the projection exactly.
+	versionAttributionChain = "chain"
+	// versionAttributionLocal = answered from the local index alone (the
+	// single-version fast path, or the degraded mode when the projection is
+	// unreachable). Exact when the indexer has observed every pin of the
+	// chain; may be partial or stale after indexer gaps — documented in the
+	// spec so evidence-grade consumers can distinguish the two.
+	versionAttributionLocal = "local"
+)
+
+// resolvedChain is a version chain plus how it was attributed.
+type resolvedChain struct {
+	entries     []chainEntry
+	attribution string
 }
 
 type versionCache struct {
-	chain *lru.LRU[string, []chainEntry]
+	chain *lru.LRU[string, resolvedChain]
 	meta  *lru.LRU[string, chainEntry]
 	once  sync.Once
 }
 
 func (a *Aggregator) versionCache() *versionCache {
 	a.versionCaches.once.Do(func() {
-		a.versionCaches.chain = lru.NewLRU[string, []chainEntry](versionCacheMax, nil, versionChainCacheTTL)
+		a.versionCaches.chain = lru.NewLRU[string, resolvedChain](versionCacheMax, nil, versionChainCacheTTL)
 		a.versionCaches.meta = lru.NewLRU[string, chainEntry](versionCacheMax, nil, versionMetaCacheTTL)
 	})
 	return &a.versionCaches
@@ -76,9 +96,10 @@ type versionItem struct {
 }
 
 type versionsData struct {
-	PinId    string        `json:"pinId"`
-	Latest   string        `json:"latest"`
-	Versions []versionItem `json:"versions"`
+	PinId       string        `json:"pinId"`
+	Latest      string        `json:"latest"`
+	Attribution string        `json:"attribution"`
+	Versions    []versionItem `json:"versions"`
 }
 
 func (a *Aggregator) handlePinVersions(c *gin.Context) {
@@ -96,8 +117,8 @@ func (a *Aggregator) handlePinVersions(c *gin.Context) {
 		api.RespErr(c, codeUnavailable, "aggregation unavailable")
 		return
 	}
-	items := make([]versionItem, len(chain))
-	for i, entry := range chain {
+	items := make([]versionItem, len(chain.entries))
+	for i, entry := range chain.entries {
 		items[i] = versionItem{
 			PinId:     entry.PinId,
 			Version:   i + 1,
@@ -112,19 +133,21 @@ func (a *Aggregator) handlePinVersions(c *gin.Context) {
 		}
 	}
 	latest := pinId
-	if len(chain) > 0 {
-		latest = chain[len(chain)-1].PinId
+	if len(chain.entries) > 0 {
+		latest = chain.entries[len(chain.entries)-1].PinId
 	}
-	api.RespSuccess(c, versionsData{PinId: pinId, Latest: latest, Versions: items})
+	api.RespSuccess(c, versionsData{PinId: pinId, Latest: latest, Attribution: chain.attribution, Versions: items})
 }
 
 // VersionChain returns the version chain of any pin in the chain, oldest
-// first, with per-version metadata attributed. Used by the versions endpoint
-// and the batch pin-read version block.
-func (a *Aggregator) VersionChain(pinId string) ([]chainEntry, error) {
+// first, with per-version metadata attributed and the attribution marker
+// ("chain" = matches the chain projection's modify_history exactly; "local" =
+// local-index attribution, which can be partial after indexer gaps). Used by
+// the versions endpoint and the batch pin-read version block.
+func (a *Aggregator) VersionChain(pinId string) (resolvedChain, error) {
 	pinId = strings.TrimSpace(pinId)
 	if !pinIDPattern.MatchString(pinId) {
-		return nil, ErrInvalidPinId
+		return resolvedChain{}, ErrInvalidPinId
 	}
 	cache := a.versionCache()
 	if chain, ok := cache.chain.Get(pinId); ok {
@@ -133,18 +156,18 @@ func (a *Aggregator) VersionChain(pinId string) ([]chainEntry, error) {
 
 	chain, err := a.resolveVersionChain(pinId)
 	if err != nil {
-		return nil, err
+		return resolvedChain{}, err
 	}
 	cache.chain.Add(pinId, chain)
 	return chain, nil
 }
 
-func (a *Aggregator) resolveVersionChain(pinId string) ([]chainEntry, error) {
+func (a *Aggregator) resolveVersionChain(pinId string) (resolvedChain, error) {
 	var local *publishedcontent.Record
 	if a.pinLookup != nil {
 		rec, err := a.pinLookup.LookupByAnyPinId(pinId)
 		if err != nil {
-			return nil, err
+			return resolvedChain{}, err
 		}
 		local = rec
 	}
@@ -159,7 +182,7 @@ func (a *Aggregator) resolveVersionChain(pinId string) ([]chainEntry, error) {
 // current pin's chain projection is authoritative; when MANAPI is reachable
 // it also supplies per-version metadata. If MANAPI fails, the chain
 // degrades to the locally known source/current pair rather than erroring.
-func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent.Record) ([]chainEntry, error) {
+func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent.Record) (resolvedChain, error) {
 	current := firstNonEmptyString(local.CurrentPinId, local.SourcePinId)
 	sourceEntry := chainEntry{
 		PinId:        local.SourcePinId,
@@ -175,17 +198,22 @@ func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent
 	// attribution — the versions endpoint remains the authority for chains
 	// with a known modify).
 	if current == local.SourcePinId {
-		return []chainEntry{sourceEntry}, nil
+		return resolvedChain{entries: []chainEntry{sourceEntry}, attribution: versionAttributionLocal}, nil
 	}
 	if a.remoteFetcher != nil {
 		if pin, err := a.remoteFetcher.FetchPin(current); err == nil && pin != nil {
-			if chain := chainFromHistory(pin.ModifyHistory); len(chain) > 0 {
-				return a.fillVersionMetadata(chain, sourceEntry, currentEntryFromLocal(local))
+			if entries := chainFromHistory(pin.ModifyHistory); len(entries) > 0 {
+				filled, err := a.fillVersionMetadata(entries, sourceEntry, currentEntryFromLocal(local))
+				if err != nil {
+					return resolvedChain{}, err
+				}
+				return resolvedChain{entries: filled, attribution: versionAttributionChain}, nil
 			}
 		}
 	}
-	// Degraded mode: MANAPI unreachable — the locally known chain members
-	// only. documentCurrent carries the newest observed operation.
+	// Degraded mode: the chain projection is unreachable — the locally known
+	// chain members only, marked local (may be partial for chains with more
+	// versions than the indexer observed).
 	chain := []chainEntry{sourceEntry}
 	if current != local.SourcePinId {
 		chain = append(chain, chainEntry{
@@ -197,7 +225,7 @@ func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent
 			Address:      local.PublisherAddress,
 		})
 	}
-	return chain, nil
+	return resolvedChain{entries: chain, attribution: versionAttributionLocal}, nil
 }
 
 func currentEntryFromLocal(local *publishedcontent.Record) chainEntry {
@@ -226,10 +254,10 @@ func localChainOperation(local *publishedcontent.Record) string {
 
 // versionChainFromRemote resolves the chain for a pin metaso has not indexed:
 // the chain projection supplies modify_history for any member of the chain.
-func (a *Aggregator) versionChainFromRemote(pinId string) ([]chainEntry, error) {
+func (a *Aggregator) versionChainFromRemote(pinId string) (resolvedChain, error) {
 	pin, err := a.remoteFetcher.FetchPin(pinId)
 	if err != nil {
-		return nil, err
+		return resolvedChain{}, err
 	}
 	chain := chainFromHistory(pin.ModifyHistory)
 	if len(chain) == 0 {
@@ -245,9 +273,13 @@ func (a *Aggregator) versionChainFromRemote(pinId string) ([]chainEntry, error) 
 		if chain[0].Operation == "" {
 			chain[0].Operation = publishedcontent.OperationCreate
 		}
-		return chain, nil
+		return resolvedChain{entries: chain, attribution: versionAttributionChain}, nil
 	}
-	return a.fillVersionMetadata(chain, chainEntry{}, chainEntry{})
+	filled, err := a.fillVersionMetadata(chain, chainEntry{}, chainEntry{})
+	if err != nil {
+		return resolvedChain{}, err
+	}
+	return resolvedChain{entries: filled, attribution: versionAttributionChain}, nil
 }
 
 // chainFromHistory converts a modify_history projection into chain entries

@@ -101,9 +101,9 @@ func decodeInvertedTimestampHex(encoded string) (int64, bool) {
 }
 
 // freshTimeKey builds the cross-protocol reverse-time index key backing
-// GET /api/metaweb/fresh: newest-first by source-pin createdAt seconds, with
-// chain, protocol path and source pin id as the documented
-// (createdAt DESC, pinId DESC) tiebreak.
+// GET /api/metaweb/fresh: newest-first by source-pin createdAt seconds;
+// inside one second keys order by chain, then protocol path, then source pin
+// id ascending — a total, stable order (the cursor pins the exact key).
 func freshTimeKey(tsSec int64, chainName, protocolPath, sourcePinId string) []byte {
 	return []byte(keyFreshTime + invertedTimestamp(tsSec) + ":" + chainName + ":" + protocolPath + ":" + sourcePinId)
 }

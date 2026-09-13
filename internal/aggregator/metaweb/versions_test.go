@@ -70,9 +70,10 @@ func TestHandlePinVersions_LocalMultiVersionChain(t *testing.T) {
 		Code int    `json:"code"`
 		Msg  string `json:"message"`
 		Data struct {
-			PinId    string `json:"pinId"`
-			Latest   string `json:"latest"`
-			Versions []struct {
+			PinId       string `json:"pinId"`
+			Latest      string `json:"latest"`
+			Attribution string `json:"attribution"`
+			Versions    []struct {
 				PinId     string `json:"pinId"`
 				Version   int    `json:"version"`
 				CreatedAt int64  `json:"createdAt"`
@@ -92,6 +93,9 @@ func TestHandlePinVersions_LocalMultiVersionChain(t *testing.T) {
 	}
 	if envelope.Data.Latest != version2 {
 		t.Errorf("latest = %s, want %s", envelope.Data.Latest, version2)
+	}
+	if envelope.Data.Attribution != "chain" {
+		t.Errorf("attribution = %q, want chain (modify_history consulted)", envelope.Data.Attribution)
 	}
 	if len(envelope.Data.Versions) != 2 {
 		t.Fatalf("versions = %d, want 2", len(envelope.Data.Versions))
@@ -134,8 +138,9 @@ func TestHandlePinVersions_SingleVersionLocalNoRemote(t *testing.T) {
 	var envelope struct {
 		Code int `json:"code"`
 		Data struct {
-			Latest   string `json:"latest"`
-			Versions []struct {
+			Latest      string `json:"latest"`
+			Attribution string `json:"attribution"`
+			Versions    []struct {
 				PinId     string `json:"pinId"`
 				Operation string `json:"operation"`
 			} `json:"versions"`
@@ -146,6 +151,9 @@ func TestHandlePinVersions_SingleVersionLocalNoRemote(t *testing.T) {
 	}
 	if envelope.Code != 0 || len(envelope.Data.Versions) != 1 || envelope.Data.Versions[0].PinId != source {
 		t.Fatalf("single-version chain = %+v, want [%s]", envelope.Data, source)
+	}
+	if envelope.Data.Attribution != "local" {
+		t.Errorf("attribution = %q, want local (single-version fast path)", envelope.Data.Attribution)
 	}
 	if len(fetcher.requested) != 0 {
 		t.Errorf("remote fetches = %v, want none (single-version local fast path)", fetcher.requested)
@@ -304,6 +312,52 @@ func TestHandlePinBatch(t *testing.T) {
 	}
 	if envelope.Data.Pins["not-a-pin"].Error != "malformed pinId" {
 		t.Errorf("malformed entry = %+v, want error malformed pinId", envelope.Data.Pins["not-a-pin"])
+	}
+}
+
+func TestHandlePinVersions_CountOmittedWhenUnattributable(t *testing.T) {
+	published := setupPublishedContent(t)
+	source := hexPinId('a', 3)
+	version2 := hexPinId('b', 4)
+	if _, err := published.HandleBlockPin(pinInscription(source, publishedcontent.PathSimpleNote, "create", "", `{"title":"Doc","content":"v1"}`)); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := published.HandleBlockPin(pinInscription(version2, publishedcontent.PathSimpleNote+"@"+source, "modify", source, `{"title":"Doc","content":"v2"}`)); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	// The chain projection is unreachable: the degraded local chain still
+	// serves (latest known), but count must be OMITTED, not null.
+	agg := newTestAggregator(t)
+	agg.SetPinLookups(published, nil)
+	agg.SetRemotePinFetcher(&historyFetcher{defErr: fmt.Errorf("dial tcp: timeout")})
+	router := newTestRouter(agg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metaweb/pin/"+version2+"/versions", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	var raw struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if raw.Code != 0 {
+		t.Fatalf("code = %d, want 0 (degraded local chain)", raw.Code)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw.Data, &fields); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if _, present := fields["count"]; present {
+		t.Fatalf("degraded chain must omit count, got %s", fields["count"])
+	}
+	if string(fields["attribution"]) != `"local"` {
+		t.Fatalf("attribution = %s, want %q", fields["attribution"], "local")
+	}
+	if len(fields["versions"]) == 0 {
+		t.Fatal("degraded chain missing versions")
 	}
 }
 

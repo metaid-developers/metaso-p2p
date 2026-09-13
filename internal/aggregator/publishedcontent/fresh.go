@@ -49,10 +49,10 @@ type FreshPage struct {
 	HasMore    bool
 }
 
-// Fresh returns the page of visible records ordered
-// (createdAt DESC, sourcePinId DESC). The cursor pins the exact index key of
-// the last returned record, so records inserted while paging never shift the
-// window.
+// Fresh returns the page of visible records newest-first by createdAt
+// seconds (ties: chain, protocol path, source pin id ascending — total and
+// stable). The cursor pins the exact index key of the last returned record,
+// so records inserted while paging never shift the window.
 func (a *Aggregator) Fresh(params FreshParams) (*FreshPage, error) {
 	if a == nil || a.store == nil {
 		return nil, errors.New("publishedcontent store unavailable")

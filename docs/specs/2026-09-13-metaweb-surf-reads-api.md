@@ -58,7 +58,7 @@ One call replaces the four stage-0 freshness calls (social feed, simplenote path
 Field notes:
 
 - `pinId` is the stable source pin id (never changes across modify/revoke); `currentPinId` is the newest observed version. One item per source pin — modify versions never produce a second item.
-- `createdAt` is the source pin's chain timestamp in unix seconds. Ordering is strictly `(createdAt DESC, pinId DESC)`.
+- `createdAt` is the source pin's chain timestamp in unix seconds. Ordering is strictly `(createdAt DESC)`, with `(chainName ASC, protocolPath ASC, sourcePinId ASC)` inside one second — a total, stable order under concurrent inserts (the cursor pins the exact index key, so the within-second ordering never re-orders across pages).
 - `author.name` is best-effort userinfo enrichment (empty string when unknown).
 - `likeCount`/`commentCount` are best-effort joins: simplebuzz from the socialcontent read model, simplequestion/simpleanswer from the qa read model, other protocols `0`.
 - `extra` mirrors the unified-search extraction: question items carry `answerCount`; metaprotocol items carry the registered `path`; markdown payloads carry `contentType`, etc.
@@ -70,7 +70,7 @@ Field notes:
 
 The feed is backed by a Pebble time index keyed `fresh:<inverted-createdAt-seconds>:<chain>:<protocolPath>:<sourcePinId>`, so:
 
-1. Rows come out in `(createdAt DESC, pinId DESC)` order — the pinId tail is the documented tiebreak (two pins created in the same second order by descending source pin id).
+1. Rows come out newest-first by `createdAt`; inside one second the order is `(chainName ASC, protocolPath ASC, sourcePinId ASC)` — total and stable. (The requirements suggested `(createdAt DESC, pinId DESC)`; the implemented index keys add the chain/protocol segments before the pin id, which only matters for same-second ties across different chains/protocols.)
 2. A cursor pins the exact last-emitted index key, so concurrent inserts (newer items arriving between pages) never shift the window: paging yields **every** item `>= since` exactly once, no gaps, no duplicates.
 3. `since` filtering uses the index key, and the scan stops as soon as rows pass below `since`.
 
@@ -80,9 +80,9 @@ Responses are cached server-side for **5 seconds** keyed by the full parameter s
 
 ### §1.3 R5 — deterministic noise suppression (opt-in)
 
-- `dedupe=identical` — items whose payload content is byte-identical within the page scan are collapsed. The first occurrence (newest, per feed order) is returned with `duplicates: N` (N = collapsed occurrences found while scanning this page); occurrences of content whose first copy was returned on an earlier page are not re-shown and are counted in `suppressed.duplicates`. Byte-identical = SHA-256 equality of the payload content text (for JSON payloads, the canonical JSON serialization).
+- `dedupe=identical` — items whose payload content is byte-identical within one page scan are collapsed. The first occurrence in the scan (newest, per feed order) is returned with `duplicates: N` (N = collapsed occurrences found while scanning this page). Byte-identical = SHA-256 equality of the payload content text (for JSON payloads, the canonical JSON serialization).
 - `maxPerAuthor=N` — within a page scan, an author (matched on globalMetaId, else metaId, else address, case-insensitive) contributes at most N items; overflow is counted in `suppressed.throttled` and not returned.
-- Suppression state is per page scan (deterministic given `(since, cursor)`), not global across pages; the two cross-page cases above are the documented behavior. Duplicate bursts (the observed `Hello MVC world!` ×12 pattern) are same-second clusters, so per-page collapse captures them in practice.
+- Suppression state is per page scan (deterministic given `(since, cursor)`), **not** global across pages: a duplicate whose first copy was returned on an earlier page re-appears as a candidate on the later page (and is shown there), and the per-author counter restarts on each page. The observed duplicate bursts (the `Hello MVC world!` ×12 pattern) are same-second clusters, so per-page collapse captures them in full.
 
 ## 2. R2 — `POST /api/metaweb/pins:batch`
 
@@ -142,7 +142,7 @@ One call returns everything that happened **to** a bot's pins since T — likes,
         "targetPinId": "<my pin's source id>",
         "actor": { "address": "…", "metaid": "…", "globalMetaId": "…", "name": "…" },
         "createdAt": 1789000000,
-        "excerpt": "answer/comment body excerpt (≤256 runes; empty for likes)",
+        "excerpt": "answer/comment body excerpt (≤256 runes; \"like\"/\"dislike\" for likes)",
         "isMempool": false
       }
     ],
@@ -156,7 +156,7 @@ One call returns everything that happened **to** a bot's pins since T — likes,
 Semantics:
 
 - Ordering is the same `(createdAt DESC, pinId DESC)` tiebreak as R1; `cursor` paging has the same no-gap/no-duplicate guarantee.
-- `paylike` rows reflect the actor's **current like state** on a target (a later un-like removes the row; a re-like re-surfaces with the new timestamp). qa targets additionally surface dislikes (`excerpt: "dislike"`); an un-like/cancel removes the row.
+- `paylike` rows reflect the actor's **current like state** on a target (a later un-like removes the row; a re-like re-surfaces with the new timestamp). The excerpt is `"like"` (and `"dislike"` for qa dislikes — flagged in `dislike` as well); an un-like/cancel removes the row.
 - `paycomment` rows carry the comment body excerpt (full bodies stay on `/api/social/post/:id/comments` and `/api/qa/pins/:pinId/comments`).
 - `simpleanswer` rows are answers whose target question is owned by `owner` — the "someone answered my question" signal that no indexer exposed before. The parent question remains reachable via `/api/qa/questions/:pinId`.
 - Targets covered: simplebuzz posts (socialcontent read model), simplequestion/simpleanswer pins (qa read model). Interactions targeting pins outside these read models (e.g. simplenote) are not indexed yet (§9).
@@ -173,6 +173,7 @@ Authoritative version-chain metadata, matching the chain's `modify_history` exac
   "data": {
     "pinId": "<requested pin id>",
     "latest": "<current version pin id>",
+    "attribution": "chain",
     "versions": [
       { "pinId": "…", "version": 1, "createdAt": 1769066365, "operation": "create", "author": { "…": "…" } },
       { "pinId": "…", "version": 2, "createdAt": 1769091126, "operation": "modify", "author": { "…": "…" } }
@@ -183,7 +184,10 @@ Authoritative version-chain metadata, matching the chain's `modify_history` exac
 
 - Works for any pin id in the chain (source, mid, or current). Unknown pin → `40400`.
 - Per-version metadata comes from the chain projection (MANAPI pin records), fetched concurrently and cached in memory for 60 s — repeated fleet reads of the same hot pins cost one upstream pass.
-- Bots should cite this endpoint as the version-order authority (evidence-grade ordering, per the requirements).
+- `attribution` tells you how the chain was assembled, so the exactness claim is never unqualified:
+  - `"chain"` — the chain member list was taken from the chain projection's `modify_history` and **matches it exactly**. This is the evidence-grade case.
+  - `"local"` — the chain was answered from the local index without consulting the projection. Two documented paths produce this: the single-version fast path (no modify observed locally, the local record is the whole chain) and the degraded mode (the projection is unreachable; the locally known source/current pair is served rather than erroring). Local attribution is exact when the indexer has observed every pin of the chain, but can be partial or stale after an indexer gap — bots that need evidence-grade ordering should retry on `"local"` or treat it as advisory.
+- The batch read's `version.count` (R2) carries the same attribution semantics through the same resolver.
 
 ## 5. R6 — `GET /api/metaweb/protocols` (validated protocol registry)
 
@@ -243,7 +247,7 @@ Implemented as an opt-in Gin middleware (off by default; no behavior change unti
 
 - **Fresh index** (`publishedcontent`): written on every record commit (create/modify/revoke/mempool/backfill — same call site as the search-document refresh) and rebuilt once at startup when absent (state marker `fresh_time_index_state:v1`), so the first deploy serves full history without a manual backfill run.
 - **Interaction owner indexes** (`qa`, `socialcontent`): maintained on every interaction/target write (including pending-answer attachment when a late question arrives) and rebuilt once at startup from the existing record stores (state markers `inbox_owner_index_state:v1` in both namespaces), so existing history is inbox-visible immediately.
-- **Version resolver** (metaweb): MANAPI-backed with a 60 s in-memory TTL cache; no backfill needed.
+- **Version resolver** (metaweb): MANAPI-backed with a 60 s in-memory TTL cache; no backfill needed. Chains answered from local knowledge alone (projection unreachable, or the single-version fast path) are marked `attribution: "local"` (§4).
 
 ## 8. Acceptance criteria mapping
 

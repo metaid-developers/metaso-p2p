@@ -254,9 +254,10 @@ func parseFreshQuery(c *gin.Context) (freshQuery, string) {
 }
 
 // freshItemsFromRecords projects fresh-index records onto wire items and
-// applies the R5 suppression passes. Suppression state is per page scan:
-// duplicates of an item returned on an earlier page are dropped and counted
-// in suppressed.duplicates (spec §1.3).
+// applies the R5 suppression passes. Suppression state is per page scan
+// (spec §1.3): duplicates are collapsed onto the first copy found in this
+// scan, and a duplicate of an item shown on an earlier page is simply the
+// first copy of this scan — cross-page dedupe is not attempted.
 func (a *Aggregator) freshItemsFromRecords(records []*publishedcontent.Record, q freshQuery) ([]freshItem, *suppressedBlock) {
 	if len(records) == 0 {
 		return []freshItem{}, nil

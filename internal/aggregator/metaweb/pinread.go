@@ -261,10 +261,10 @@ func (a *Aggregator) publishedVersionInfo(rec *publishedcontent.Record) versionI
 		info.Count = &one
 		return info
 	}
-	if chain, err := a.VersionChain(current); err == nil && len(chain) > 0 {
-		count := len(chain)
+	if chain, err := a.VersionChain(current); err == nil && len(chain.entries) > 0 {
+		count := len(chain.entries)
 		info.Count = &count
-		info.Latest = chain[len(chain)-1].PinId
+		info.Latest = chain.entries[len(chain.entries)-1].PinId
 	}
 	return info
 }
