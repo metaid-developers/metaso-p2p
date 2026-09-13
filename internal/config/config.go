@@ -24,6 +24,18 @@ type Config struct {
 	SocialBackfill        SocialBackfillConfig        `json:"socialBackfill"`
 	SocialContentBackfill SocialContentBackfillConfig `json:"socialContentBackfill"`
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
+	RateLimit             RateLimitConfig             `json:"rateLimit"`
+}
+
+// RateLimitConfig configures the aggregation-API token-bucket limiter (R7 of
+// docs/specs/2026-09-13-metaweb-surf-reads-api.md). Disabled by default.
+// Keys maps fleet names onto shared X-API-KEY tokens so bot fleets are
+// limited per key instead of per IP.
+type RateLimitConfig struct {
+	Enabled           bool              `json:"enabled"`
+	RequestsPerSecond float64           `json:"requestsPerSecond"`
+	Burst             int               `json:"burst"`
+	Keys              map[string]string `json:"keys"`
 }
 
 // BotHubConfig holds the Bot Hub skill-service aggregator runtime knobs.
@@ -316,6 +328,12 @@ func Default() Config {
 			PageSize:      100,
 			MANAPIBaseURL: "https://manapi.metaid.io",
 		},
+		RateLimit: RateLimitConfig{
+			Enabled:           false,
+			RequestsPerSecond: 5,
+			Burst:             20,
+			Keys:              map[string]string{},
+		},
 	}
 }
 
@@ -398,6 +416,11 @@ func Load() (Config, error) {
 	applyBoolEnv("METASO_P2P_GROUPCHAT_HEAVY_API_ENABLED", &cfg.GroupChat.HeavyAPIEnabled)
 
 	applyStringEnv("METASO_P2P_ASSET_BASE_URL", &cfg.BotHub.AssetBaseURL)
+
+	applyBoolEnv("METASO_P2P_RATE_LIMIT_ENABLED", &cfg.RateLimit.Enabled)
+	applyFloatEnv("METASO_P2P_RATE_LIMIT_RPS", &cfg.RateLimit.RequestsPerSecond)
+	applyIntEnv("METASO_P2P_RATE_LIMIT_BURST", &cfg.RateLimit.Burst)
+	applyRateLimitKeysEnv("METASO_P2P_RATE_LIMIT_KEYS", cfg.RateLimit.Keys)
 
 	applyBoolEnv("METASO_P2P_FEDERATION_ENABLED", &cfg.Federation.Enabled)
 	applyStringEnv("METASO_P2P_FEDERATION_NETWORK", &cfg.Federation.Network)
@@ -659,6 +682,39 @@ func applyInt64Env(name string, target *int64) {
 		return
 	}
 	*target = parsed
+}
+
+func applyFloatEnv(name string, target *float64) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return
+	}
+	*target = parsed
+}
+
+// applyRateLimitKeysEnv parses METASO_P2P_RATE_LIMIT_KEYS entries of the form
+// "name1:token1,name2:token2" into the (existing) keys map.
+func applyRateLimitKeysEnv(name string, target map[string]string) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return
+	}
+	for _, entry := range strings.Split(value, ",") {
+		sep := strings.IndexByte(entry, ':')
+		if sep <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(entry[:sep])
+		token := strings.TrimSpace(entry[sep+1:])
+		if key == "" || token == "" {
+			continue
+		}
+		target[key] = token
+	}
 }
 
 func applyDurationEnv(name string, target *time.Duration) {

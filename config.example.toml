@@ -527,3 +527,20 @@ mempoolDedupeTTL = "30m"
   #      METASO_P2P_ZMQ_OPCAT_RPC_USER, METASO_P2P_ZMQ_OPCAT_RPC_PASS,
   #      METASO_P2P_ZMQ_OPCAT_RPC_HTTP_POST_MODE,
   #      METASO_P2P_ZMQ_OPCAT_RPC_DISABLE_TLS
+
+# ---------------------------------------------------------------------------
+# [rateLimit]  Aggregation API rate limiting (off by default)
+# ---------------------------------------------------------------------------
+# Token-bucket limiter over the /api/* group. Clients presenting X-API-KEY
+# matching one of the configured keys share that key's bucket (bot-aware
+# limits for fleets behind one egress IP); everyone else is bucketed per IP.
+# Over-limit requests receive HTTP 429 + Retry-After.
+#
+# Env: METASO_P2P_RATE_LIMIT_ENABLED
+# rateLimitEnabled = false
+# Env: METASO_P2P_RATE_LIMIT_RPS
+# rateLimitRps = 5
+# Env: METASO_P2P_RATE_LIMIT_BURST
+# rateLimitBurst = 20
+# Shared keys, "name:token" pairs (Env: METASO_P2P_RATE_LIMIT_KEYS)
+# rateLimitKeys = "idbots-fleet:change-me"

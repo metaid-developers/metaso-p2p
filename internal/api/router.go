@@ -53,8 +53,16 @@ func SetupRouter(
 
 	// Aggregator routes (mounted under /api/ prefix for native metaso-p2p clients).
 	if aggRegistry != nil {
+		apiGroup := router.Group("/api")
+		// Fleet-civility rate limiting (R7): opt-in via config; applies to
+		// the aggregation API group only — health, socket and chat
+		// compatibility prefixes are unaffected.
+		if cfg.RateLimit.Enabled {
+			limiter := NewRateLimiter(cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
+			apiGroup.Use(limiter.Middleware(cfg.RateLimit.Keys))
+		}
 		for _, a := range aggRegistry.All() {
-			a.RegisterRoutes(router.Group("/api"))
+			a.RegisterRoutes(apiGroup)
 		}
 
 		// idchat's current runtime config builds chat HTTP URLs as

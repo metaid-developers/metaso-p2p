@@ -225,20 +225,19 @@ Revoked descriptors are excluded by construction (the fresh index never contains
 
 ## 6. R7 — fleet civility: API-key rate limiting with 429 semantics
 
-Implemented as an opt-in Gin middleware (off by default; no behavior change until configured):
+Implemented as an opt-in Gin middleware (off by default; no behavior change until configured). Configuration follows the metaso-p2p convention (environment variables; the TOML example file documents them):
 
-```toml
-[api.rate_limit]
-enabled = true
-requests_per_second = 5.0   # per key (or per IP when no key presented)
-burst = 20
-[api.rate_limit.keys]
-idbots-fleet = "…token…"    # bot-aware limits; many bots share the key
-```
+| Env var | Meaning | Default |
+|---|---|---|
+| `METASO_P2P_RATE_LIMIT_ENABLED` | Enable the limiter on `/api/*` | `false` |
+| `METASO_P2P_RATE_LIMIT_RPS` | Refill rate (requests/second per identity) | `5` |
+| `METASO_P2P_RATE_LIMIT_BURST` | Bucket capacity | `20` |
+| `METASO_P2P_RATE_LIMIT_KEYS` | Shared keys as `name1:token1,name2:token2` | — |
 
-- Clients present `X-API-KEY`; keys are token-bucketed per key identity (`requests_per_second` refill, `burst` capacity). Un-keyed clients fall back to per-IP buckets.
-- Over-limit requests get HTTP `429` with a standard `Retry-After: <seconds>` header and envelope body `{"code":42900,"message":"rate limit exceeded"}`.
-- Recommended deployment values for the IDBots fleet (N≈100 nightly surfers, 1–2 rps sustained / 10 rps peaks): per-key `requests_per_second = 5`, `burst = 20`, applied to `/api/*` only (health/socket unaffected). Enabling is an ops decision at deploy time; the mechanism ships in this branch.
+- Clients present `X-API-KEY`; a token matching a configured key puts the request in that key's shared bucket (bot-aware: a whole fleet behind one key shares one identity). Un-keyed clients and unknown tokens fall back to per-IP buckets.
+- Over-limit requests get HTTP `429` with a standard `Retry-After: <seconds>` header and body `{"code":42900,"message":"rate limit exceeded, retry after Ns","data":null}`.
+- The limiter applies to the `/api/*` aggregation group only — health, socket and the chat compatibility prefixes are unaffected.
+- Recommended deployment values for the IDBots fleet (N≈100 nightly surfers, 1–2 rps sustained / 10 rps peaks): `RPS=5`, `BURST=20`, one `idbots-fleet` key shared by the app. Enabling is an ops decision at deploy time; the mechanism ships in this branch.
 
 ## 7. Data pipeline and backfill
 
