@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/gin-gonic/gin"
+	lru "github.com/hashicorp/golang-lru/v2/expirable"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb/metawebdoc"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"

@@ -54,9 +54,17 @@ type attachmentItem struct {
 	Size        *int64 `json:"size"`
 }
 
-// pinReadData is the `data` block of GET /api/metaweb/pin/:pinId.
-// Payload is never truncated; Text is capped at textMaxRunes. Truncated and
-// TotalLength are null exactly when Text is null.
+// ErrAggregationUnavailable marks a resolve failure that is neither a
+// shaped-request problem nor a definitive "pin not found" (transport errors,
+// disabled lookups); the HTTP layer maps it to 50000.
+var ErrAggregationUnavailable = errors.New("metaweb: aggregation unavailable")
+
+// pinReadData is the `data` block of GET /api/metaweb/pin/:pinId and of each
+// successful batch entry (POST /api/metaweb/pins:batch). Payload is never
+// truncated; Text is capped at textMaxRunes. Truncated and TotalLength are
+// null exactly when Text is null. Version carries the current pin id and the
+// attributed version count (count omitted when the chain cannot be
+// attributed — see docs/specs/2026-09-13-metaweb-surf-reads-api.md §2).
 type pinReadData struct {
 	PinId        string           `json:"pinId"`
 	CurrentPinId string           `json:"currentPinId"`
@@ -73,6 +81,7 @@ type pinReadData struct {
 	TotalLength  *int             `json:"totalLength"`
 	Meta         pinMeta          `json:"meta"`
 	Attachments  []attachmentItem `json:"attachments"`
+	Version      versionInfo      `json:"version"`
 	Source       string           `json:"source"`
 }
 
@@ -82,49 +91,48 @@ func (a *Aggregator) handlePinRead(c *gin.Context) {
 		api.RespErr(c, codeInvalidParam, "malformed pinId")
 		return
 	}
-	if a.pinLookup == nil && a.serviceLookup == nil {
+
+	data, err := a.resolvePinData(pinId)
+	if err != nil {
+		if errors.Is(err, ErrRemotePinNotFound) {
+			api.RespErr(c, codeNotFound, "pin not found")
+			return
+		}
 		api.RespErr(c, codeUnavailable, "aggregation unavailable")
 		return
 	}
+	api.RespSuccess(c, data)
+}
 
-	// Resolution order: publishedcontent, then skillservice, then MANAPI.
+// resolvePinData resolves one pin id to its read-model projection:
+// publishedcontent, then skillservice, then the MANAPI passthrough.
+func (a *Aggregator) resolvePinData(pinId string) (pinReadData, error) {
 	if a.pinLookup != nil {
 		rec, err := a.pinLookup.LookupByAnyPinId(pinId)
 		if err != nil {
-			api.RespErr(c, codeUnavailable, "aggregation unavailable")
-			return
+			return pinReadData{}, err
 		}
 		if rec != nil {
-			api.RespSuccess(c, a.pinReadFromPublishedRecord(pinId, rec))
-			return
+			return a.pinReadFromPublishedRecord(pinId, rec), nil
 		}
 	}
 	if a.serviceLookup != nil {
 		rec, err := a.serviceLookup.LookupServiceByAnyPinId(pinId)
 		if err != nil {
-			api.RespErr(c, codeUnavailable, "aggregation unavailable")
-			return
+			return pinReadData{}, err
 		}
 		if rec != nil {
-			api.RespSuccess(c, a.pinReadFromServiceRecord(pinId, rec))
-			return
+			return a.pinReadFromServiceRecord(pinId, rec), nil
 		}
 	}
-
 	if a.remoteFetcher == nil {
-		api.RespErr(c, codeUnavailable, "aggregation unavailable")
-		return
+		return pinReadData{}, ErrAggregationUnavailable
 	}
 	remote, err := a.remoteFetcher.FetchPin(pinId)
-	if errors.Is(err, ErrRemotePinNotFound) {
-		api.RespErr(c, codeNotFound, "pin not found")
-		return
-	}
 	if err != nil {
-		api.RespErr(c, codeUnavailable, "aggregation unavailable")
-		return
+		return pinReadData{}, err
 	}
-	api.RespSuccess(c, a.pinReadFromRemotePin(pinId, remote))
+	return a.pinReadFromRemotePin(pinId, remote), nil
 }
 
 // creatorName resolves the best-effort userinfo display name; "" when unknown.
@@ -236,8 +244,29 @@ func (a *Aggregator) pinReadFromPublishedRecord(requestedPinId string, rec *publ
 			Tags:    orEmptyTags(extracted.Tags),
 		},
 		Attachments: a.resolveAttachments(metawebdoc.ExtractAttachments(payloadMap)),
+		Version:     a.publishedVersionInfo(rec),
 		Source:      "local",
 	}
+}
+
+// publishedVersionInfo attributes the version block of a locally indexed
+// record. Single-version records are answered from local knowledge; records
+// with a known modify consult the version-chain resolver (count omitted when
+// it cannot attribute the chain).
+func (a *Aggregator) publishedVersionInfo(rec *publishedcontent.Record) versionInfo {
+	current := firstNonEmptyString(rec.CurrentPinId, rec.SourcePinId)
+	info := versionInfo{Latest: current}
+	if current == rec.SourcePinId {
+		one := 1
+		info.Count = &one
+		return info
+	}
+	if chain, err := a.VersionChain(current); err == nil && len(chain) > 0 {
+		count := len(chain)
+		info.Count = &count
+		info.Latest = chain[len(chain)-1].PinId
+	}
+	return info
 }
 
 // pinReadFromServiceRecord builds the response for a local skillservice
@@ -261,6 +290,11 @@ func (a *Aggregator) pinReadFromServiceRecord(requestedPinId string, rec *skills
 	currentPinId := rec.CurrentPinId
 	if currentPinId == "" {
 		currentPinId = rec.SourceServicePinId
+	}
+	version := versionInfo{Latest: currentPinId}
+	if currentPinId == rec.SourceServicePinId {
+		one := 1
+		version.Count = &one
 	}
 	return pinReadData{
 		PinId:        requestedPinId,
@@ -287,6 +321,7 @@ func (a *Aggregator) pinReadFromServiceRecord(requestedPinId string, rec *skills
 			Tags:    orEmptyTags(extracted.Tags),
 		},
 		Attachments: []attachmentItem{},
+		Version:     version,
 		Source:      "local",
 	}
 }
@@ -358,6 +393,13 @@ func (a *Aggregator) pinReadFromRemotePin(requestedPinId string, pin *RemotePin)
 			break
 		}
 	}
+	// The chain projection lists every version of the chain on any member's
+	// record, so its length is the version count (1 when absent).
+	count := len(pin.ModifyHistory)
+	if count == 0 {
+		count = 1
+	}
+	version := versionInfo{Latest: currentPinId, Count: &count}
 
 	operation := strings.ToLower(strings.TrimSpace(pin.Operation))
 	if operation == "" {
@@ -389,6 +431,7 @@ func (a *Aggregator) pinReadFromRemotePin(requestedPinId string, pin *RemotePin)
 			Tags:    orEmptyTags(extracted.Tags),
 		},
 		Attachments: a.resolveAttachments(metawebdoc.ExtractAttachments(payloadMap)),
+		Version:     version,
 		Source:      "remote",
 	}
 }

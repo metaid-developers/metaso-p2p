@@ -102,6 +102,7 @@ type Aggregator struct {
 	buzzEngagement BuzzEngagementLookup
 	qaEngagement   QAEngagementLookup
 	freshCache     *freshResponseCache
+	versionCaches  versionCache
 	now            func() int64 // unix milliseconds; test hook
 }
 
@@ -129,6 +130,8 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/metaweb/search", a.handleSearch)
 	router.GET("/metaweb/pin/:pinId", a.handlePinRead)
+	router.GET("/metaweb/pin/:pinId/versions", a.handlePinVersions)
+	router.POST("/metaweb/pins:batch", a.handlePinBatch)
 	router.GET("/metaweb/fresh", a.handleFresh)
 }
 
