@@ -188,6 +188,13 @@ func main() {
 		// Best-effort fresh-feed engagement joins wire after qa exists; nil
 		// aggregators degrade to zero counters, never to errors.
 		metawebCandidate.SetEngagementLookups(metaweb.NewBuzzEngagementLookup(socialContentAgg), metaweb.NewQAEngagementLookup(qaCandidate))
+		// Interactions-inbox sources: qa (answers/comments/likes on Q&A pins)
+		// and socialcontent (comments/likes on buzz posts).
+		interactionSources := []metaweb.InboxSource{qaCandidate}
+		if socialContentAgg != nil {
+			interactionSources = append(interactionSources, socialContentAgg)
+		}
+		metawebCandidate.SetInteractionSources(interactionSources...)
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {
 				if cfg.BotHomepageV2Backfill.Enabled {

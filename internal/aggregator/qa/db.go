@@ -2,6 +2,7 @@ package qa
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,6 +124,15 @@ func invertedTimestamp(ts int64) string {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, ^uint64(ts))
 	return fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
+}
+
+// decodeInvertedTimestamp reverses invertedTimestamp's hex rendering.
+func decodeInvertedTimestamp(encoded string) (int64, bool) {
+	buf, err := hex.DecodeString(encoded)
+	if err != nil || len(buf) != 8 {
+		return 0, false
+	}
+	return int64(^binary.BigEndian.Uint64(buf)), true
 }
 
 func (a *Aggregator) loadQuestion(chainName, sourcePinId string) (*QuestionRecord, error) {

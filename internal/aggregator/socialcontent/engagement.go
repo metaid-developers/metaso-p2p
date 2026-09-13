@@ -96,6 +96,11 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 			if err := a.saveRecord(likeStateKey(chain, event.TargetPinId, actor), &event); err != nil {
 				return err
 			}
+			// The post only became visible now, so the like gains its owner
+			// index entry at this point.
+			if err := a.maintainLikeOwnerIndex(chain, &event, actor, nil); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -118,7 +123,10 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 		if err := a.saveRecord(key, &comment); err != nil {
 			return err
 		}
-		return a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId))
+		if err := a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+			return err
+		}
+		return a.maintainCommentOwnerIndex(chain, &comment)
 	}); err != nil {
 		return err
 	}

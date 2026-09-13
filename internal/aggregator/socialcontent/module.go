@@ -3,6 +3,7 @@ package socialcontent
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(Namespace, 2000, 5*time.Minute)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 64)
+	// One-time backfill of the interactions-inbox owner indexes from the
+	// existing record stores. Non-fatal: reads tolerate a partially filled
+	// index and every subsequent write maintains it.
+	if err := a.ensureInboxOwnerIndexes(); err != nil {
+		log.Printf("WARNING: socialcontent inbox owner index backfill failed: %v", err)
+	}
 	return nil
 }
 
@@ -264,7 +271,16 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string) e
 	if actor == "" {
 		return a.recomputeCounters(chain, event.TargetPinId)
 	}
-	if err := a.saveRecord(likeStateKey(chain, event.TargetPinId, actor), event); err != nil {
+	stateKey := likeStateKey(chain, event.TargetPinId, actor)
+	var previous *LikeEvent
+	var prev LikeEvent
+	if err := loadJSON(a.store, stateKey, &prev); err == nil && prev.PinId != "" {
+		previous = &prev
+	}
+	if err := a.saveRecord(stateKey, event); err != nil {
+		return err
+	}
+	if err := a.maintainLikeOwnerIndex(chain, event, actor, previous); err != nil {
 		return err
 	}
 	return a.recomputeCounters(chain, event.TargetPinId)
@@ -285,6 +301,9 @@ func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string
 		return err
 	}
 	if err := a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+		return err
+	}
+	if err := a.maintainCommentOwnerIndex(chain, comment); err != nil {
 		return err
 	}
 	return a.recomputeCounters(chain, comment.TargetPinId)

@@ -91,19 +91,20 @@ type QAEngagementLookup interface {
 // Aggregator is a read-only aggregator: HandleBlockPin/HandleMempoolPin are
 // no-ops and it owns no Pebble data.
 type Aggregator struct {
-	notifyCh       chan *aggregator.NotifyEvent
-	sources        []DocumentSource
-	profileNamer   ProfileNamer
-	pinLookup      PinLookup
-	serviceLookup  ServicePinLookup
-	assetResolver  AssetURLResolver
-	remoteFetcher  RemotePinFetcher
-	freshLookup    FreshLookup
-	buzzEngagement BuzzEngagementLookup
-	qaEngagement   QAEngagementLookup
-	freshCache     *freshResponseCache
-	versionCaches  versionCache
-	now            func() int64 // unix milliseconds; test hook
+	notifyCh           chan *aggregator.NotifyEvent
+	sources            []DocumentSource
+	profileNamer       ProfileNamer
+	pinLookup          PinLookup
+	serviceLookup      ServicePinLookup
+	assetResolver      AssetURLResolver
+	remoteFetcher      RemotePinFetcher
+	freshLookup        FreshLookup
+	buzzEngagement     BuzzEngagementLookup
+	qaEngagement       QAEngagementLookup
+	freshCache         *freshResponseCache
+	versionCaches      versionCache
+	interactionSources []InboxSource
+	now                func() int64 // unix milliseconds; test hook
 }
 
 func (a *Aggregator) Name() string { return "metaweb" }
@@ -133,6 +134,7 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/metaweb/pin/:pinId/versions", a.handlePinVersions)
 	router.POST("/metaweb/pins:batch", a.handlePinBatch)
 	router.GET("/metaweb/fresh", a.handleFresh)
+	router.GET("/metaweb/interactions", a.handleInteractions)
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
