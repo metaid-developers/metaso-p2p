@@ -171,6 +171,7 @@ func main() {
 		if publishedAgg != nil {
 			metawebCandidate.SetDocumentSources(publishedAgg, skillserviceAgg)
 			metawebCandidate.SetPinLookups(publishedAgg, skillserviceAgg)
+			metawebCandidate.SetFreshLookup(publishedAgg)
 		}
 		if err := aggRegistry.Register(metawebCandidate); err != nil {
 			log.Printf("WARNING: metaweb aggregator init failed: %v", err)
@@ -184,6 +185,9 @@ func main() {
 		if err := aggRegistry.Register(qaCandidate); err != nil {
 			log.Printf("WARNING: qa aggregator init failed: %v", err)
 		}
+		// Best-effort fresh-feed engagement joins wire after qa exists; nil
+		// aggregators degrade to zero counters, never to errors.
+		metawebCandidate.SetEngagementLookups(metaweb.NewBuzzEngagementLookup(socialContentAgg), metaweb.NewQAEngagementLookup(qaCandidate))
 		if cfg.BotHomepageV2Backfill.Enabled && (publishedAgg != nil || userinfoAgg != nil) {
 			go func() {
 				if cfg.BotHomepageV2Backfill.Enabled {

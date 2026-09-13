@@ -2,10 +2,13 @@ package publishedcontent
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb/metawebdoc"
 )
 
 const (
@@ -15,8 +18,10 @@ const (
 	keyByMetaId                            = "by_metaid:"
 	keyByAddress                           = "by_address:"
 	keyByTime                              = "by_time:"
+	keyFreshTime                           = "fresh:"
 	keyHomepageMetaAppsGlobalIdentityState = "homepage_metaapps_global_identity_state:v1"
 	keyMetaAppTimeIndexState               = "metaapp_time_index_state:v1"
+	keyFreshTimeIndexState                 = "fresh_time_index_state:v1"
 )
 
 func recordKey(chainName, protocolPath, sourcePinId string) []byte {
@@ -72,6 +77,10 @@ func metaAppTimeIndexStateKey() []byte {
 	return []byte(keyMetaAppTimeIndexState)
 }
 
+func freshTimeIndexStateKey() []byte {
+	return []byte(keyFreshTimeIndexState)
+}
+
 func homepageMetaAppsGlobalIdentityStateKey() []byte {
 	return []byte(keyHomepageMetaAppsGlobalIdentityState)
 }
@@ -80,6 +89,36 @@ func invertedTimestamp(ts int64) string {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, ^uint64(ts))
 	return fmt.Sprintf("%016x", binary.BigEndian.Uint64(buf))
+}
+
+// decodeInvertedTimestampHex reverses invertedTimestamp's hex rendering.
+func decodeInvertedTimestampHex(encoded string) (int64, bool) {
+	buf, err := hex.DecodeString(encoded)
+	if err != nil || len(buf) != 8 {
+		return 0, false
+	}
+	return int64(^binary.BigEndian.Uint64(buf)), true
+}
+
+// freshTimeKey builds the cross-protocol reverse-time index key backing
+// GET /api/metaweb/fresh: newest-first by source-pin createdAt seconds, with
+// chain, protocol path and source pin id as the documented
+// (createdAt DESC, pinId DESC) tiebreak.
+func freshTimeKey(tsSec int64, chainName, protocolPath, sourcePinId string) []byte {
+	return []byte(keyFreshTime + invertedTimestamp(tsSec) + ":" + chainName + ":" + protocolPath + ":" + sourcePinId)
+}
+
+func parseFreshTimeKey(key []byte) (tsSec int64, chainName, protocolPath, sourcePinId string, ok bool) {
+	rest := strings.TrimPrefix(string(key), keyFreshTime)
+	parts := strings.SplitN(rest, ":", 4)
+	if len(parts) != 4 {
+		return 0, "", "", "", false
+	}
+	ts, ok := decodeInvertedTimestampHex(parts[0])
+	if !ok || parts[1] == "" || parts[2] == "" || parts[3] == "" {
+		return 0, "", "", "", false
+	}
+	return ts, parts[1], parts[2], parts[3], true
 }
 
 func parseIdentityIndexKey(key []byte, prefix []byte) (chainName, sourcePinId string, ok bool) {
@@ -151,6 +190,7 @@ func (a *Aggregator) saveRecord(rec *Record, previous *Record) error {
 	if previous != nil {
 		a.deleteIdentityIndexes(previous)
 		a.deleteTimeIndex(previous)
+		a.deleteFreshIndex(previous)
 	}
 	raw, err := json.Marshal(rec)
 	if err != nil {
@@ -166,6 +206,9 @@ func (a *Aggregator) saveRecord(rec *Record, previous *Record) error {
 		return err
 	}
 	if err := a.writeTimeIndex(rec); err != nil {
+		return err
+	}
+	if err := a.writeFreshIndex(rec); err != nil {
 		return err
 	}
 	// Fold the committed record into the warm search-document snapshot so the
@@ -231,6 +274,23 @@ func (a *Aggregator) deleteTimeIndex(rec *Record) {
 		return
 	}
 	_ = a.store.Delete(Namespace, byTimeKey(rec.ProtocolPath, rec.sortTimestamp(), rec.ChainName, rec.SourcePinId))
+}
+
+// writeFreshIndex maintains the cross-protocol fresh-time index: one key per
+// visible record, keyed by source-pin createdAt seconds. Mempool versions are
+// included (the fresh feed flags them); revoked records never enter the index.
+func (a *Aggregator) writeFreshIndex(rec *Record) error {
+	if rec == nil || rec.Hidden || rec.CreatedAt <= 0 || rec.SourcePinId == "" || rec.ChainName == "" {
+		return nil
+	}
+	return a.store.Set(Namespace, freshTimeKey(metawebdoc.NormalizeUnixSeconds(rec.CreatedAt), rec.ChainName, rec.ProtocolPath, rec.SourcePinId), []byte{})
+}
+
+func (a *Aggregator) deleteFreshIndex(rec *Record) {
+	if rec == nil || rec.CreatedAt <= 0 || rec.SourcePinId == "" || rec.ChainName == "" {
+		return
+	}
+	_ = a.store.Delete(Namespace, freshTimeKey(metawebdoc.NormalizeUnixSeconds(rec.CreatedAt), rec.ChainName, rec.ProtocolPath, rec.SourcePinId))
 }
 
 func (r *Record) sortTimestamp() int64 {

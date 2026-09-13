@@ -272,3 +272,33 @@ func unmarshalStrict(raw []byte, target any) error {
 	}
 	return nil
 }
+
+// QuestionEngagement returns the denormalised engagement counters of a
+// question for the metaweb fresh-feed join. ok=false when the pin is not a
+// question in this read model.
+func (a *Aggregator) QuestionEngagement(sourcePinId string) (likeCount, dislikeCount, commentCount, answerCount int, ok bool) {
+	locator, found := a.lookupLocator(strings.TrimSpace(sourcePinId))
+	if !found || locator.kind != "q" {
+		return 0, 0, 0, 0, false
+	}
+	rec, err := a.loadQuestion(locator.chainName, locator.sourcePinId)
+	if err != nil || rec == nil {
+		return 0, 0, 0, 0, false
+	}
+	return rec.LikeCount, rec.DislikeCount, rec.CommentCount, rec.AnswerCount, true
+}
+
+// AnswerEngagement returns the denormalised engagement counters of an answer
+// for the metaweb fresh-feed join. ok=false when the pin is not an answer in
+// this read model.
+func (a *Aggregator) AnswerEngagement(sourcePinId string) (likeCount, dislikeCount, commentCount int, ok bool) {
+	locator, found := a.lookupLocator(strings.TrimSpace(sourcePinId))
+	if !found || locator.kind != "a" {
+		return 0, 0, 0, false
+	}
+	rec, err := a.loadAnswer(locator.chainName, locator.sourcePinId)
+	if err != nil || rec == nil {
+		return 0, 0, 0, false
+	}
+	return rec.LikeCount, rec.DislikeCount, rec.CommentCount, true
+}

@@ -125,3 +125,14 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 
 	return a.recomputeCounters(chain, post.SourcePinId)
 }
+
+// Engagement returns the denormalised visible like/comment counters of a
+// buzz post for the metaweb fresh-feed join. ok=false when the pin is not a
+// post in this read model.
+func (a *Aggregator) Engagement(sourcePinId string) (likeCount, commentCount int, ok bool) {
+	post, err := a.FindPost(strings.TrimSpace(sourcePinId), "")
+	if err != nil || post == nil {
+		return 0, 0, false
+	}
+	return post.LikeCount, post.CommentCount, true
+}
