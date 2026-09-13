@@ -77,6 +77,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if err := a.reconcileQuestionVisibility(); err != nil {
 		log.Printf("WARNING: qa question visibility reconciliation failed: %v", err)
 	}
+	// Backfill the interactions-inbox owner indexes from the existing record
+	// stores (one-time, state-key gated). Non-fatal: the read paths tolerate
+	// a partially filled index, and every subsequent write maintains it.
+	if err := a.ensureInboxOwnerIndexes(); err != nil {
+		log.Printf("WARNING: qa inbox owner index backfill failed: %v", err)
+	}
 	return nil
 }
 

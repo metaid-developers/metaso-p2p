@@ -96,6 +96,11 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 			if err := a.saveRecord(likeStateKey(chain, event.TargetPinId, actor), &event); err != nil {
 				return err
 			}
+			// The post only became visible now, so the like gains its owner
+			// index entry at this point.
+			if err := a.maintainLikeOwnerIndex(chain, &event, actor, nil); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -118,10 +123,24 @@ func (a *Aggregator) reconcilePendingInteractions(post *PostRecord) error {
 		if err := a.saveRecord(key, &comment); err != nil {
 			return err
 		}
-		return a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId))
+		if err := a.setStore(Namespace, commentTargetKey(chain, comment.TargetPinId, comment.Timestamp, comment.PinId), []byte(comment.PinId)); err != nil {
+			return err
+		}
+		return a.maintainCommentOwnerIndex(chain, &comment)
 	}); err != nil {
 		return err
 	}
 
 	return a.recomputeCounters(chain, post.SourcePinId)
+}
+
+// Engagement returns the denormalised visible like/comment counters of a
+// buzz post for the metaweb fresh-feed join. ok=false when the pin is not a
+// post in this read model.
+func (a *Aggregator) Engagement(sourcePinId string) (likeCount, commentCount int, ok bool) {
+	post, err := a.FindPost(strings.TrimSpace(sourcePinId), "")
+	if err != nil || post == nil {
+		return 0, 0, false
+	}
+	return post.LikeCount, post.CommentCount, true
 }

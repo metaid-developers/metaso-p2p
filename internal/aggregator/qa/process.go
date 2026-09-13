@@ -120,6 +120,9 @@ func (a *Aggregator) attachPendingAnswers(rec *QuestionRecord) error {
 			if err := a.saveAnswer(answer); err != nil {
 				return err
 			}
+			if err := a.maintainAnswerOwnerIndex(answer); err != nil {
+				return err
+			}
 			if !answer.Hidden {
 				if err := a.store.Set(Namespace, answerIndexKey(answer.QuestionChain, answer.QuestionPinId, answer.CreatedAt, answer.SourcePinId), []byte{}); err != nil {
 					return err
@@ -262,6 +265,9 @@ func (a *Aggregator) processAnswer(pin *aggregator.PinInscription, chain string,
 	if err := a.maintainAnswerTimeIndex(rec); err != nil {
 		return err
 	}
+	if err := a.maintainAnswerOwnerIndex(rec); err != nil {
+		return err
+	}
 	return a.refreshQuestion(rec.QuestionChain, rec.QuestionPinId)
 }
 
@@ -361,8 +367,9 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string, i
 	targetKey := likeStateKey(locator.sourcePinId, actor)
 	// PebbleStore.Get returns ErrNotFound for absent keys; treat any Get
 	// miss as "no state yet" (same convention as the other aggregators).
-	raw, _ := a.store.Get(Namespace, targetKey)
-	if raw != nil {
+	actorIdentity := identityFromPin(pin)
+	var previous *likeState
+	if raw, _ := a.store.Get(Namespace, targetKey); raw != nil {
 		var state likeState
 		if err := unmarshalStrict(raw, &state); err != nil {
 			return err
@@ -374,13 +381,22 @@ func (a *Aggregator) processLike(pin *aggregator.PinInscription, chain string, i
 		if state.Timestamp > ts {
 			return nil
 		}
+		previous = &state
 	}
-	if err := a.store.Set(Namespace, targetKey, mustJSON(likeState{
+	next := likeState{
 		PinId:     pin.Id,
 		IsLike:    payload.IsLike,
 		Timestamp: metawebdoc.NormalizeUnixSeconds(pin.Timestamp),
 		IsMempool: isMempool,
-	})); err != nil {
+
+		ActorGlobalMetaId: actorIdentity.GlobalMetaId,
+		ActorMetaId:       actorIdentity.MetaId,
+		ActorAddress:      actorIdentity.Address,
+	}
+	if err := a.store.Set(Namespace, targetKey, mustJSON(next)); err != nil {
+		return err
+	}
+	if err := a.maintainLikeOwnerIndex(locator, next, previous); err != nil {
 		return err
 	}
 	return a.refreshEngagement(locator)
@@ -459,6 +475,9 @@ func (a *Aggregator) processComment(pin *aggregator.PinInscription, chain string
 		if err := a.store.Set(Namespace, commentIndexKey(rec.TargetPinId, rec.CreatedAt, rec.SourcePinId), []byte(rec.ChainName)); err != nil {
 			return err
 		}
+	}
+	if err := a.maintainCommentOwnerIndex(rec, previous); err != nil {
+		return err
 	}
 
 	if err := a.refreshEngagement(target); err != nil {

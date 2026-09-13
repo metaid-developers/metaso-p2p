@@ -180,6 +180,24 @@ type likeState struct {
 	IsLike    int    `json:"isLike"`
 	Timestamp int64  `json:"timestamp"`
 	IsMempool bool   `json:"isMempool,omitempty"`
+
+	// Actor identity of the like pin (empty on pre-inbox states; read paths
+	// fall back to the canonical actor key of the index entry).
+	ActorGlobalMetaId string `json:"actorGlobalMetaId,omitempty"`
+	ActorMetaId       string `json:"actorMetaId,omitempty"`
+	ActorAddress      string `json:"actorAddress,omitempty"`
+}
+
+// ActorKey is the canonical actor identity of the state: the first non-empty
+// of globalMetaId / metaId / address (lowercased by the callers that key on
+// it).
+func (s likeState) ActorKey() string {
+	for _, value := range []string{s.ActorGlobalMetaId, s.ActorMetaId, s.ActorAddress} {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // publisherInfo is the publisher block of the wire items. Name/Avatar are

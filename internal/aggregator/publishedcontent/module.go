@@ -45,6 +45,9 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if err := a.ensureMetaAppTimeIndexes(); err != nil {
 		return err
 	}
+	if err := a.ensureFreshTimeIndex(); err != nil {
+		return err
+	}
 	// Warm the search-document snapshot from the record store. A scan failure
 	// is non-fatal: every subsequent record write re-folds its document.
 	if err := a.rebuildSearchDocuments(); err != nil {
