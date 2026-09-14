@@ -92,6 +92,21 @@ func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath 
 		return err
 	}
 
+	// Registry requirement §4: a metaprotocol modify whose publisher identity
+	// does not match the source record's publisher is forged — audit it and
+	// leave the version chain untouched (no new version record, no
+	// pin_to_source pointer).
+	if protocolPath == PathMetaProtocol && a.ownerBoundModifiesEnabled() {
+		sourceIdentity := PublisherIdentity{
+			GlobalMetaId: previous.PublisherGlobalMetaId,
+			MetaId:       previous.PublisherMetaId,
+			Address:      previous.PublisherAddress,
+		}
+		if !publisherIdentityMatches(sourceIdentity, publisherIdentityOfPin(pin)) {
+			return a.recordInvalidProtocolModify(pin, previous)
+		}
+	}
+
 	updated := newRecordFromPin(pin, protocolPath, previous.SourcePinId, isMempool)
 	updated.CreatedAt = previous.CreatedAt
 	updated.SourceNumber = previous.SourceNumber

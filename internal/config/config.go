@@ -25,6 +25,20 @@ type Config struct {
 	SocialContentBackfill SocialContentBackfillConfig `json:"socialContentBackfill"`
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
 	RateLimit             RateLimitConfig             `json:"rateLimit"`
+	ProtocolRegistry      ProtocolRegistryConfig      `json:"protocolRegistry"`
+}
+
+// ProtocolRegistryConfig holds the authoritative metaprotocol registry knobs
+// (docs: metaprotocol authoritative registry requirement §3.4 / §4).
+type ProtocolRegistryConfig struct {
+	// Blocklist lists pin ids excluded from the registry projection (known
+	// test pins; the FilterMetaProtocolPinList equivalent). Empty by default.
+	Blocklist []string `json:"blocklist"`
+	// OwnerBoundModifies gates the processModify publisher-identity check for
+	// /protocols/metaprotocol: a modify whose publisher does not match the
+	// source record's publisher (globalMetaId → metaId → address cascade) is
+	// audited as invalid instead of joining the version chain. Default true.
+	OwnerBoundModifies bool `json:"ownerBoundModifies"`
 }
 
 // RateLimitConfig configures the aggregation-API token-bucket limiter (R7 of
@@ -334,6 +348,10 @@ func Default() Config {
 			Burst:             20,
 			Keys:              map[string]string{},
 		},
+		ProtocolRegistry: ProtocolRegistryConfig{
+			Blocklist:          nil,
+			OwnerBoundModifies: true,
+		},
 	}
 }
 
@@ -421,6 +439,9 @@ func Load() (Config, error) {
 	applyFloatEnv("METASO_P2P_RATE_LIMIT_RPS", &cfg.RateLimit.RequestsPerSecond)
 	applyIntEnv("METASO_P2P_RATE_LIMIT_BURST", &cfg.RateLimit.Burst)
 	applyRateLimitKeysEnv("METASO_P2P_RATE_LIMIT_KEYS", cfg.RateLimit.Keys)
+
+	applyStringSliceEnv("METASO_P2P_PROTOCOL_REGISTRY_BLOCKLIST", &cfg.ProtocolRegistry.Blocklist)
+	applyBoolEnv("METASO_P2P_PROTOCOL_OWNER_BOUND_MODIFIES", &cfg.ProtocolRegistry.OwnerBoundModifies)
 
 	applyBoolEnv("METASO_P2P_FEDERATION_ENABLED", &cfg.Federation.Enabled)
 	applyStringEnv("METASO_P2P_FEDERATION_NETWORK", &cfg.Federation.Network)
@@ -714,6 +735,25 @@ func applyRateLimitKeysEnv(name string, target map[string]string) {
 			continue
 		}
 		target[key] = token
+	}
+}
+
+// applyStringSliceEnv parses a comma-separated env value into a string slice
+// (empty entries dropped). The target is left untouched when the env var is
+// unset or holds no usable entry.
+func applyStringSliceEnv(name string, target *[]string) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return
+	}
+	var parsed []string
+	for _, entry := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			parsed = append(parsed, trimmed)
+		}
+	}
+	if parsed != nil {
+		*target = parsed
 	}
 }
 
