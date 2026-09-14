@@ -8,6 +8,8 @@ package metaweb
 // short TTL (a new modify extends it).
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +45,10 @@ type chainEntry struct {
 	GlobalMetaId string
 	MetaId       string
 	Address      string
+	// PayloadVersion is the payload's `version` field (protocol descriptors);
+	// filled from fetched pins and the local current record, best-effort for
+	// the registry detail endpoint. Empty when unattributed.
+	PayloadVersion string
 }
 
 // versionInfo is the version block of pin-read data (R2): the current pin id
@@ -198,6 +204,7 @@ func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent
 	// attribution — the versions endpoint remains the authority for chains
 	// with a known modify).
 	if current == local.SourcePinId {
+		sourceEntry.PayloadVersion = payloadVersionOf(local.PayloadJSON)
 		return resolvedChain{entries: []chainEntry{sourceEntry}, attribution: versionAttributionLocal}, nil
 	}
 	if a.remoteFetcher != nil {
@@ -231,12 +238,13 @@ func (a *Aggregator) versionChainFromLocal(pinId string, local *publishedcontent
 func currentEntryFromLocal(local *publishedcontent.Record) chainEntry {
 	current := firstNonEmptyString(local.CurrentPinId, local.SourcePinId)
 	return chainEntry{
-		PinId:        current,
-		Operation:    localChainOperation(local),
-		CreatedAt:    metawebdoc.NormalizeUnixSeconds(local.UpdatedAt),
-		GlobalMetaId: local.PublisherGlobalMetaId,
-		MetaId:       local.PublisherMetaId,
-		Address:      local.PublisherAddress,
+		PinId:          current,
+		Operation:      localChainOperation(local),
+		CreatedAt:      metawebdoc.NormalizeUnixSeconds(local.UpdatedAt),
+		GlobalMetaId:   local.PublisherGlobalMetaId,
+		MetaId:         local.PublisherMetaId,
+		Address:        local.PublisherAddress,
+		PayloadVersion: payloadVersionOf(local.PayloadJSON),
 	}
 }
 
@@ -263,12 +271,13 @@ func (a *Aggregator) versionChainFromRemote(pinId string) (resolvedChain, error)
 	if len(chain) == 0 {
 		// Single-version pin: the fetched pin is the whole chain.
 		chain = []chainEntry{chainEntry{
-			PinId:        firstNonEmptyString(pin.PinId, pinId),
-			Operation:    strings.ToLower(strings.TrimSpace(pin.Operation)),
-			CreatedAt:    metawebdoc.NormalizeUnixSeconds(pin.Timestamp),
-			GlobalMetaId: pin.GlobalMetaId,
-			MetaId:       firstNonEmptyString(pin.MetaId, pin.CreateMetaId),
-			Address:      firstNonEmptyString(pin.Address, pin.CreateAddress),
+			PinId:          firstNonEmptyString(pin.PinId, pinId),
+			Operation:      strings.ToLower(strings.TrimSpace(pin.Operation)),
+			CreatedAt:      metawebdoc.NormalizeUnixSeconds(pin.Timestamp),
+			GlobalMetaId:   pin.GlobalMetaId,
+			MetaId:         firstNonEmptyString(pin.MetaId, pin.CreateMetaId),
+			Address:        firstNonEmptyString(pin.Address, pin.CreateAddress),
+			PayloadVersion: payloadVersionFromBody(pin.ContentBody),
 		}}
 		if chain[0].Operation == "" {
 			chain[0].Operation = publishedcontent.OperationCreate
@@ -294,6 +303,54 @@ func chainFromHistory(history []string) []chainEntry {
 		chain = append(chain, chainEntry{PinId: entry, Operation: publishedcontent.OperationModify})
 	}
 	return chain
+}
+
+// payloadVersionOf reads the payload `version` field of a decoded payload
+// object ("" when absent or not a string).
+func payloadVersionOf(payload map[string]any) string {
+	return stringFieldOf(payload, "version")
+}
+
+// payloadVersionFromBody extracts the payload `version` of a raw pin body;
+// "" for non-JSON bodies. Used for version pins fetched from MANAPI.
+func payloadVersionFromBody(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 || body[0] != '{' {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	return payloadVersionOf(obj)
+}
+
+// fillPayloadVersions best-effort backfills PayloadVersion for chain entries
+// the local index cannot attribute (e.g. the original create pin of a
+// modified record — the local record only retains the latest payload).
+// Entries are fetched from MANAPI through the version metadata cache;
+// failures leave the field empty rather than failing the read.
+func (a *Aggregator) fillPayloadVersions(entries []chainEntry) []chainEntry {
+	if a.remoteFetcher == nil {
+		return entries
+	}
+	cache := a.versionCache()
+	for i := range entries {
+		if entries[i].PayloadVersion != "" {
+			continue
+		}
+		if cached, ok := cache.meta.Get(entries[i].PinId); ok && cached.PayloadVersion != "" {
+			entries[i].PayloadVersion = cached.PayloadVersion
+			continue
+		}
+		pin, err := a.remoteFetcher.FetchPin(entries[i].PinId)
+		if err != nil || pin == nil {
+			continue
+		}
+		entries[i].PayloadVersion = payloadVersionFromBody(pin.ContentBody)
+		cache.meta.Add(entries[i].PinId, entries[i])
+	}
+	return entries
 }
 
 // fillVersionMetadata attributes per-version metadata to a chain of pin ids.
@@ -323,6 +380,7 @@ func (a *Aggregator) fillVersionMetadata(chain []chainEntry, source, current cha
 			chain[i].GlobalMetaId = entry.GlobalMetaId
 			chain[i].MetaId = entry.MetaId
 			chain[i].Address = entry.Address
+			chain[i].PayloadVersion = entry.PayloadVersion
 			continue
 		}
 		if cached, ok := cache.meta.Get(chain[i].PinId); ok {
@@ -354,12 +412,13 @@ func (a *Aggregator) fillVersionMetadata(chain []chainEntry, source, current cha
 				operation = publishedcontent.OperationModify
 			}
 			entry := chainEntry{
-				PinId:        firstNonEmptyString(pin.PinId, chain[idx].PinId),
-				Operation:    operation,
-				CreatedAt:    metawebdoc.NormalizeUnixSeconds(pin.Timestamp),
-				GlobalMetaId: pin.GlobalMetaId,
-				MetaId:       firstNonEmptyString(pin.MetaId, pin.CreateMetaId),
-				Address:      firstNonEmptyString(pin.Address, pin.CreateAddress),
+				PinId:          firstNonEmptyString(pin.PinId, chain[idx].PinId),
+				Operation:      operation,
+				CreatedAt:      metawebdoc.NormalizeUnixSeconds(pin.Timestamp),
+				GlobalMetaId:   pin.GlobalMetaId,
+				MetaId:         firstNonEmptyString(pin.MetaId, pin.CreateMetaId),
+				Address:        firstNonEmptyString(pin.Address, pin.CreateAddress),
+				PayloadVersion: payloadVersionFromBody(pin.ContentBody),
 			}
 			chain[idx] = entry
 			cache.meta.Add(entry.PinId, entry)
