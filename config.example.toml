@@ -544,3 +544,19 @@ mempoolDedupeTTL = "30m"
 # rateLimitBurst = 20
 # Shared keys, "name:token" pairs (Env: METASO_P2P_RATE_LIMIT_KEYS)
 # rateLimitKeys = "idbots-fleet:change-me"
+
+# ---------------------------------------------------------------------------
+# [protocolRegistry]  Authoritative metaprotocol registry projection
+# ---------------------------------------------------------------------------
+# The registry folds /protocols/metaprotocol registrations by payload `path`
+# (lower-cased, globally unique) into one authoritative entry per path plus a
+# conflict audit, and rejects modify pins whose publisher does not match the
+# source record's publisher (audited as invalid, never chained).
+#
+# Comma-separated pin ids excluded from the projection (known test pins;
+# default empty).
+# Env: METASO_P2P_PROTOCOL_REGISTRY_BLOCKLIST
+# protocolRegistryBlocklist = ""
+# Publisher-identity check on metaprotocol modify pins (default true).
+# Env: METASO_P2P_PROTOCOL_OWNER_BOUND_MODIFIES
+# protocolOwnerBoundModifies = true

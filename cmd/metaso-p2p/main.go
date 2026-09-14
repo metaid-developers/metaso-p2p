@@ -117,6 +117,10 @@ func main() {
 		var publishedAgg *publishedcontent.Aggregator
 		publishedCandidate := &publishedcontent.Aggregator{}
 		publishedCandidate.SetProfileLookup(publishedcontent.NewUserInfoLookupAdapter(userinfoAgg))
+		// Protocol registry knobs must land before Register: Init rebuilds
+		// the by_protocol_path fold and applies the blocklist.
+		publishedCandidate.SetProtocolRegistryBlocklist(cfg.ProtocolRegistry.Blocklist)
+		publishedCandidate.SetProtocolOwnerBoundModifies(cfg.ProtocolRegistry.OwnerBoundModifies)
 		if err := aggRegistry.Register(publishedCandidate); err != nil {
 			log.Printf("WARNING: publishedcontent aggregator init failed: %v", err)
 		} else {
@@ -172,6 +176,7 @@ func main() {
 			metawebCandidate.SetDocumentSources(publishedAgg, skillserviceAgg)
 			metawebCandidate.SetPinLookups(publishedAgg, skillserviceAgg)
 			metawebCandidate.SetFreshLookup(publishedAgg)
+			metawebCandidate.SetProtocolRegistry(publishedAgg)
 		}
 		if err := aggRegistry.Register(metawebCandidate); err != nil {
 			log.Printf("WARNING: metaweb aggregator init failed: %v", err)

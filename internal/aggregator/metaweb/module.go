@@ -75,6 +75,16 @@ type FreshLookup interface {
 	Fresh(params publishedcontent.FreshParams) (*publishedcontent.FreshPage, error)
 }
 
+// ProtocolRegistrySource serves the authoritative metaprotocol registry
+// projection (publishedcontent): folded registrations, the rejected-payload
+// audit, and the invalid-modify audit.
+type ProtocolRegistrySource interface {
+	ProtocolRegistrations() ([]*publishedcontent.ProtocolRegistration, error)
+	ProtocolRegistrationByPath(path string) (*publishedcontent.ProtocolRegistration, error)
+	RejectedProtocolRecords() ([]publishedcontent.RejectedProtocol, error)
+	InvalidModifies(chainName, targetSourcePinId string) ([]*publishedcontent.InvalidModify, error)
+}
+
 // BuzzEngagementLookup joins buzz like/comment counters for fresh-feed items
 // (socialcontent).
 type BuzzEngagementLookup interface {
@@ -99,6 +109,7 @@ type Aggregator struct {
 	assetResolver      AssetURLResolver
 	remoteFetcher      RemotePinFetcher
 	freshLookup        FreshLookup
+	protocolRegistry   ProtocolRegistrySource
 	buzzEngagement     BuzzEngagementLookup
 	qaEngagement       QAEngagementLookup
 	freshCache         *freshResponseCache
@@ -136,6 +147,8 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/metaweb/fresh", a.handleFresh)
 	router.GET("/metaweb/interactions", a.handleInteractions)
 	router.GET("/metaweb/protocols", a.handleProtocols)
+	router.GET("/metaweb/protocols/check", a.handleProtocolCheck)
+	router.GET("/metaweb/protocols/detail", a.handleProtocolDetail)
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
@@ -170,6 +183,12 @@ func (a *Aggregator) SetRemotePinFetcher(fetcher RemotePinFetcher) {
 // SetFreshLookup injects the fresh-time feed scan (publishedcontent).
 func (a *Aggregator) SetFreshLookup(lookup FreshLookup) {
 	a.freshLookup = lookup
+}
+
+// SetProtocolRegistry injects the authoritative metaprotocol registry
+// projection (publishedcontent) backing the v2 protocols endpoints.
+func (a *Aggregator) SetProtocolRegistry(source ProtocolRegistrySource) {
+	a.protocolRegistry = source
 }
 
 // SetEngagementLookups injects the best-effort engagement counters for

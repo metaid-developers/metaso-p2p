@@ -189,14 +189,25 @@ Authoritative version-chain metadata, matching the chain's `modify_history` exac
   - `"local"` — the chain was answered from the local index without consulting the projection. Two documented paths produce this: the single-version fast path (no modify observed locally, the local record is the whole chain) and the degraded mode (the projection is unreachable; the locally known source/current pair is served rather than erroring). Local attribution is exact when the indexer has observed every pin of the chain, but can be partial or stale after an indexer gap — bots that need evidence-grade ordering should retry on `"local"` or treat it as advisory.
 - The batch read's `version.count` (R2) carries the same attribution semantics through the same resolver.
 
-## 5. R6 — `GET /api/metaweb/protocols` (validated protocol registry)
+## 5. R6 — `GET /api/metaweb/protocols` (authoritative protocol registry, v2)
 
-Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw poisoned/truncating path-list scans.
+> **v2 upgrade (2026-09-14)**: the registry is now the *authoritative fold* of
+> the metaprotocol requirement ("metaprotocol 权威注册表" — the exact
+> counterpart of the IDBots metaprotocol-registry tool contract). v1 was a
+> flat timeline over the fresh index; v2 folds registrations by registration
+> key and adds the `check`/`detail` endpoints below. The v1 `rejected[]`
+> audit is unchanged.
+
+Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw poisoned/truncating path-list scans. Every payload `path` (trimmed + lower-cased — the *registration key*, globally unique across chains) folds into one **authoritative entry**: the first valid registration, ordered by `(createdAt asc, confirmed first, pinId asc)`. Other valid registrations of the same key are **conflicts**: fully indexed and pin-readable, but listed only as `conflictsCount` (or `conflicts[]` with `includeConflicts=true`).
 
 | Param | Semantics |
 |---|---|
-| `size` | `1`–`100`, default `50`. |
-| `cursor` | Same opaque key cursor as R1 (registry shares the fresh-index ordering). |
+| `q` | Keyword filter over `protocolName` / `title` / `protocolPath`. |
+| `publisher` | Filter by publisher identity (globalMetaId / metaId / address). |
+| `path` | Exact protocol-path match (normalized; malformed → `40000`). |
+| `includeConflicts` | `true` attaches the per-item `conflicts[]` detail. |
+| `size` | `1`–`100`, default `20`. |
+| `cursor` | Key-pinned cursor over the total order (`createdAt` desc, chain, path). |
 
 ```json
 {
@@ -204,13 +215,15 @@ Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw p
   "data": {
     "items": [
       {
-        "pinId": "…", "currentPinId": "…", "chainName": "mvc", "createdAt": 1769066365,
-        "author": { "…": "…" },
-        "path": "/protocols/gamescorerecording",
+        "protocolPath": "/protocols/gamescorerecording",
         "title": "Game Score Recording Protocol",
-        "protocolName": "GameScoreRecording",
-        "intro": "…",
-        "version": "1.0.1"
+        "protocolName": "gamescorerecording",
+        "intro": "…", "version": "1.0.1", "chainName": "mvc",
+        "pinId": "…", "currentPinId": "…",
+        "createdAt": 1769066365, "updatedAt": 1770000000,
+        "confirmed": true,
+        "author": { "address": "…", "metaid": "…", "globalMetaId": "…", "name": "…" },
+        "conflictsCount": 0
       }
     ],
     "rejected": [ { "pinId": "…", "reason": "invalid path: …" } ],
@@ -220,12 +233,29 @@ Paginated registry of `/protocols/metaprotocol` descriptors, replacing the raw p
 }
 ```
 
-Revoked descriptors are excluded by construction (the fresh index never contains them). Validation (a record failing any check is excluded from `items` and appended to the page's `rejected` audit list with a reason):
+- **Projection**: the fold lives in the `publishedcontent` aggregator (`by_protocol_path:` index, maintained at write time including mempool registrations, rebuilt from the record store at every Init). Revoking the authoritative entry promotes the earliest remaining valid registration; when none remain the key disappears and the path is registerable again.
+- **Validation** (unchanged from v1): a record needs an exposed JSON payload with `payload.path` matching `^/protocols/[a-z0-9_]+(/[a-z0-9_]+)*$`; failures are excluded from `items` and listed in `rejected` with a reason. An optional pin blocklist (`METASO_P2P_PROTOCOL_REGISTRY_BLOCKLIST`) excludes known test pins silently (by policy, not as rejections).
+- **Modify owner check**: a metaprotocol modify pin whose publisher identity does not match the source record's publisher (globalMetaId → metaId → address cascade) never joins the version chain — it is audited under `invalid_modify:` and surfaced via the detail endpoint. Toggle: `METASO_P2P_PROTOCOL_OWNER_BOUND_MODIFIES` (default `true`).
 
-1. The record carries an exposed JSON payload.
-2. `payload.path` matches `^/protocols/[a-z0-9_]+(/[a-z0-9_]+)*$` — this rejects the observed poisoned payloads (upstream error text landing in the `path` field).
+### `GET /api/metaweb/protocols/check?path=…` — publish precheck
 
-`rejected` lists only records encountered while scanning the returned page; it is an audit list, not a global census. The ~22 KB silent truncation ceiling of the raw path-list disappears — paging covers the whole registry.
+`path` is required and must match the registry path shape (`40000` otherwise). Returns `{path, available, existing}`; `existing` (null when available) carries the authoritative registration's `pinId`/`currentPinId`/`title`/`protocolName`/`version`/`createdAt`/`confirmed`/`author`. Mempool (unconfirmed) registrations count as occupied, so concurrent publishers cannot both pass the precheck once one broadcast is observed. Note the indexation window: a broadcast becomes visible to `check` within seconds (mempool polling).
+
+### `GET /api/metaweb/protocols/detail?path=…` or `?pinId=…` — protocol detail
+
+`path` / `pinId` are alternatives (path wins); `pinId` may be any version of the chain. Unknown → `40400`. Returns:
+
+```json
+{
+  "record": { "…all item fields…": "…", "payload": { "…raw passthrough, protocolContent never parsed…": "…" } },
+  "versions": [ { "pinId": "…", "version": "1.0.0", "timestamp": 1769066365, "author": { "…": "…" }, "attribution": "chain" } ],
+  "conflicts": [],
+  "invalidModifies": [ { "pinId": "…", "targetSourcePinId": "…", "modifierIdentity": { "…": "…" }, "reason": "publisher_mismatch", "timestamp": 1769066400 } ]
+}
+```
+
+`versions` is oldest→newest over the R4 chain mechanism (chain projection `modify_history` authoritative, local index fallback — `attribution` per §4); per-version payload `version` strings are backfilled best-effort (empty when unattributable). `payload` is a raw passthrough — MetaSo never interprets the descriptor body (JSON5 `protocolContent` stays a string).
+
 
 ## 6. R7 — fleet civility: API-key rate limiting with 429 semantics
 
@@ -264,7 +294,7 @@ Implemented as an opt-in Gin middleware (off by default; no behavior change unti
 | R3-3 | deterministic stage-0 inbox | §3 |
 | R4 | matches modify_history exactly; documented authority | §4 |
 | R5 | dedupe + per-author throttle + honest `suppressed` | §1.3 |
-| R6 | path-validated registry, paginated, rejected audit | §5 |
+| R6 | authoritative registry fold, precheck + detail, rejected/invalid-modify audits | §5 |
 | R7 | per-identity limits, 429 + Retry-After, fleet API key | §6 |
 | F6 | no silent truncation anywhere in the metaweb read path | §2, §9 audit |
 

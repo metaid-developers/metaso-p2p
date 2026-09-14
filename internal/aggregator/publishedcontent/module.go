@@ -21,6 +21,15 @@ type Aggregator struct {
 	indexMu       sync.Mutex
 	profileLookup MetaAppProfileLookup
 
+	// registryMu serializes read-modify-write cycles on the by_protocol_path
+	// registry index (pin handling and the Init rebuild).
+	registryMu sync.Mutex
+	// protocolBlocklist excludes pin ids from the registry projection.
+	protocolBlocklist map[string]bool
+	// protocolOwnerBoundModifies gates the metaprotocol modify publisher
+	// check; nil means the documented default (true).
+	protocolOwnerBoundModifies *bool
+
 	// searchDocs holds the warm, copy-on-write search-document snapshot
 	// consumed by the metaweb unified search aggregator (see searchdoc.go).
 	searchDocs      atomic.Value // []metawebdoc.Document, immutable once stored
@@ -46,6 +55,11 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 		return err
 	}
 	if err := a.ensureFreshTimeIndex(); err != nil {
+		return err
+	}
+	// Rebuild the authoritative metaprotocol registry fold from the record
+	// store (self-healing at every start, per the registry requirement §3.2).
+	if err := a.rebuildProtocolRegistry(); err != nil {
 		return err
 	}
 	// Warm the search-document snapshot from the record store. A scan failure

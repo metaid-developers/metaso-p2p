@@ -211,6 +211,11 @@ func (a *Aggregator) saveRecord(rec *Record, previous *Record) error {
 	if err := a.writeFreshIndex(rec); err != nil {
 		return err
 	}
+	// Fold metaprotocol records into the authoritative protocol registry
+	// (no-op for other protocols).
+	if err := a.maintainProtocolRegistry(rec, previous); err != nil {
+		return err
+	}
 	// Fold the committed record into the warm search-document snapshot so the
 	// metaweb unified search sees create/modify/revoke/mempool changes
 	// immediately (copy-on-write; hidden records are dropped from the index).
