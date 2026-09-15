@@ -1,6 +1,7 @@
 package bothomepage
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/presence"
@@ -42,6 +43,37 @@ func (f *fakeGlobalPresence) OnlineList(local []presence.OnlineEntry, page int, 
 }
 
 func (f *fakeGlobalPresence) Stats(local []presence.OnlineEntry) presence.GlobalStats {
+	return presence.GlobalStats{}
+}
+
+// fakeGlobalAllPresence also implements OnlineEntries, mirroring the
+// federation.Store fast path used by production readers.
+type fakeGlobalAllPresence struct {
+	enabled   bool
+	items     []presence.OnlineEntry
+	listCalls int
+	allCalls  int
+}
+
+func (f *fakeGlobalAllPresence) Enabled() bool {
+	return f.enabled
+}
+
+func (f *fakeGlobalAllPresence) DefaultScope() string {
+	return "global"
+}
+
+func (f *fakeGlobalAllPresence) OnlineList(local []presence.OnlineEntry, page int, size int) []presence.OnlineEntry {
+	f.listCalls++
+	return append([]presence.OnlineEntry(nil), f.items...)
+}
+
+func (f *fakeGlobalAllPresence) OnlineEntries(local []presence.OnlineEntry) []presence.OnlineEntry {
+	f.allCalls++
+	return append([]presence.OnlineEntry(nil), f.items...)
+}
+
+func (f *fakeGlobalAllPresence) Stats(local []presence.OnlineEntry) presence.GlobalStats {
 	return presence.GlobalStats{}
 }
 
@@ -90,11 +122,45 @@ func TestResolvePresenceOnlineFromGlobalReader(t *testing.T) {
 	if global.calls != 1 {
 		t.Fatalf("global OnlineList calls = %d, want 1", global.calls)
 	}
-	if global.lastPage != 1 || global.lastSize != 100 {
-		t.Fatalf("global OnlineList page/size = %d/%d, want 1/100", global.lastPage, global.lastSize)
+	if global.lastPage != 1 || global.lastSize != globalPresenceLookupSize {
+		t.Fatalf("global OnlineList page/size = %d/%d, want 1/%d", global.lastPage, global.lastSize, globalPresenceLookupSize)
 	}
 	if len(global.lastLocal) != 1 || global.lastLocal[0].MetaId != "local-only" {
 		t.Fatalf("global OnlineList local entries = %+v, want local-only", global.lastLocal)
+	}
+}
+
+func TestResolvePresenceFindsBotBeyondFirstPageOfGlobalList(t *testing.T) {
+	// Regression: the merged federation list can exceed the old 100-entry
+	// lookup page, which flipped bots ranked below the cut to unknown.
+	items := make([]presence.OnlineEntry, 0, 155)
+	for i := 0; i < 154; i++ {
+		items = append(items, presence.OnlineEntry{
+			MetaId:     fmt.Sprintf("idqfiller%03d", i),
+			LastSeenAt: int64(5000 + i),
+		})
+	}
+	items = append(items, presence.OnlineEntry{MetaId: "idqBot", LastSeenAt: 100})
+	global := &fakeGlobalAllPresence{enabled: true, items: items}
+	agg := &Aggregator{}
+	agg.SetPresenceReaders(&fakeLocalPresence{}, global)
+
+	got := agg.resolvePresence(ProfileSnapshot{GlobalMetaId: "idqBot"}, true)
+
+	if got.State != "online" {
+		t.Fatalf("Presence.State = %q, want online", got.State)
+	}
+	if got.Source != "federated-presence" {
+		t.Fatalf("Presence.Source = %q, want federated-presence", got.Source)
+	}
+	if got.UpdatedAt == nil || *got.UpdatedAt != 100 {
+		t.Fatalf("Presence.UpdatedAt = %v, want 100", got.UpdatedAt)
+	}
+	if global.allCalls != 1 {
+		t.Fatalf("global OnlineEntries calls = %d, want 1", global.allCalls)
+	}
+	if global.listCalls != 0 {
+		t.Fatalf("global OnlineList calls = %d, want 0", global.listCalls)
 	}
 }
 
