@@ -6,6 +6,18 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
+// globalPresenceLookupSize matches the other presence consumers (botsearch,
+// socket): point lookups must scan the full merged online set, because
+// truncating the sorted list at a small page silently flips online bots to
+// unknown once the federation grows past the page size.
+const globalPresenceLookupSize = 10000
+
+// globalPresenceAllReader is implemented by readers able to return the full
+// merged online set without pagination.
+type globalPresenceAllReader interface {
+	OnlineEntries(local []presence.OnlineEntry) []presence.OnlineEntry
+}
+
 func (a *Aggregator) resolvePresence(profile ProfileSnapshot, include bool) Presence {
 	if !include {
 		return unknownPresence()
@@ -22,7 +34,7 @@ func (a *Aggregator) resolvePresence(profile ProfileSnapshot, include bool) Pres
 	}
 
 	if a != nil && a.globalPresence != nil && a.globalPresence.Enabled() {
-		if item, ok := findPresence(a.globalPresence.OnlineList(local, 1, 100), candidates); ok {
+		if item, ok := findPresence(globalPresenceLookupList(a.globalPresence, local), candidates); ok {
 			return presenceFromEntry(item, "federated-presence")
 		}
 	}
@@ -32,6 +44,15 @@ func (a *Aggregator) resolvePresence(profile ProfileSnapshot, include bool) Pres
 	}
 
 	return unknownPresence()
+}
+
+// globalPresenceLookupList returns the merged online set for a point lookup,
+// preferring the unpaginated reader fast path over the size-capped fallback.
+func globalPresenceLookupList(reader presence.GlobalReader, local []presence.OnlineEntry) []presence.OnlineEntry {
+	if allReader, ok := reader.(globalPresenceAllReader); ok {
+		return allReader.OnlineEntries(local)
+	}
+	return reader.OnlineList(local, 1, globalPresenceLookupSize)
 }
 
 func identityCandidates(profile ProfileSnapshot) []string {
