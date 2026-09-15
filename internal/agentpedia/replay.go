@@ -14,7 +14,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strings"
 )
+
+// transferSlugAliasPlate enables the errata-C1 view semantics for transfer-slug:
+// the alias is a KEY-level navigation pointer (aliasOf[fromEntry] = bare slug of
+// toEntry) rendered as `redirect` on the source key only, never on the target key.
+// The shared record is untouched, so head/history/rev counts stay as they were and
+// an alias never implies "the entry is closed" (only the explicit /rev redirect
+// plate terminates a stream, by pinning head).
+//
+// This is the single switch for the C1 <-> C2 fallback: set it to false and
+// transfer-slug contributes no plate at all (C2) while the record alias itself
+// still applies; nothing else in the engine changes.
+const transferSlugAliasPlate = true
 
 // Event mirrors one Agentpedia protocol pin in chain order.
 type Event struct {
@@ -205,6 +218,7 @@ type replayState struct {
 	founders        []string
 	editors         map[string]*editorRec
 	entries         map[string]*entryRec
+	aliasOf         map[string]string // errata C1: entryKey -> bare slug it navigates to
 	graveyard       []Grave
 	pending         []string
 	challenges      map[string]*challengeRec
@@ -382,6 +396,16 @@ func (s *replayState) applyOutcome(p *proposalRec) {
 			to, _ := p.params["toEntry"].(string)
 			if src, ok := s.entries[from]; ok {
 				s.entries[to] = src
+				// Errata C1: the alias is recorded as a KEY-level fact, not as a
+				// field of the shared record — a record-level plate would also
+				// render on the target key (the self-referential plate the IDBots
+				// engine used to produce). Written here and only here: applyOutcome
+				// runs exactly once per proposal (votes on a non-open proposal are
+				// graveyarded), so the plate is written once, at the instant the
+				// ruling turns effective, and never depends on map iteration order.
+				if slug := bareSlug(to); slug != "" {
+					s.aliasOf[from] = slug
+				}
 			}
 		}
 	}
@@ -1020,6 +1044,37 @@ func (s *replayState) apply(ev Event) {
 	}
 }
 
+// bareSlug strips the "<lang>:" prefix off an entryKey, yielding the bare slug
+// carried by a redirect plate ({to: <bare slug>}). Mirrors the IDBots engine's
+// toEntry.split(':').slice(1).join(':'); an entryKey without a colon has no slug.
+func bareSlug(entryKey string) string {
+	if i := strings.Index(entryKey, ":"); i >= 0 {
+		return entryKey[i+1:]
+	}
+	return ""
+}
+
+// plateOf returns the redirect plate rendered on ONE entryKey: the errata-C1
+// key-level alias plate when that key is the source of an effective
+// transfer-slug ruling, otherwise the record's explicit /rev redirect plate
+// (unchanged). A key that is neither renders none — which is why the target key
+// of a transfer never shows a plate of its own.
+//
+// This is the projection half of the C1 switch: with transferSlugAliasPlate set
+// to false the alias plate is never rendered (C2), and the explicit /rev plate
+// is all that is left.
+func (s *replayState) plateOf(key string, en *entryRec) *RedirectInfo {
+	if transferSlugAliasPlate {
+		if to, ok := s.aliasOf[key]; ok && to != "" {
+			return &RedirectInfo{To: to}
+		}
+	}
+	if en.redirect != "" {
+		return &RedirectInfo{To: en.redirect}
+	}
+	return nil
+}
+
 // Replay deterministically applies the ordered event stream and returns the view.
 // Mempool pins (Height < 0) are recorded as pending and excluded (fact card F6).
 func Replay(events []Event, opts Options) *View {
@@ -1029,6 +1084,7 @@ func Replay(events []Event, opts Options) *View {
 		bpd:             opts.BlocksPerDay,
 		editors:         map[string]*editorRec{},
 		entries:         map[string]*entryRec{},
+		aliasOf:         map[string]string{},
 		challenges:      map[string]*challengeRec{},
 		proposals:       map[string]*proposalRec{},
 		paramProposals:  map[string]*paramProposalRec{},
@@ -1093,8 +1149,8 @@ func Replay(events []Event, opts Options) *View {
 		}
 		sort.Strings(disputed)
 		var redirect *RedirectInfo
-		if en.redirect != "" {
-			redirect = &RedirectInfo{To: en.redirect}
+		if plate := s.plateOf(key, en); plate != nil {
+			redirect = plate
 		}
 		contests := en.contests
 		if contests == nil {
