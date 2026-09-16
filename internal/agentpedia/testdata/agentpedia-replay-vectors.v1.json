@@ -4,7 +4,7 @@
     "version": "v1.0",
     "algoVersion": "adoption-algo-v1",
     "pipelineCount": 25,
-    "supplementaryCount": 16,
+    "supplementaryCount": 18,
     "compatibilityStatement": "25/25 pipeline vectors must pass to claim adoption-algo-v1 compatibility (v0.1.6 §2).",
     "sources": {
       "specLayers": [
@@ -5690,6 +5690,193 @@
         "entries.zh:zulu.head": "rv_x::eq",
         "entries.zh:alpha.head": "rv_x::eq",
         "graveyard.length": 0
+      }
+    },
+    {
+      "id": "S17",
+      "title": "explicit /rev type=redirect: the source key renders the record-level terminating plate {to:<bare slug>} and pins its head to the redirect pin; the target key renders no plate and the stream stays clean",
+      "source": "pin://bd28bfc0e9d2488005c85caa3aa77618d05623dc15273cc38f6d73c33b868b10i0 §3.2 item 5 (redirect semantics: the plate is {to:<bare slug>} and the head is pinned to the redirect pin)",
+      "events": [
+        {
+          "pin": "s17_alpha",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "alpha",
+            "title": "s17 alpha",
+            "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "pin": "s17_zulu",
+          "path": "rev",
+          "sender": "E1",
+          "height": 11,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "zulu",
+            "title": "s17 zulu",
+            "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        {
+          "pin": "s17_rv",
+          "path": "rev",
+          "sender": "E1",
+          "height": 12,
+          "payload": {
+            "v": 1,
+            "type": "redirect",
+            "lang": "zh",
+            "slug": "zulu",
+            "title": "s17 zulu",
+            "redirectTo": "alpha"
+          }
+        }
+      ],
+      "expect": {
+        "entries.zh:zulu.redirect": {
+          "to": "alpha"
+        },
+        "entries.zh:zulu.head": "s17_rv",
+        "entries.zh:alpha.redirect.$absent": true,
+        "graveyard.length": 0
+      }
+    },
+    {
+      "id": "S18",
+      "title": "transfer-slug alias plate is KEY-level (errata C1): an effective transfer-slug ruling renders {to:<bare slug of toEntry>} on the source key only, and the target key renders no plate because the shared record carries none",
+      "source": "pin://197b0a14f3a753f7945e6eae8d0534c448c8a6fcc0afa996ced5656e94dd8e72i0 §3 C1 (key-level alias plate; errata E-6, chair ruling on chain) incl. §13 rule-5 view-contract supplement + N2 same-key dual-plate priority (key-level alias plate wins), excludes K10 and N5/N6/N7; secondary provenance: pre-ruling baseline = E5-K10-transfer-slug-redirect-spec-draft.md §3 C1 draft sha256 a88f9fed2a597665149b232827a75b1f42ed76ecbc37938f5b5491b12373ae8b (not on chain); case opened by pin://e0de20f3b73a88dd61b289622f63f74f34d5e08de99a3f29924f81094a0704aci0 ②",
+      "events": [
+        {
+          "pin": "s18_alpha",
+          "path": "rev",
+          "sender": "E1",
+          "height": 10,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "alpha",
+            "title": "s18 alpha",
+            "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "pin": "s18_zulu",
+          "path": "rev",
+          "sender": "E1",
+          "height": 11,
+          "payload": {
+            "v": 1,
+            "type": "create",
+            "lang": "zh",
+            "slug": "zulu",
+            "title": "s18 zulu",
+            "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        {
+          "pin": "s18_chx",
+          "path": "challenge",
+          "sender": "E2",
+          "height": 12,
+          "payload": {
+            "v": 1,
+            "targetRev": "s18_zulu",
+            "reason": "other",
+            "detail": "errata C1 alias plate vector"
+          }
+        },
+        {
+          "pin": "s18_prop",
+          "path": "ruling",
+          "sender": "E1",
+          "height": 13,
+          "payload": {
+            "v": 1,
+            "action": "proposal",
+            "challengePin": "s18_chx",
+            "seed": "s18_chx",
+            "outcome": "transfer-slug",
+            "params": {
+              "fromEntry": "zh:zulu",
+              "toEntry": "zh:alpha"
+            }
+          }
+        },
+        {
+          "pin": "s18_v1",
+          "path": "ruling",
+          "sender": "A1",
+          "height": 14,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "s18_prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "s18_v2",
+          "path": "ruling",
+          "sender": "A2",
+          "height": 15,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "s18_prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "s18_v3",
+          "path": "ruling",
+          "sender": "A3",
+          "height": 16,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "s18_prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "s18_v4",
+          "path": "ruling",
+          "sender": "A4",
+          "height": 17,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "s18_prop",
+            "approve": true
+          }
+        },
+        {
+          "pin": "s18_v5",
+          "path": "ruling",
+          "sender": "A5",
+          "height": 18,
+          "payload": {
+            "v": 1,
+            "action": "vote",
+            "proposalPin": "s18_prop",
+            "approve": true
+          }
+        }
+      ],
+      "expect": {
+        "entries.zh:zulu.redirect": {
+          "to": "alpha"
+        },
+        "entries.zh:alpha.redirect.$absent": true
       }
     }
   ]

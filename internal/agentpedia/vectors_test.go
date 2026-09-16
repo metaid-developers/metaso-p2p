@@ -178,6 +178,17 @@ func deepEqualJSON(a, b any) bool {
 	return reflect.DeepEqual(aj, bj)
 }
 
+// jsonAbsent reports whether a resolved view value is the JSON shape of "not
+// there": null, or the empty string (the form an omitempty-dropped value or a
+// never-written plate takes once the view has been marshalled).
+func jsonAbsent(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
+}
+
 func assertExpect(t *testing.T, view *View, expect vectorExpect) {
 	t.Helper()
 	keys := make([]string, 0, len(expect))
@@ -188,6 +199,14 @@ func assertExpect(t *testing.T, view *View, expect vectorExpect) {
 	for _, path := range keys {
 		expected := expect[path]
 		switch {
+		case strings.HasSuffix(path, ".$absent"):
+			// `<path>.$absent` passes when the path does not exist at all (the
+			// resolve error) or resolves to null / "" — the only way to assert a
+			// non-existence with this vocabulary (view contract §13.5 declares no
+			// `redirect` field, so `redirect` is always an existence question).
+			if v, err := resolve(view, strings.TrimSuffix(path, ".$absent")); err == nil && !jsonAbsent(v) {
+				t.Fatalf("%s: expected absent, got %v", path, v)
+			}
 		case strings.HasSuffix(path, ".$contains"):
 			parent, err := resolve(view, strings.TrimSuffix(path, ".$contains"))
 			if err != nil {
