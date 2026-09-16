@@ -631,9 +631,9 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 | 产物 | sha256 |
 |---|---|
 | `internal/metatask/scripts/freeze_pools.py` | `9457fdd977f5d63af8eb622a999fb25b250a338f08758074249071a833421d72` |
-| `internal/metatask/scripts/recompute_pools.py` | `88b82ad8aa9f1e9620b3e54763d31713499dd15f30856e8c9b16f41b4daa8d53` |
-| `internal/metatask/testdata/metatask-pools-vectors.v1.json` | `69fdf1ba60e87352ed59cb10f0045a7c4e6711e86f03ec5a92231b91f1191d31` |
-| `internal/metatask/testdata/known-nodes.v1.json` | `b9e04447c602d62ebf17212b00ce1986a9d80b2e07a5388f3f9e7a0ec175339b` |
+| `internal/metatask/scripts/recompute_pools.py` | `7b88124ca1bde742c4b2f0b67fd8773d2fbf942b70c738419a898fd4d1b22da1` |
+| `internal/metatask/testdata/metatask-pools-vectors.v1.json` | `ea63945883355742c6605714015c5227c2308f4c4c8ad4e66da86f63ceb08210` |
+| `internal/metatask/testdata/known-nodes.v1.json` | `d9f93df6e6320c49e12f819e6a15f8cca816df29392c0c02dc10f6f731617159` |
 | 引擎脚本（v1.2.0，仓内 vendored） | `828a9b95b1f2c9648ca250122cd78063d622202ac53b776508c737a639cf3f25` |
 | 引擎技能包 zip | `df9915ae4558523cb514c5098013b11156c2807c77f6837bfb8d3747d7238243` |
 | 引擎读数 p02 / p01 | `ff8ba64ba82d384ca30914c57e949edfdd21517c8c13a9764e94a98574dad0eb` / `dc5d4fcec4ca3c9f7d54c4627b03253dadbd169548f2e82708d84040cf40c7ce` |
@@ -654,6 +654,20 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 **§七 表中先前的一切 Python 读数哈希（p02 / p01）随之作废**——它们绑定的是旧脚本的缩进排版。
 Go 命令的排版未改（仍是缩进 JSON，供人读）；两种排版不做字节级互比，对照一律走 `compare`。
 本轮新料与全部读数哈希见 **§十**。
+
+### 七·D、双口径（semantic_check 过滤）改动后的哈希口径（本轮，§十一）
+
+本轮为 `recompute_pools.py` 增加两口径开关（`--dual-report` / `--no-semantic-check-filter`）、
+`ballot_inventory` / `caliber_view` / `node_diff` 投影，并给 `expect` 加 `--caliber`；
+`metatask-pools-vectors.v1.json` 增 `caliber_vectors`（4 条），`known-nodes.v1.json` 增
+`expect_ruling`（t35/t47/t55）。因此：
+
+- `recompute_pools.py` sha256 变为 `7b88124c…`（上表已更新），
+  `metatask-pools-vectors.v1.json` 变为 `ea639458…`，`known-nodes.v1.json` 变为 `d9f93df6…`；
+- **任何先于本轮提交的脚本/向量哈希不再作为证据**（§七·C 引用的 `88b82ad8…` 已过期）；
+- 默认路径（不带新开关）的 `recompute` 输出**逐字节未变**——回归门为
+  `sha256(impl 读数) = 6988c0844d4db63f33a2ada1c2f463cef24fe55e4389d7f5c7a21f8c78fdd486`
+  （19:31 快照），改动前后 `cmp` 相同；`expect`（默认 `--caliber implementation`）输出与退出码亦未变。
 
 ## 八、验收判据对照
 
@@ -738,3 +752,161 @@ Python `98b62db6b126385df55b02887b1d998ac9bc530a6df85389cf9706248b0e703e`。
 
 第三方通道对照：三枚 submission pin 直接从 `https://manapi.metaid.io/content/<pinId>` 再取一次，
 `node` / `taskid` / `claimid` 与快照内字节一致（t55 载荷 2012 字节）。
+
+## 十一、双口径读数与「受影响票清单」（试点 #02 · semantic_check 过滤）
+
+### 十一·1、裁定依据与两口径定义
+
+- 裁定件：[pin://1bf3cb15470a45655fc3e2a52f1a309b04a8f8fd86989243f9f964eb39d7988ci0](pin://1bf3cb15470a45655fc3e2a52f1a309b04a8f8fd86989243f9f964eb39d7988ci0)
+- 澄清件：[pin://6adaa70088f0fb136eda7a5f314ac61c88830b8ba63ece72d8b5091cc0e07af8i0](pin://6adaa70088f0fb136eda7a5f314ac61c88830b8ba63ece72d8b5091cc0e07af8i0)
+
+裁定要点（逐字取自链上）：`semantic_check` **不是 spec 条款**——spec v1.0→v1.2.11 从未写入该必填
+字段；该过滤来自 metatask-replay 的**实现自述**与修订清单 #9 的缺项裁定，**不追溯、不作 spec 级
+计票规则**；凡**仅因缺该字段被扣**的票**恢复计入**（其余计票条件满足时）。判决记录须并列两套读数。
+
+| 口径 | 定义 | 开关 |
+|---|---|---|
+| (a) 实现口径 | 含 `semantic_check` 过滤（工具当前真实行为，即 replay v1.2.0 的 #9） | 默认 |
+| (b) 裁定口径 | 不含该过滤（协议应有行为）；#8 的「fail 缺 failreason」判据**不变** | `--no-semantic-check-filter` |
+
+命令：
+
+```bash
+# 两套读数 + 受影响票清单（canonical JSON 到 stdout；--out 时另写 .sha256）
+python3 internal/metatask/scripts/recompute_pools.py recompute --snapshot <dir> \
+    --root 08cac496dfa93874dd7d16893038da16b0d2dbc92f844d09512ca0cc78c03b46i0 \
+    --now <unix> --dual-report --out affected-ballots-pilot02.json
+# 单口径（b）读数
+python3 internal/metatask/scripts/recompute_pools.py recompute --snapshot <dir> --root <pinId> \
+    --now <unix> --no-semantic-check-filter
+```
+
+### 十一·2、材料（两个冻结快照，结论一致）
+
+| 快照 | 抓取时刻 | manifest sha256 | 七池翻页 | verify 票 |
+|---|---|---|---|---|
+| A（§十 已留档） | 2026-09-16T19:31:48+0800 | `104474d99cbb0b2c23127bd1a32a328ad2ac6155316650a8e0dcb632c058b2b8` | 七池皆到显式空页 | 247 |
+| B（本轮新冻结） | 2026-09-16T21:13:13+0800（`frozen_at_unix=1789564393`） | `9b305aebcc3a10b0a53b6914eac2d70b804e2bd6fb678a6d953fd2fc66ef43c5` | 七池皆 `LIST_NULL_EMPTY_CURSOR`，531/531 载荷 `ok`，0 拒收 | 248 |
+
+任务根 `08cac496dfa93874dd7d16893038da16b0d2dbc92f844d09512ca0cc78c03b46i0`（111 节点，quorum 2）。
+池是活的：A→B 涨 8 枚 pin（claim 117→123、submission 118→124、verify 247→248）。
+**两个快照的双口径结论逐项相同**（见十一·3 / 十一·5），但清单哈希不同——清单绑定材料。
+
+> 材料获取旁证：本轮另有一份 20:59 的线上抓取（`scratch/poolcheck`）在 verify 第 3 页
+> **仍带 live cursor**（48 条 + 非空 `nextCursor`），故其 248 条是**截断读数**，不能当池尽。
+> 正式材料一律用 `freeze_pools.py` 翻到**显式空页**的结果（判据见 §〇.1）。
+
+### 十一·3、两套口径读数（快照 B）
+
+| 字段 | (a) 实现口径 | (b) 裁定口径 | 变化 |
+|---|---|---|---|
+| quorum | 2 | 2 | 不变 |
+| all_verified | False | False | 不变 |
+| verify_votes（池级） | 16 | 235 | **变** |
+| verify_votes_task_scoped | 13 | 203 | **变** |
+| verify 池 invalid_votes | 216 | 9 | **变** |
+| verify 池 effective / ignored | 13 / 219 | 203 / 29 | **变** |
+| verify 池 records / records_in_scope | 248 / 232 | 248 / 232 | 不变 |
+| reputation（命中 owner 数 / 票数合计） | 2 / 4 | 8 / 61 | **变** |
+
+### 十一·4、受影响票清单
+
+清单逐票列出**本任务根全部 submission 的票**（`ballots`，共 232 条；另有 16 条 targeting 他任务根，
+计为 `ballots_out_of_scope`）。每条字段：`pin` / `target`（submission pin）/ `target_node` /
+`target_effective` / `verifier` / `verdict_raw` / `original_verdict` / `deducted_for_missing_semantic_check` /
+`ruling_verdict` / `effect` / `affected` / `counts_pass_{impl,ruling}` / `counts_fail_{impl,ruling}` /
+`verifier_owner`。
+
+| 指标 | 张数（快照 A / B） |
+|---|---|
+| 本根票（in scope） | 231 / 232 |
+| **受影响**（两口径判定不同） | **215 / 215** |
+| └ `effect=restored_to_valid`（恢复为有效票） | 207 / 207 |
+| └ `effect=reason_only`（理由变、判定仍 invalid） | 8 / 8 |
+| 不受影响（两口径判定一致） | 16 / 17 |
+| 原判定 `invalid` | 216 / 216 |
+| 裁定口径判定 `pass` | 222 / 223 |
+| 裁定口径判定 `invalid`（#8 缺 `failreason`，两口径一致） | 9 / 9 |
+| target 未生效的票（列出、不进节点计数） | 28 / 29 |
+| 计入 quorum 的 pass 票 | 13 → **203**（两快照相同） |
+
+### 十一·5、节点差异：哪些票数变、哪些 verified 状态变
+
+| 项 | 快照 A | 快照 B |
+|---|---|---|
+| 节点数 | 111 | 111 |
+| 票数变化节点 | 67 | 67 |
+| **verified 状态变化节点（claimed → verified）** | **57** | **57** |
+| 状态不变节点 | 44 | 44 |
+
+57 个状态变化节点（两快照相同）：`m51 m61 m71 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t43 t45 t47
+t50 t51 t52 t53 t54 t56 t57 t58 t59 t60 t61 t62 t63 t64 t65 t66 t67 t68 t69 t70 t71 t72 t73 t74 t76 t78
+t80 t102 t111 t112 t116 t117 t119 t120 t121 t122 t126 t127 t128 t129`
+
+票数变化但状态不变的 10 个节点：`t42 t44 t46 t49 t55 t75 t77 t79 t107 t113`。
+
+> **口径落差（须 chair 知悉）**：裁定件预期「结论不应变」。实测**只有全局结论不变**——
+> `all_verified` 两口径皆 `False`；但**节点级 verified 集合改变了 57 个节点**，reputation
+> 命中 owner 由 2 家变 8 家。原因不是实现有误，而是「计票过滤」直接决定了哪些节点的
+> `effective_pass` 能达 quorum：本池 216 张 in-scope 票中 207 张仅缺该字段，恢复后
+> 大量节点恰好达标。**本步只报事实，不动引擎**。
+
+### 十一·6、三个已知节点的双口径读数
+
+| 节点 | 口径 | status | effective_pass | valid_pass_total | invalid_votes |
+|---|---|---|---|---|---|
+| `t35` | (a) 实现 | claimed | 0 | 0 | 2 |
+| `t35` | (b) 裁定 | **verified** | **2** | **2** | **0** |
+| `t47` | (a) 实现 | claimed | 0 | 0 | 6 |
+| `t47` | (b) 裁定 | **verified** | **6** | **6** | **0** |
+| `t55` | (a) 实现 | verified | 2 | 2 | 2 |
+| `t55` | (b) 裁定 | verified（**不变**） | **4** | **4** | **0** |
+
+- `t35` / `t47`：其 `0-pass` **确因缺 `semantic_check` 被扣**——裁定口径下分别恢复 2 / 6 张有效
+  pass，**均跨 owner**（≠ 提交者 ≠ 任务根作者），达 quorum 2 → **claimed 变 verified**。
+  这正是裁定澄清件三节「取决于其 invalid/0-pass 是否因缺该字段被扣」的待确认项，现以确数补入。
+- `t55`：2 → 4 有效 pass，`verified` 结论不变——与裁定件「4 张应为有效、结论不变」**逐字一致**
+  （对 chair 读数的正向对照）。
+- 三个节点的读数在快照 A / B 上**完全相同**，且 `expect --caliber ruling` 在两快照上均 3/3 PASS。
+
+### 十一·7、产出物与复算
+
+| 产物 | 说明 | sha256 |
+|---|---|---|
+| `affected-ballots-pilot02.json` | 快照 B 的双口径清单（canonical JSON，241 485 B） | `68d15c680e086b19763c81eb2e349bc7c9b1f66be532dc3b3d9b8d2beec36234` |
+| `affected-ballots-pilot02.snap1931.json` | 快照 A 的同形清单（连续性对照） | `f4e24b243fac3b977c42cee5b4627c75329ed35f2d927042a8d454339050b713` |
+| `diff-summary.md` | 差异汇总（数字由上面清单派生） | `562fa1ac977e539f6581703ba8b395ff0d91dd31c521c3fe724ced7b70c32552` |
+| 清单 stdout | 与 `--out` 文件**逐字节相同** | 同清单 sha256 |
+
+清单内 `producer.script_sha256` = `7b88124ca1bde742c4b2f0b67fd8773d2fbf942b70c738419a898fd4d1b22da1`，
+把读数绑到产出脚本的版本上。canonical 形式已独立复核：`json.dumps(loads(bytes),
+sort_keys=True, separators=(",",":"), ensure_ascii=False)+"\n"` 与文件字节相等。
+
+### 十一·8、自测与负控（本轮全部实跑）
+
+| 检查 | 结果 |
+|---|---|
+| `vectors`（含新 `caliber_vectors` 4 条） | **21 passed, 0 failed** |
+| 默认路径回归：`recompute` 快照 A / B 输出 vs 改动前读数 | **逐字节相同**（A: `6988c084…`） |
+| `expect`（实现口径，快照 A / B） | 3 passed, 0 failed |
+| `expect --caliber ruling`（快照 A / B） | 3 passed, 0 failed |
+| 双口径清单 vs 单口径独立重跑（`--no-semantic-check-filter`）交叉核对 | 两口径节点投影**全等** |
+| **负控 1**：`caliber_vectors` 把 C1 的裁定期望改 `claimed` | FAIL，退出码 1 |
+| **负控 2**：把 C2 的 `invalid_reason_ruling` 改值 | FAIL，退出码 1 |
+| **负控 3**：把实现口径读数拿去核对裁定期望 | 3 FAIL（t35/t47/t55），退出码 1 |
+| **负控 4**：已知节点 t55 `effective_pass` 改 99 再跑 `expect` | FAIL，退出码 1 |
+
+新增 `caliber_vectors`（`metatask-pools-vectors.v1.json`）：C1 缺 `semantic_check` 的票在裁定口径下恢复；
+C2 `#8` 缺 `failreason` 两口径一致；C3 同时缺两项 → 理由变、判定不变；C4 恢复计入**不等于**自动达标
+（同一 bot 两张票按 `(target,bot)` 仍只算一张）。
+
+### 十一·9、已知未覆盖项
+
+1. **`verifier_owner` 未参与独立性判定**：本实现用 pin 的 `globalMetaId` 判跨 owner（与引擎一致），
+   而裁定件称 `verifier_owner` 是 v1.2-r1 起的 spec 必填字段。本池 232 条 in-scope 票中仅 194 条
+   带该字段。**本步不改变该语义**（口径 (b) 只是去掉 `semantic_check` 一处过滤），差异已在清单
+   `verifier_owner` 列留痕，供后续单独裁定。
+2. **只覆盖试点 #02**：裁定澄清件提到「含试点 #01 历史根对照」，本步未做；同一快照下换 `--root`
+   即可产出同形清单。
+3. **口径 (b) 不改变 #8**：8 张同时缺两项的票在 (b) 下仍 invalid（理由改为 `missing_failreason`），
+   这是有意为之，不是遗漏。

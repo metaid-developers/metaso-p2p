@@ -6,7 +6,7 @@
 
 - 代码：`internal/metatask/`（包）+ `cmd/metaso-p2p-metatask-pools/`（可执行读数命令）
 - 脚本：`internal/metatask/scripts/recompute_pools.py`（Python 独立实现，零第三方依赖）
-- 向量：`internal/metatask/testdata/metatask-pools-vectors.v1.json`（17 条）
+- 向量：`internal/metatask/testdata/metatask-pools-vectors.v1.json`（21 条：载荷 6 / 枚举 5 / 结算 6 / 两口径 4）
 - 已知节点向量：`internal/metatask/testdata/known-nodes.v1.json`（t35 / t47 / t55，真值取自链上冻结材料）
 - 引擎标定夹具：`internal/metatask/testdata/engine-fixtures/`（metatask-replay v1.2.0 自带 9 条）
 
@@ -23,6 +23,24 @@
 | verify §3.7（v1.2.0） | 先过滤无效票（#9 缺 `semantic_check`、#8 `fail` 缺 `failreason`），再每 `(target,bot)` 取最后一票 |
 | verified | 有效 pass ≥ quorum 且有效 fail = 0；有效 pass 票须来自 ≠ 提交者、≠ 任务根作者 |
 | guard §4.7 | 另加 §4.2 claimTTL(48h)、§4.3 reviewWindow(72h) 过期推导与在途 claim 保守口径 |
+
+### 1.1 两口径（`semantic_check` 过滤是实现选择，不是 spec 条款）
+
+`#9 缺 semantic_check 不计票` 已由链上裁定定为 **replay 的实现选择**，不构成协议计票条款
+（裁定件 [pin://1bf3cb15470a45655fc3e2a52f1a309b04a8f8fd86989243f9f964eb39d7988ci0](pin://1bf3cb15470a45655fc3e2a52f1a309b04a8f8fd86989243f9f964eb39d7988ci0)
++ 澄清件 [pin://6adaa70088f0fb136eda7a5f314ac61c88830b8ba63ece72d8b5091cc0e07af8i0](pin://6adaa70088f0fb136eda7a5f314ac61c88830b8ba63ece72d8b5091cc0e07af8i0)）。
+判决记录须并列两套读数，脚本用两个开关支持：
+
+| 口径 | 行为 | 开关 |
+|---|---|---|
+| (a) 实现口径 | 含该过滤（**默认**，行为与引擎一致） | 无 |
+| (b) 裁定口径 | 不含该过滤；**仅因缺该字段被扣的票恢复计入**，#8 的 failreason 判据不变 | `--no-semantic-check-filter` |
+| 双口径清单 | 两套计数 + 受影响票清单 + 节点差异，canonical JSON 到 stdout | `--dual-report` |
+
+不带开关时输出**逐字节不变**（回归门）；`expect --caliber implementation|ruling` 分别核对
+`known-nodes.v1.json` 的 `expect` / `expect_ruling`。清单逐票列出：票 pin、所属 target
+（submission pin）、原判定、是否因缺 `semantic_check` 被扣、裁定口径下的判定。详见
+`docs/metatask-pools-aggregation.md` §十一。
 
 **两个视图分开报**：`status` 是引擎主路径结论（不做过期），`effective_status` 是 §4.7
 guard 结论（含过期与打回）。二者在无窗口过期时相同；`S2` 向量刻意锁定「主视图 claimed /
@@ -92,6 +110,11 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 
 # 已知节点期望值核对（t35 / t47 / t55；字段缺失与值不同分开报，缺失即 FAIL）
 python3 internal/metatask/scripts/recompute_pools.py expect --report mine.json
+python3 internal/metatask/scripts/recompute_pools.py expect --report ruling.json --caliber ruling
+
+# 双口径读数 + 受影响票清单（canonical JSON 到 stdout；--out 同时写 .sha256 sidecar）
+python3 internal/metatask/scripts/recompute_pools.py recompute --snapshot <dir> --root <pinId> \
+  --now <unix> --dual-report --out affected-ballots.json
 
 # 引擎侧对照读数（vendored v1.2.0）
 python3 internal/metatask/testdata/engine-fixtures/metatask_replay.v1.2.0.py \\
@@ -121,3 +144,7 @@ python3 internal/metatask/testdata/engine-fixtures/metatask_replay.v1.2.0.py \\
 4. **HTTP 路由未接**：本步交付包 + 命令行读数，尚未注册到 `/api` 路由（未改
    `main.go` 与 config）。「任何 bot 直接用」需要后续接线。
 5. **同 owner 验证**：本步为节点级实现步，跨 owner 复核尚未进行。
+6. **`verifier_owner` 未参与独立性判定**：跨 owner 判据用 pin 的 `globalMetaId`（与引擎一致），
+   但裁定件称 `verifier_owner` 是 v1.2-r1 起的 spec 必填字段；试点 #02 的 232 条 in-scope 票中
+   仅 194 条带该字段。两口径清单已逐票留痕该字段，语义如何并入计票**待单独裁定**（本步未改）。
+7. **双口径只覆盖试点 #02**：澄清件提到「含试点 #01 历史根对照」，本步未做；同快照换 `--root` 即可。

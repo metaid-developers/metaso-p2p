@@ -21,7 +21,9 @@
     "three_way_check": "engine v1.2.0 / Go internal/metatask / Python recompute_pools.py: 111 nodes, 448 compared fields, 0 diffs",
     "source": "docs/metatask-pools-aggregation.md; re-derived on a fresh live freeze for this vector (see meta.snapshot_manifest_sha256)",
     "note": "Expectations are the settled view for one task root at one frozen watermark. The pools are live: these values hold for the snapshot above, not for the chain at any later moment.",
-    "usage": "python3 internal/metatask/scripts/recompute_pools.py expect --report <recompute.json>"
+    "usage": "python3 internal/metatask/scripts/recompute_pools.py expect --report <recompute.json>",
+    "calibers": "expect = 实现口径（含 semantic_check 过滤，replay v1.2.0 行为）；expect_ruling = 裁定口径（不含该过滤）。两套读数分别用 `expect --caliber implementation|ruling` 核对。",
+    "ruling_derivation": "expect_ruling 由试点 #02 的两个冻结快照分别回算取得，读数相同：cutoff 2026-09-16T19:31:48+0800（manifest 104474d99cbb0b2c23127bd1a32a328ad2ac6155316650a8e0dcb632c058b2b8）与 cutoff 2026-09-16T21:13:13+0800（manifest 9b305aebcc3a10b0a53b6914eac2d70b804e2bd6fb678a6d953fd2fc66ef43c5）。"
   },
   "nodes": [
     {
@@ -36,7 +38,18 @@
         "effective_pass": 0,
         "valid_pass_total": 0,
         "invalid_votes": 2
-      }
+      },
+      "expect_ruling": {
+        "status": "verified",
+        "holder": "idq16c6vlfx70cgmfy9ye2cpgqz2at9p9ckfevugyz",
+        "holder_pin": "b4f7c225807b2256e8a98cde093df9d60c2e277cc671b829a1093ca83eca6ea8i0",
+        "submission": "7ba5c68905232b9d3a044bee019901d05d6a0c7957f27bb2b4bc5d4b1ac6cd02i0",
+        "submission_claimid": "b4f7c225807b2256e8a98cde093df9d60c2e277cc671b829a1093ca83eca6ea8i0",
+        "effective_pass": 2,
+        "valid_pass_total": 2,
+        "invalid_votes": 0
+      },
+      "why_ruling": "semantic_check 过滤（#9，非 spec 条款）去掉后，其 2 张 pass 票恢复计入 → 达 quorum 2，节点由 claimed 变 verified（裁定口径下计票结论改变）。"
     },
     {
       "node": "t47",
@@ -50,7 +63,18 @@
         "effective_pass": 0,
         "valid_pass_total": 0,
         "invalid_votes": 6
-      }
+      },
+      "expect_ruling": {
+        "status": "verified",
+        "holder": "idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5",
+        "holder_pin": "ba2824f9efaf3f80817204d335173dfbd11a32907ab78e1e263da0abc0270f59i0",
+        "submission": "b0d1a9d3995d7c4294c8b780f6f367b86c09ef5a8d4ae6aafd3c7494e21710f0i0",
+        "submission_claimid": "ba2824f9efaf3f80817204d335173dfbd11a32907ab78e1e263da0abc0270f59i0",
+        "effective_pass": 6,
+        "valid_pass_total": 6,
+        "invalid_votes": 0
+      },
+      "why_ruling": "semantic_check 过滤去掉后 6 张 pass 票全部恢复（提交者是本机 owner，6 票均来自他人且跨 owner）→ verified。"
     },
     {
       "node": "t55",
@@ -64,7 +88,18 @@
         "effective_pass": 2,
         "valid_pass_total": 2,
         "invalid_votes": 2
-      }
+      },
+      "expect_ruling": {
+        "status": "verified",
+        "holder": "idq1g35d5yftpq3jv0ukejte7z76qdqp7sve8l2etm",
+        "holder_pin": "4dd439fff2558f60c630269bc9f0c5c77e00f4a1abd5e6a6c4c87dee1d2de753i0",
+        "submission": "c84ebd776aac1b4030dc07c7e205b082a8e3eaaac95c5929968321c0993d95c8i0",
+        "submission_claimid": "4dd439fff2558f60c630269bc9f0c5c77e00f4a1abd5e6a6c4c87dee1d2de753i0",
+        "effective_pass": 4,
+        "valid_pass_total": 4,
+        "invalid_votes": 0
+      },
+      "why_ruling": "裁定明示的实例：4 张 pass 票按裁定口径应为 4 张有效（原按该过滤计 2 张）；verified 结论不变，仅票数变化——2 → 4 与 chair 裁定件逐字一致。"
     }
   ]
 }

@@ -4,11 +4,12 @@
     "engine": "metatask-replay v1.2.0",
     "engine_script_sha256": "828a9b95b1f2c9648ca250122cd78063d622202ac53b776508c737a639cf3f25",
     "charter": "世界计算机宪章 v0.3 §〇 (pin://94a3f6a0ccf1edd4ff589daa0c98c420433d2c515b6e1fbed657e67b8bebfcaei0)",
-    "note": "payload vectors enforce §〇.2/§〇.5; enumeration vectors enforce cursor-to-empty-page; settlement vectors lock the v1.2.0 #8/#9 ballot gate.",
+    "note": "payload vectors enforce §〇.2/§〇.5; enumeration vectors enforce cursor-to-empty-page; settlement vectors lock the v1.2.0 #8/#9 ballot gate. caliber vectors lock the two-caliber readout (implementation vs ruling) and the affected-ballot inventory projection.",
     "counts": {
       "payload": 6,
       "enumeration": 5,
-      "settlement": 6
+      "settlement": 6,
+      "caliber": 4
     }
   },
   "payload_vectors": [
@@ -820,6 +821,568 @@
             "holder_pin": "4444444444444444444444444444444444444444444444444444444444444444i0",
             "submission": "6666666666666666666666666666666666666666666666666666666666666666i0"
           }
+        }
+      }
+    }
+  ],
+  "caliber_vectors": [
+    {
+      "id": "C1-missing-semantic-check-restored-under-ruling-caliber",
+      "note": "裁定口径：仅因缺 semantic_check 被扣的票恢复计入。同一份材料两套读数必须不同：实现口径 claimed/0，裁定口径 verified/2。",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        }
+      ],
+      "expect_impl": {
+        "quorum": 2,
+        "verify_votes": 0,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 0,
+            "invalid_votes": 2
+          }
+        }
+      },
+      "expect_ruling": {
+        "quorum": 2,
+        "verify_votes": 2,
+        "nodes": {
+          "t1": {
+            "status": "verified",
+            "effective_pass": 2,
+            "valid_pass_total": 2,
+            "invalid_votes": 0
+          }
+        }
+      },
+      "expect_ballots": {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0": {
+          "original_verdict": "invalid",
+          "invalid_reason_impl": "missing_semantic_check",
+          "deducted_for_missing_semantic_check": true,
+          "ruling_verdict": "pass",
+          "invalid_reason_ruling": null,
+          "effect": "restored_to_valid",
+          "affected": true,
+          "counts_pass_impl": false,
+          "counts_pass_ruling": true
+        },
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0": {
+          "original_verdict": "invalid",
+          "invalid_reason_impl": "missing_semantic_check",
+          "deducted_for_missing_semantic_check": true,
+          "ruling_verdict": "pass",
+          "invalid_reason_ruling": null,
+          "effect": "restored_to_valid",
+          "affected": true,
+          "counts_pass_impl": false,
+          "counts_pass_ruling": true
+        }
+      }
+    },
+    {
+      "id": "C2-missing-failreason-invalid-under-both-calibers",
+      "note": "#8 的 failreason 判据与 semantic_check 无关，两口径一致保留：fail 缺 failreason 在两口径下都不计票。",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": "ok"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "fail",
+            "semantic_check": "ok"
+          }
+        }
+      ],
+      "expect_impl": {
+        "quorum": 2,
+        "verify_votes": 1,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 1,
+            "valid_fail_total": 0,
+            "invalid_votes": 1
+          }
+        }
+      },
+      "expect_ruling": {
+        "quorum": 2,
+        "verify_votes": 1,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 1,
+            "valid_fail_total": 0,
+            "invalid_votes": 1
+          }
+        }
+      },
+      "expect_ballots": {
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0": {
+          "original_verdict": "invalid",
+          "invalid_reason_impl": "missing_failreason",
+          "deducted_for_missing_semantic_check": false,
+          "ruling_verdict": "invalid",
+          "invalid_reason_ruling": "missing_failreason",
+          "effect": "none",
+          "affected": false,
+          "counts_pass_impl": false,
+          "counts_pass_ruling": false
+        }
+      }
+    },
+    {
+      "id": "C3-both-reasons-missing-reason-changes-outcome-same",
+      "note": "票同时缺 semantic_check 与 failreason：实现口径记为 missing_semantic_check，裁定口径记为 missing_failreason，两口径判定都是 invalid。",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "fail"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": "ok"
+          }
+        }
+      ],
+      "expect_impl": {
+        "quorum": 2,
+        "verify_votes": 1,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 1,
+            "valid_fail_total": 0,
+            "invalid_votes": 1
+          }
+        }
+      },
+      "expect_ruling": {
+        "quorum": 2,
+        "verify_votes": 1,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 1,
+            "valid_fail_total": 0,
+            "invalid_votes": 1
+          }
+        }
+      },
+      "expect_ballots": {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0": {
+          "original_verdict": "invalid",
+          "invalid_reason_impl": "missing_semantic_check",
+          "deducted_for_missing_semantic_check": true,
+          "ruling_verdict": "invalid",
+          "invalid_reason_ruling": "missing_failreason",
+          "effect": "reason_only",
+          "affected": true,
+          "counts_pass_impl": false,
+          "counts_pass_ruling": false
+        }
+      }
+    },
+    {
+      "id": "C4-restore-respects-per-bot-dedup",
+      "note": "裁定口径恢复的是过滤，不是计票条款：同一 bot 的两张票恢复后仍只算一张，quorum 2 未达 → 仍 claimed。",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 5,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        }
+      ],
+      "expect_impl": {
+        "quorum": 2,
+        "verify_votes": 0,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 0,
+            "invalid_votes": 2
+          }
+        }
+      },
+      "expect_ruling": {
+        "quorum": 2,
+        "verify_votes": 1,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 1,
+            "invalid_votes": 0
+          }
+        }
+      },
+      "expect_ballots": {
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0": {
+          "original_verdict": "invalid",
+          "deducted_for_missing_semantic_check": true,
+          "ruling_verdict": "pass",
+          "effect": "restored_to_valid",
+          "affected": true,
+          "counts_pass_impl": false,
+          "counts_pass_ruling": true
         }
       }
     }
