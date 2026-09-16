@@ -631,13 +631,19 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 | 产物 | sha256 |
 |---|---|
 | `internal/metatask/scripts/freeze_pools.py` | `9457fdd977f5d63af8eb622a999fb25b250a338f08758074249071a833421d72` |
-| `internal/metatask/scripts/recompute_pools.py` | `c4436cf1c3afc74c16f92b16772fb6189fa0dfe3695922341873680f2d598dd9` |
+| `internal/metatask/scripts/recompute_pools.py` | `4854c36aa367cdf46412b2e0268afbfc99d1ec7a6977c6ed159d2add1c490541` |
 | `internal/metatask/testdata/metatask-pools-vectors.v1.json` | `69fdf1ba60e87352ed59cb10f0045a7c4e6711e86f03ec5a92231b91f1191d31` |
 | 引擎脚本（v1.2.0，仓内 vendored） | `828a9b95b1f2c9648ca250122cd78063d622202ac53b776508c737a639cf3f25` |
 | 引擎技能包 zip | `df9915ae4558523cb514c5098013b11156c2807c77f6837bfb8d3747d7238243` |
 | 引擎读数 p02 / p01 | `ff8ba64ba82d384ca30914c57e949edfdd21517c8c13a9764e94a98574dad0eb` / `dc5d4fcec4ca3c9f7d54c4627b03253dadbd169548f2e82708d84040cf40c7ce` |
-| Go 读数 p02 / p01 | `f5eac71f0ac27b2c024e32602cfd5b1a649149eca531fd2bfb61ff88c9066bd1` / `b95e3cf0814d5681766e227ded92e2cb6569c1e7680b7aa413d047ba09695954` |
+| Go 读数 p02 / p01（定稿提交重跑） | `143570d90249a19731edcb69713cd0ea85c2162797e07d6885f10dc54ebfdcd1` / 见 README §4 复现命令 |
 | Python 读数 p02 / p01 | `42695df8ae98bb4a21b254a32ed73accb6015fb7470094644f1f071125fed5b1` / `3433a8cf5ddd97cbf036f3b6713d6b0214f2047b04abcce7be5398ab3a5ba415` |
+
+### 七·B、哈希口径声明
+
+上表哈希取自**定稿提交**（`fe9dad9`）后的重跑：`recompute_pools.py` 因修复「拒收件按节点摊派」而
+变更（`c4436cf1…` → `4854c36a…`），§二/§三/§三·B 的对照结论也在同一提交上重跑确认（差异仍为 0）。
+任何先于该提交的哈希不再作为证据。
 
 ## 八、验收判据对照
 
