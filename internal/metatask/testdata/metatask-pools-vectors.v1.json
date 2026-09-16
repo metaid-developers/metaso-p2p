@@ -1,0 +1,827 @@
+{
+  "meta": {
+    "name": "metaso-metatask-pools-vectors.v1",
+    "engine": "metatask-replay v1.2.0",
+    "engine_script_sha256": "828a9b95b1f2c9648ca250122cd78063d622202ac53b776508c737a639cf3f25",
+    "charter": "世界计算机宪章 v0.3 §〇 (pin://94a3f6a0ccf1edd4ff589daa0c98c420433d2c515b6e1fbed657e67b8bebfcaei0)",
+    "note": "payload vectors enforce §〇.2/§〇.5; enumeration vectors enforce cursor-to-empty-page; settlement vectors lock the v1.2.0 #8/#9 ballot gate.",
+    "counts": {
+      "payload": 6,
+      "enumeration": 5,
+      "settlement": 6
+    }
+  },
+  "payload_vectors": [
+    {
+      "id": "P1-accept",
+      "payload": "{\"taskid\":\"aa\",\"node\":\"t1\"}",
+      "declared_content_length": 27,
+      "channel": "content",
+      "expect": "accept"
+    },
+    {
+      "id": "N1-truncated-copy-of-accepted-payload",
+      "payload": "{\"taskid\":\"aa",
+      "declared_content_length": 27,
+      "channel": "content",
+      "expect": "reject",
+      "expect_state": "short_item",
+      "note": "N1 per §〇.6: a truncated copy of a payload that is otherwise accepted must be refused."
+    },
+    {
+      "id": "N2-malformed-json",
+      "payload": "{\"node\":\"t1\"",
+      "declared_content_length": 12,
+      "channel": "content",
+      "expect": "reject",
+      "expect_state": "malformed_json"
+    },
+    {
+      "id": "N3-empty",
+      "payload": "",
+      "declared_content_length": 0,
+      "channel": "content",
+      "expect": "reject",
+      "expect_state": "empty"
+    },
+    {
+      "id": "N4-not-an-object",
+      "payload": "[1,2,3]",
+      "declared_content_length": 7,
+      "channel": "content",
+      "expect": "reject",
+      "expect_state": "not_object"
+    },
+    {
+      "id": "P2-accept-no-declared-length",
+      "payload": "{\"taskid\":\"aa\",\"node\":\"t1\"}",
+      "declared_content_length": 0,
+      "channel": "contentSummary",
+      "expect": "accept",
+      "note": "engine fixtures carry no contentLength; the length rule is skipped and the channel is reported instead."
+    }
+  ],
+  "enumeration_vectors": [
+    {
+      "id": "E1-cursor-walk-to-explicit-empty-page",
+      "pages": [
+        {
+          "list_size": 2,
+          "next_cursor": "C1"
+        },
+        {
+          "list_size": 2,
+          "next_cursor": "C2"
+        },
+        {
+          "list_null": true,
+          "next_cursor": ""
+        }
+      ],
+      "expect_complete": true,
+      "expect_termination": "list_null_empty_cursor",
+      "expect_unique": 4
+    },
+    {
+      "id": "E2-explicit-empty-list",
+      "pages": [
+        {
+          "list_size": 0,
+          "next_cursor": ""
+        }
+      ],
+      "expect_complete": true,
+      "expect_termination": "empty_page_cursor_exhausted",
+      "expect_unique": 0
+    },
+    {
+      "id": "N5-full-page-without-cursor",
+      "pages": [
+        {
+          "list_size": 2,
+          "next_cursor": ""
+        }
+      ],
+      "expect_complete": false,
+      "expect_termination": "full_page_no_cursor"
+    },
+    {
+      "id": "N6-null-page-with-live-cursor",
+      "pages": [
+        {
+          "list_size": 2,
+          "next_cursor": "C1"
+        },
+        {
+          "list_null": true,
+          "next_cursor": "C1"
+        }
+      ],
+      "expect_complete": false,
+      "expect_termination": "list_null_with_cursor",
+      "note": "the classic empty-list false negative: a null page that still advertises a cursor is INCOMPLETE, never pool exhaustion."
+    },
+    {
+      "id": "N7-list-field-missing",
+      "pages": [
+        {
+          "list_missing": true,
+          "next_cursor": ""
+        }
+      ],
+      "expect_complete": false,
+      "expect_termination": "list_field_missing"
+    }
+  ],
+  "settlement_vectors": [
+    {
+      "id": "S1-array-semantic-check-counts",
+      "note": "engine gate is Python str(x or ''): a non-empty array counts as present (4 pilot #02 ballots ship an array).",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": [
+              "quantifier_shape"
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": [
+              "quantifier_shape"
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "all_verified_known": false,
+        "nodes": {
+          "t1": {
+            "status": "verified",
+            "effective_pass": 2,
+            "valid_pass_total": 2,
+            "invalid_votes": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "N8-missing-semantic-check-not-counted",
+      "note": "#9: ballots without semantic_check do not count; the node stays claimed.",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass"
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_pass": 0,
+            "valid_pass_total": 0,
+            "invalid_votes": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "S2-fail-with-failreason-sends-back",
+      "note": "#8: a valid fail sends the node back to open in the §4.7 guard view while the main view still reports claimed.",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": "ok"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "fail",
+            "semantic_check": "ok",
+            "failreason": "hash mismatch"
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "effective_status": "open",
+            "effective_pass": 0,
+            "valid_fail_total": 1,
+            "invalid_votes": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "S3-fail-without-failreason-not-counted",
+      "note": "#8: a fail without failreason is invalid, so two valid passes still verify the node.",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 3,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaai0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": "ok"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbi0",
+          "globalMetaId": "idq1bot2cccccccccccccccccccccccccccccccccccccccccc",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "pass",
+            "semantic_check": "ok"
+          }
+        },
+        {
+          "path": "/protocols/metatask/verify",
+          "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccci0",
+          "globalMetaId": "idq1bot3ddddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 110,
+          "txIndex": 4,
+          "timestamp": 10110,
+          "seenTime": 10110,
+          "payload": {
+            "targetid": "6666666666666666666666666666666666666666666666666666666666666666i0",
+            "verdict": "fail",
+            "semantic_check": "ok"
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "nodes": {
+          "t1": {
+            "status": "verified",
+            "effective_pass": 2,
+            "valid_fail_total": 0,
+            "invalid_votes": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "S4-release-of-ignored-claim-is-a-noop",
+      "note": "§4.1/§3.5: a claim that was ignored while the lock was held is never the holder, so releasing it changes nothing.",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "4444444444444444444444444444444444444444444444444444444444444444i0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 102,
+          "txIndex": 1,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/release",
+          "id": "5555555555555555555555555555555555555555555555555555555555555555i0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 103,
+          "txIndex": 2,
+          "timestamp": 10103,
+          "seenTime": 10103,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "4444444444444444444444444444444444444444444444444444444444444444i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 104,
+          "txIndex": 3,
+          "timestamp": 10104,
+          "seenTime": 10104,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "holder": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+            "holder_pin": "3333333333333333333333333333333333333333333333333333333333333333i0",
+            "submission": "6666666666666666666666666666666666666666666666666666666666666666i0"
+          }
+        }
+      }
+    },
+    {
+      "id": "S5-release-then-reclaim-moves-the-lock",
+      "note": "§3.5/§4.1: after a release the node returns to open and a later claim holds it; the released claim is not revived.",
+      "events": [
+        {
+          "path": "/protocols/metatask/task",
+          "id": "1111111111111111111111111111111111111111111111111111111111111111i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 0,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "title": "vec",
+            "treeid": "2222222222222222222222222222222222222222222222222222222222222222i0",
+            "policy": {
+              "claim_ttl_hours": 48,
+              "verify_quorum": 2,
+              "verify_window_hours": 72
+            }
+          }
+        },
+        {
+          "path": "/protocols/metatask/tree",
+          "id": "2222222222222222222222222222222222222222222222222222222222222222i0",
+          "globalMetaId": "idq1authoraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "genesisHeight": 100,
+          "txIndex": 1,
+          "timestamp": 1000,
+          "seenTime": 1000,
+          "payload": {
+            "root": "0",
+            "nodes": [
+              {
+                "id": "t1",
+                "parent": "0"
+              },
+              {
+                "id": "0",
+                "parent": null
+              }
+            ]
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "3333333333333333333333333333333333333333333333333333333333333333i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 101,
+          "txIndex": 1,
+          "timestamp": 10101,
+          "seenTime": 10101,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/release",
+          "id": "5555555555555555555555555555555555555555555555555555555555555555i0",
+          "globalMetaId": "idq1subbddddddddddddddddddddddddddddddddddddddddd",
+          "genesisHeight": 102,
+          "txIndex": 2,
+          "timestamp": 10102,
+          "seenTime": 10102,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "3333333333333333333333333333333333333333333333333333333333333333i0"
+          }
+        },
+        {
+          "path": "/protocols/metatask/claim",
+          "id": "4444444444444444444444444444444444444444444444444444444444444444i0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 103,
+          "txIndex": 1,
+          "timestamp": 10103,
+          "seenTime": 10103,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1"
+          }
+        },
+        {
+          "path": "/protocols/metatask/submission",
+          "id": "6666666666666666666666666666666666666666666666666666666666666666i0",
+          "globalMetaId": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "genesisHeight": 104,
+          "txIndex": 3,
+          "timestamp": 10104,
+          "seenTime": 10104,
+          "payload": {
+            "taskid": "1111111111111111111111111111111111111111111111111111111111111111i0",
+            "node": "t1",
+            "claimid": "4444444444444444444444444444444444444444444444444444444444444444i0"
+          }
+        }
+      ],
+      "expect": {
+        "quorum": 2,
+        "nodes": {
+          "t1": {
+            "status": "claimed",
+            "holder": "idq1bot1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "holder_pin": "4444444444444444444444444444444444444444444444444444444444444444i0",
+            "submission": "6666666666666666666666666666666666666666666666666666666666666666i0"
+          }
+        }
+      }
+    }
+  ]
+}
