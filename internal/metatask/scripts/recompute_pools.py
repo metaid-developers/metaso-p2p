@@ -406,6 +406,12 @@ def settle(pins_by_path, root, now):
                         "rejected": sum(1 for p in pins_by_path["verify"] if p["_state"] != "ok")},
                        **pool_meta(in_scope_verifies)),
     }
+    for pool in ("claim", "submission", "verify"):
+        path = pool
+        recs = [{"pin": p["id"], "state": p["_state"], "reason": p["_reason"], "channel": "content"}
+                for p in pins_by_path[path] if p["_state"] != "ok"]
+        if recs:
+            pools[pool]["rejected_records"] = recs
     return {
         "task_root": root, "task_title": task.get("title"), "quorum": quorum, "policy": policy,
         "task_author": root_author, "tree_id": treeid, "tree_nodes": len(tree_nodes),

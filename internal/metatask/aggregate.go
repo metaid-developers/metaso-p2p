@@ -164,11 +164,6 @@ func BuildAggregate(events map[string][]*Pin, opts Options) (*Aggregate, error) 
 			}
 			sort.Strings(ns.Voters)
 		}
-		for _, p := range s.rejected {
-			if PoolName(p.Path) == "claim" || PoolName(p.Path) == "submission" {
-				ns.RejectedPins = append(ns.RejectedPins, p.ID)
-			}
-		}
 		out.Nodes = append(out.Nodes, ns)
 	}
 
@@ -181,7 +176,26 @@ func BuildAggregate(events map[string][]*Pin, opts Options) (*Aggregate, error) 
 	}
 
 	out.Pools = s.poolReports(inScopeSubs, effectiveSubs, out.VerifyVotesTask)
-	out.Meta.PinsRejected = len(s.rejected)
+	// Meta is owned here (single source of truth): a caller that recounts these
+	// numbers can silently disagree with the settlement.
+	for _, path := range EventPaths {
+		for _, p := range events[path] {
+			out.Meta.PinsEnumerated++
+			out.Meta.GenesisFeeSum += p.GenesisFee
+			out.Meta.OutputValueSum += p.OutputValue
+			if resolvePayload(p).State != PayloadOK {
+				out.Meta.PinsRejected++
+			}
+			if ts := p.Timestamp; ts != 0 {
+				if out.Meta.FirstTimestamp == 0 || ts < out.Meta.FirstTimestamp {
+					out.Meta.FirstTimestamp = ts
+				}
+				if ts > out.Meta.LastTimestamp {
+					out.Meta.LastTimestamp = ts
+				}
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -264,6 +278,22 @@ func (s *settlement) poolReports(inScopeSubs, effectiveSubs map[string]bool, tas
 	verify.BotsVoting = len(verifyParticipants)
 	verify.Rejected = s.rejectedInPool(PathVerify)
 	reports["verify"] = verify
+
+	// Refused records are reported per pool with their reason, never per node:
+	// a record that failed §〇 acceptance carries no trustworthy payload, so its
+	// node cannot be read off it.
+	for _, path := range PoolPaths {
+		rep := reports[PoolName(path)]
+		for _, p := range s.rejected {
+			if p.Path != path {
+				continue
+			}
+			rep.RejectedRecords = append(rep.RejectedRecords, RejectedRecord{
+				Pin: p.ID, State: p.PayloadState, Reason: p.PayloadError, Channel: p.PayloadChannel,
+			})
+		}
+		reports[PoolName(path)] = rep
+	}
 	return reports
 }
 

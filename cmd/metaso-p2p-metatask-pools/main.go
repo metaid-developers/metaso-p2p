@@ -69,27 +69,6 @@ func main() {
 		exitJSON(map[string]any{"error": err.Error(), "enumeration": enum})
 	}
 
-	// Metadata totals across the whole walk.
-	for _, path := range metatask.EventPaths {
-		for _, p := range events[path] {
-			report.Meta.PinsEnumerated++
-			report.Meta.GenesisFeeSum += p.GenesisFee
-			report.Meta.OutputValueSum += p.OutputValue
-			if p.PayloadState != metatask.PayloadOK {
-				report.Meta.PinsRejected++
-			}
-			ts := p.Timestamp
-			if ts != 0 {
-				if report.Meta.FirstTimestamp == 0 || ts < report.Meta.FirstTimestamp {
-					report.Meta.FirstTimestamp = ts
-				}
-				if ts > report.Meta.LastTimestamp {
-					report.Meta.LastTimestamp = ts
-				}
-			}
-		}
-	}
-
 	blob, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		exitJSON(map[string]any{"error": err.Error()})

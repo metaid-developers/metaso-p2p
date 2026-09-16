@@ -148,7 +148,14 @@ type NodeSettlement struct {
 	IgnoredClaims []string `json:"ignored_claims,omitempty"`
 	ReleasedPins  []string `json:"released_pins,omitempty"`
 	IgnoredSubs   []string `json:"ignored_submissions,omitempty"`
-	RejectedPins  []string `json:"rejected_pins,omitempty"`
+}
+
+// RejectedRecord is one pool record refused by the §〇 acceptance rules.
+type RejectedRecord struct {
+	Pin     string `json:"pin"`
+	State   string `json:"state"`
+	Reason  string `json:"reason"`
+	Channel string `json:"channel,omitempty"`
 }
 
 // PoolReport is the per-pool aggregation (claim / submission / verify).
@@ -166,8 +173,10 @@ type PoolReport struct {
 	// Ignored is enumerated, in scope, but not in effect (superseded claim,
 	// submission riding a stale claim, ...).
 	Ignored int `json:"ignored"`
-	// Rejected is records whose payload failed the §〇 acceptance rules.
-	Rejected int `json:"rejected"`
+	// Rejected is records whose payload failed the §〇 acceptance rules;
+	// RejectedRecords carries the pin and the reason for each one.
+	Rejected        int              `json:"rejected"`
+	RejectedRecords []RejectedRecord `json:"rejected_records,omitempty"`
 
 	Participants    int      `json:"participants"`
 	ParticipantBots []string `json:"participant_bots,omitempty"`
