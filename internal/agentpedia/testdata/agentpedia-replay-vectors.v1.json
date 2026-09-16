@@ -5752,7 +5752,7 @@
     {
       "id": "S18",
       "title": "transfer-slug alias plate is KEY-level (errata C1): an effective transfer-slug ruling renders {to:<bare slug of toEntry>} on the source key only, and the target key renders no plate because the shared record carries none",
-      "source": "E5-K10-transfer-slug-redirect-spec-draft.md §3 C1 (local draft, chair ruling not yet on chain); case opened by pin://e0de20f3b73a88dd61b289622f63f74f34d5e08de99a3f29924f81094a0704aci0 ②",
+      "source": "pin://197b0a14f3a753f7945e6eae8d0534c448c8a6fcc0afa996ced5656e94dd8e72i0 §3 C1 (key-level alias plate; errata E-6, chair ruling on chain) incl. §13 rule-5 view-contract supplement + N2 same-key dual-plate priority (key-level alias plate wins), excludes K10 and N5/N6/N7; secondary provenance: pre-ruling baseline = E5-K10-transfer-slug-redirect-spec-draft.md §3 C1 draft sha256 a88f9fed2a597665149b232827a75b1f42ed76ecbc37938f5b5491b12373ae8b (not on chain); case opened by pin://e0de20f3b73a88dd61b289622f63f74f34d5e08de99a3f29924f81094a0704aci0 ②",
       "events": [
         {
           "pin": "s18_alpha",
