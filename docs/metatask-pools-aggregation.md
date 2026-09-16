@@ -582,6 +582,30 @@
    本实现的判据：**只有显式空页 + 空游标才算收口**，其余六种停止条件全部标 UNKNOWN 并阻断
    「完整」标记。
 
+### 五·B、真实字节负控：N1 在链上原件上落地
+
+向量文件里的 N1 是合成件。为确认拒收规则不是只在合成件上成立，本步对**链上原件**做了一次负控：
+取试点 #02 中 t55 的生效 submission（`c84ebd776aac1b4030dc07c7e205b082a8e3eaaac95c5929968321c0993d95c8i0`，
+声明 `contentLength=2012`），把落盘字节截成 1006 字节后重跑两侧实现：
+
+| 观测 | Go 实现 | Python 复算 |
+|---|---|---|
+| 拒收计数 | `pins_rejected=1` | `pins_rejected=1` |
+| 拒收记录 | `{{"pin": "c84ebd77…95c8i0", "state": "short_item", "reason": "short item: declared contentLength=2012 actual bytes=1006 (channel=content)"}}` | 同 |
+| t55 结算 | 由 `verified`（effective_pass 2）→ `claimed`（submission 丢失、effective_pass 0） | 同 |
+
+即：短件被拒收且**没有**静默进入结算——节点状态如实降级，两侧读数一致。
+（顺带说明：拒收件按池记录、不按节点归属——载荷本身读不出 node，把它摊到每个节点上
+是错误归因；这是本步自查中修掉的一处实现缺陷。）
+
+## 五·C、本步自查修掉的两处实现缺陷（不是引擎差异，是我自己的）
+
+1. **拒收计数重复累加**：`BuildAggregate` 与命令层各自计一遍拒收件，输出 2 而实际 1
+   （Python 侧 1）。已把 Meta 计数收敛为单一来源（`BuildAggregate`）。
+2. **拒收件按节点摊派**：曾在 111 个节点上各列同一条拒收 pin。已改为池级 `rejected_records`
+   （pin + state + reason），因为载荷读不出的记录无法归属节点。
+两处都由「真实字节负控」暴露，均由两侧读数互相校验发现。
+
 ## 六、顺带得到的两个实质读数（不是差异，是结论）
 
 1. **试点 #01 全票失效**：在该根下 16 枚 verify 票**全部**缺 `semantic_check`，按 v1.2.0 #9
