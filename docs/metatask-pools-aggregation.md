@@ -631,8 +631,9 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 | 产物 | sha256 |
 |---|---|
 | `internal/metatask/scripts/freeze_pools.py` | `9457fdd977f5d63af8eb622a999fb25b250a338f08758074249071a833421d72` |
-| `internal/metatask/scripts/recompute_pools.py` | `4854c36aa367cdf46412b2e0268afbfc99d1ec7a6977c6ed159d2add1c490541` |
+| `internal/metatask/scripts/recompute_pools.py` | `88b82ad8aa9f1e9620b3e54763d31713499dd15f30856e8c9b16f41b4daa8d53` |
 | `internal/metatask/testdata/metatask-pools-vectors.v1.json` | `69fdf1ba60e87352ed59cb10f0045a7c4e6711e86f03ec5a92231b91f1191d31` |
+| `internal/metatask/testdata/known-nodes.v1.json` | `b9e04447c602d62ebf17212b00ce1986a9d80b2e07a5388f3f9e7a0ec175339b` |
 | 引擎脚本（v1.2.0，仓内 vendored） | `828a9b95b1f2c9648ca250122cd78063d622202ac53b776508c737a639cf3f25` |
 | 引擎技能包 zip | `df9915ae4558523cb514c5098013b11156c2807c77f6837bfb8d3747d7238243` |
 | 引擎读数 p02 / p01 | `ff8ba64ba82d384ca30914c57e949edfdd21517c8c13a9764e94a98574dad0eb` / `dc5d4fcec4ca3c9f7d54c4627b03253dadbd169548f2e82708d84040cf40c7ce` |
@@ -645,6 +646,15 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 变更（`c4436cf1…` → `4854c36a…`），§二/§三/§三·B 的对照结论也在同一提交上重跑确认（差异仍为 0）。
 任何先于该提交的哈希不再作为证据。
 
+### 七·C、canonical JSON 输出与已知节点向量（本轮，§十）
+
+本轮把 `recompute_pools.py` 的 stdout / `--out` 改为 **canonical JSON**（`sort_keys` +
+紧凑分隔 `(",",":")` + `ensure_ascii=False`，末尾一个换行），并新增 `expect` 子命令与
+`known-nodes.v1.json`。因此 `recompute_pools.py` 的 sha256 变为 `88b82ad8…`（上表已更新），
+**§七 表中先前的一切 Python 读数哈希（p02 / p01）随之作废**——它们绑定的是旧脚本的缩进排版。
+Go 命令的排版未改（仍是缩进 JSON，供人读）；两种排版不做字节级互比，对照一律走 `compare`。
+本轮新料与全部读数哈希见 **§十**。
+
 ## 八、验收判据对照
 
 | 判据 | 状态 | 证据 |
@@ -652,6 +662,8 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 | 功能：与引擎逐项一致（#02 + 历史根） | 通过 | §二 448 字段 / §三 24 字段 / §三·B 448 字段，差异 0；另有第三方锚 §四 7/7 一致 |
 | 分页：超单页仍全量枚举，截断按 §〇 拒收 | 通过 | verify 247 枚跨 6 页翻到显式空页（两条材料各跑一次）；向量 N5/N6/N7 锁三种非收口形态；载荷 N1 短件拒收 |
 | 交付：代码 + 脚本 sha256 + 自测向量 + 对照表 | 通过 | 分支 `metatask-pool-aggregation`（未 push main）；§七 哈希表 |
+| 输出：脚本 stdout 为 canonical JSON（`sort_keys` + 紧凑分隔 + `ensure_ascii=False`） | 通过 | §十：stdout 与 `--out` 逐字节相同；同材料重跑同 sha256 |
+| 自测向量：≥3 个已知节点给出期望结算 | 通过 | §十：`known-nodes.v1.json`（t35 / t47 / t55），`expect` 对 Go / Python 读数各 3/3 通过；突变负控按预期 FAIL |
 | 封闭测试：无新外部厂商 API / 无人类代写 | 通过 | 仅用仓库既有 MANAPI 端点；**新增依赖 0**（Go 标准库 + Python 标准库 + 系统 curl），登记见 README §4.1 |
 | 独立验证 / 跨 owner 复核 | **未完成** | 节点级实现步，跨 owner 复核待外部方执行 |
 
@@ -662,3 +674,67 @@ python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b
 3. verify 池 48/247 枚 `status=1`，语义未判定、未据此过滤。
 4. 未接 HTTP 路由（本步交付包 + 命令行读数，未改 `main.go`/config）。
 5. 跨 owner 独立复核未进行。
+
+## 十、canonical JSON 输出与已知节点向量（本轮补强）
+
+本轮两处改动（`recompute_pools.py` sha256 `4854c36a…` → `88b82ad8…`）：
+
+1. **stdout 改为 canonical JSON**：`recompute_pools.py recompute` 的 stdout 与 `--out` 现在同为
+   `json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",", ":"))` + 一个换行。
+   实测同材料下 stdout 与 `--out` **逐字节相同**（`cmp` 无差异），读数哈希因此可复算。
+2. **新增 `expect` 子命令 + `known-nodes.v1.json`**：把三个已知节点的期望结算钉成机器可核对向量
+   （t35 同块 txIndex 决胜 / t47 release→重 claim / t55 quorum 有效票）。每个期望字段必须**在报告里存在**：
+   字段缺失（`ABSENT`）与值不同（`DIFF`）分开报，缺失即 FAIL——报告 schema 静默变窄时不会悄悄通过。
+
+本轮**零链上写入**，全部为只读取件与本地复算。
+
+### 十·1、本轮材料（独立重抓，不沿用 §一）
+
+| 项 | 值 |
+|---|---|
+| 抓取时刻 | 2026-09-16 19:49:46 +0800（`frozen_at_unix=1789559386`） |
+| 七池条数 | task 2 / tree 2 / spec 23 / claim 123 / release 9 / submission 122 / verify 247（共 528 枚唯一 pin） |
+| 七池终止形态 | 全部 `LIST_NULL_EMPTY_CURSOR`（游标翻到显式空页） |
+| 载荷验收 | `OK` 528 / 拒收 0（`content_state_counts={'OK': 528}`） |
+| manifest sha256 | `7b3e180b3fba6faa6aca77086c957490b8ae2e60bc8d1b443b05022ac1cf6a8d` |
+
+### 十·2、三实现逐项一致（新料）
+
+任务根 `08cac496dfa93874dd7d16893038da16b0d2dbc92f844d09512ca0cc78c03b46i0`；对照字段同 §二。
+
+| 对照 | 节点数 | 对照字段 | 差异 |
+|---|---|---|---|
+| 引擎 v1.2.0 ↔ Python 复算 | 111 | 448 | **0** |
+| 引擎 v1.2.0 ↔ Go 实现 | 111 | 448 | **0** |
+
+本轮读数 sha256：引擎 `b38e8b8fe17ccbd022c5d13fa220ee938b8756a938c701dfad538b7538a88bfd`、
+Go `6d5bc487cb1a5db34d77db900ab69c1ece928cef5700d8f50a87ad500100576f`、
+Python `98b62db6b126385df55b02887b1d998ac9bc530a6df85389cf9706248b0e703e`。
+（三者字节不同：引擎与 Go 为缩进排版、Python 为 canonical；一致性由 `compare` 按字段判定，不做字节互比。）
+
+### 十·3、已知节点向量核对（t35 / t47 / t55）
+
+期望值由本轮材料独立复算得到，三实现一致；`expect` 结果：
+
+| 节点 | 状态 | 生效 claim（`holder_pin`） | submission | claimid 配对 | 有效 pass / invalid |
+|---|---|---|---|---|---|
+| t35 | claimed | `b4f7c225807b2256e8a98cde093df9d60c2e277cc671b829a1093ca83eca6ea8i0` | `7ba5c68905232b9d3a044bee019901d05d6a0c7957f27bb2b4bc5d4b1ac6cd02i0` | ✓ 同 pin | 0 / 2 |
+| t47 | claimed | `ba2824f9efaf3f80817204d335173dfbd11a32907ab78e1e263da0abc0270f59i0` | `b0d1a9d3995d7c4294c8b780f6f367b86c09ef5a8d4ae6aafd3c7494e21710f0i0` | ✓ 同 pin | 0 / 6 |
+| t55 | verified | `4dd439fff2558f60c630269bc9f0c5c77e00f4a1abd5e6a6c4c87dee1d2de753i0` | `c84ebd776aac1b4030dc07c7e205b082a8e3eaaac95c5929968321c0993d95c8i0` | ✓ 同 pin | 2 / 2 |
+
+- `expect --report <Go 读数>` → `3 passed, 0 failed`；`expect --report <Python 读数>` → `3 passed, 0 failed`。
+- **负控**：把 Python 读数里 t55 的 `effective_pass` 改成 1 再跑 →
+  `t55 FAIL effective_pass=DIFF 1 want 2`，退出码 1。该核对不是恒真式。
+
+### 十·4、链序证据（三节点各覆盖一条机制）
+
+按 `(genesisHeight, txIndex)` 重排链上原件：
+
+| 节点 | 事件（链序） | 机制 |
+|---|---|---|
+| t35 | claim h=189772 tx=**62** `b4f7c225…` → tx=72 `1eeff420…` → tx=86 `da70ef56…` | 同块 FCFS：最小 txIndex 持锁，后两张被忽略 |
+| t47 | claim h=189544 `34bf4aec…` → claim h=189545 `9c23232c…`（被忽略）→ release h=189570 tx=1 `4b25ec61…`（撤 `34bf4aec…`）→ claim h=189570 tx=3 `ba2824f9…` | release→重 claim：新 claim 接锁；已忽略的 `9c23232c…` 不因 release 复活 |
+| t55 | 4 张 verify 票全 pass，其中 2 张缺 `semantic_check`（#9 不计票） | quorum：仅 2 张有效 pass，且来自 ≠ 提交者 ≠ 任务根作者 |
+
+第三方通道对照：三枚 submission pin 直接从 `https://manapi.metaid.io/content/<pinId>` 再取一次，
+`node` / `taskid` / `claimid` 与快照内字节一致（t55 载荷 2012 字节）。

@@ -7,6 +7,7 @@
 - 代码：`internal/metatask/`（包）+ `cmd/metaso-p2p-metatask-pools/`（可执行读数命令）
 - 脚本：`internal/metatask/scripts/recompute_pools.py`（Python 独立实现，零第三方依赖）
 - 向量：`internal/metatask/testdata/metatask-pools-vectors.v1.json`（17 条）
+- 已知节点向量：`internal/metatask/testdata/known-nodes.v1.json`（t35 / t47 / t55，真值取自链上冻结材料）
 - 引擎标定夹具：`internal/metatask/testdata/engine-fixtures/`（metatask-replay v1.2.0 自带 9 条）
 
 ## 1. 结算口径（与链上引擎逐项一致）
@@ -40,7 +41,12 @@ guard 视图 open」这一分歧。
 | `list_field_missing` / `fetch_error` / `max_pages_reached` | false | UNKNOWN/中断 |
 
 `cmd/metaso-p2p-metatask-pools` 在枚举未收口时默认**拒绝**输出为完整读数（退出码 2，
-需 `--allow-incomplete` 才接受部分视图）。
+需 `--allow-incomplete` 才接受部分视图）。命令的 stdout/`--out` 是**缩进 JSON**，便于人读。
+
+`recompute_pools.py recompute` 的 stdout 与 `--out` 是同一份 **canonical JSON**
+（`sort_keys` + 紧凑分隔 `(",",":")` + `ensure_ascii=False`，末尾一个换行）：
+同一材料重跑逐字节相同，其 sha256 因此可作证据锚。两者不可逐字节互比（键序与排版不同），
+比对一律走 `compare`（按 JSON 解析后逐字段对照）。
 
 载荷验收走宪章 §〇：空件 / 短件（`contentLength` 与实际字节不等）/ 畸形 JSON / 非对象
 一律拒收并带原因串；拒收件不进结算，计入 `meta.pins_rejected` 与各池 `rejected`。
@@ -83,6 +89,9 @@ CGO_ENABLED=0 go run ./cmd/metaso-p2p-metatask-pools \
 # 冻结快照复算（脚本侧）+ 与引擎逐项对照
 python3 internal/metatask/scripts/recompute_pools.py recompute --snapshot <dir> --root <pinId> --now <unix> --out mine.json
 python3 internal/metatask/scripts/recompute_pools.py compare --a engine.json --b mine.json
+
+# 已知节点期望值核对（t35 / t47 / t55；字段缺失与值不同分开报，缺失即 FAIL）
+python3 internal/metatask/scripts/recompute_pools.py expect --report mine.json
 
 # 引擎侧对照读数（vendored v1.2.0）
 python3 internal/metatask/testdata/engine-fixtures/metatask_replay.v1.2.0.py \\

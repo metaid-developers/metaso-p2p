@@ -4,14 +4,18 @@
 子命令
   recompute  从冻结快照（pages/ + content/）独立复算：游标翻页到空页、§〇 载荷
              验收、v1.2.0 结算、三池读数、费用与时间戳元数据，输出 JSON。
+             stdout / --out 一律 canonical JSON（sort_keys + 紧凑分隔 + ensure_ascii=False），
+             同一材料重跑逐字节相同。
   compare    逐项对照两份聚合结果（引擎 / 本实现），输出对照表 + 差异清单；
              0 差异退出码 0，有差异退出码 1。
   vectors    执行 testdata/metatask-pools-vectors.v1.json 的自测向量（含 N1 截断副本）。
+  expect     用 testdata/known-nodes.v1.json 的已知节点期望值核对一份 recompute 读数。
 
 用法
   python3 recompute_pools.py recompute --snapshot <dir> --root <pinId> --now <unix> --out <file>
   python3 recompute_pools.py compare --a <engine.json> --b <mine.json> [--label-a X --label-b Y]
   python3 recompute_pools.py vectors --vectors <file>
+  python3 recompute_pools.py expect --report <mine.json> [--nodes <file>]
 
 说明：本脚本是 Python 独立实现（与 Go 实现互为对照），链上材料只读，不写链。
 """
@@ -34,6 +38,16 @@ def sha256_bytes(b):
 def sha256_file(p):
     with open(p, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def canonical_json(obj):
+    """Canonical JSON: sorted keys, compact separators, no ASCII escaping.
+
+    Identical input yields identical bytes, so two runs of the recompute are
+    byte-comparable and their sha256 is a valid evidence anchor. This is the
+    only form the recompute writes to stdout / --out.
+    """
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------- §〇 载荷验收
@@ -434,7 +448,7 @@ def cmd_recompute(args):
     load_payloads(args.snapshot, pins_by_path)
     rep = settle(pins_by_path, args.root, args.now)
     rep["enumeration"] = walk
-    blob = json.dumps(rep, ensure_ascii=False, indent=2, sort_keys=True)
+    blob = canonical_json(rep)
     if args.out:
         open(args.out, "w").write(blob + "\n")
         print("wrote %s" % args.out)
@@ -600,6 +614,37 @@ def cmd_vectors(args):
     return 0 if failed == 0 else 1
 
 
+def cmd_expect(args):
+    """核对该任务根的已知节点期望结算（真值来自链上冻结材料，见向量 meta.source）。
+
+    每个期望字段必须**在报告里存在**：字段缺失（ABSENT）与值不同（DIFF）分开报，
+    缺失不算通过——报告 schema 静默变窄时应当失败，而不是悄悄跳过。
+    """
+    rep = json.load(open(args.report, encoding="utf-8"))
+    vf = json.load(open(args.nodes, encoding="utf-8"))
+    want_root = vf["meta"]["task_root"]
+    if want_root != rep.get("task_root"):
+        print("task root mismatch: report=%s vector=%s" % (rep.get("task_root"), want_root))
+        return 1
+    by = {n["node"]: n for n in rep.get("nodes") or []}
+    passed = failed = 0
+    for want in vf["nodes"]:
+        got, bad = by.get(want["node"]), []
+        if got is None:
+            bad.append("node missing from report")
+        else:
+            for field, wv in want["expect"].items():
+                if field not in got:
+                    bad.append("%s ABSENT want %r" % (field, wv))
+                elif got[field] != wv:
+                    bad.append("%s=DIFF %r want %r" % (field, got[field], wv))
+        print("  %-6s %s%s" % (want["node"], "PASS" if not bad else "FAIL",
+                               "" if not bad else " " + "; ".join(bad)))
+        passed, failed = (passed + 1, failed) if not bad else (passed, failed + 1)
+    print("\nknown nodes: %d passed, %d failed (vector %s)" % (passed, failed, vf["meta"]["name"]))
+    return 0 if failed == 0 else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -621,6 +666,11 @@ def main():
     w.add_argument("--vectors", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                      "..", "testdata", "metatask-pools-vectors.v1.json"))
     w.set_defaults(func=cmd_vectors)
+    e = sub.add_parser("expect")
+    e.add_argument("--report", required=True)
+    e.add_argument("--nodes", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                   "..", "testdata", "known-nodes.v1.json"))
+    e.set_defaults(func=cmd_expect)
     args = ap.parse_args()
     sys.exit(args.func(args))
 
