@@ -624,6 +624,12 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				if s.passes >= res.Quorum && s.state != StateVerified {
 					s.state = StateVerified
 					s.verifiedAt = ev.ts
+					// The cycle is complete: its submission stops being the
+					// 当期生效 target, so later ballots on it are recorded as
+					// target_not_active and never drive (freeze §3 — verified
+					// is terminal, 协议无 un-verify; a post-verify fail must
+					// not send the node back).
+					delete(activeSubOwner, s.subID())
 				}
 				touch(s, ev)
 			default:

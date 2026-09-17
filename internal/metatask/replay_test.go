@@ -472,6 +472,31 @@ func TestToBlockBoundaryFilter(t *testing.T) {
 	}
 }
 
+func TestPostVerifyVotesDoNotDrive(t *testing.T) {
+	// Freeze §3: verified is terminal. Once quorum completes, the cycle's
+	// submission stops being 当期生效 — later votes (including fails) are
+	// recorded as target_not_active and never drive the state machine.
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v2", HAct+2, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "vF", HAct+3, 0, tBase+5_000, aBot2, votePayload("sub1", "fail", withSCFR)),
+		tp(PathVerify, "vP", HAct+4, 0, tBase+6_000, aBot3, votePayload("sub1", "pass", withSC)),
+	)...)
+	res := mustReplay(t, events, tNow)
+	n := nodeOf(t, res, "n1")
+	if n.MachineState != StateVerified || n.VerifiedAtBlockTs != tBase+4_000 {
+		t.Fatalf("post-verify votes must not drive: state=%s verifiedAt=%d", n.MachineState, n.VerifiedAtBlockTs)
+	}
+	for _, pid := range []string{"vF", "vP"} {
+		v := findVote(n, pid)
+		if v == nil || v.Counts || v.IgnoreReason != IgnoreTargetNotActive {
+			t.Fatalf("%s must be target_not_active: %+v", pid, v)
+		}
+	}
+}
+
 func TestReplayDeterministicUnderInputOrder(t *testing.T) {
 	pins := append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
