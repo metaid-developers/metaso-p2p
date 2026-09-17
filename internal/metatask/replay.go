@@ -34,7 +34,7 @@ const (
 	// ReplayAlgoVersion identifies the frozen algorithm this engine implements.
 	// Any change to the algorithm or to HAct bumps it and forces a full replay
 	// (freeze D10).
-	ReplayAlgoVersion = "metatask-replay-indexer/1.0.0+freeze1.1"
+	ReplayAlgoVersion = "metatask-replay-indexer/1.0.0+freeze1.3"
 	// CanonID is the frozen canonical-serialization identifier (freeze v1.3
 	// §6.1: contract-layer stamp, echoed in replayMeta.canonId; deployment-
 	// layer stamps like gitSHA are forbidden inside projection bodies).
