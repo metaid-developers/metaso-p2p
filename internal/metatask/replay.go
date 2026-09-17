@@ -173,30 +173,30 @@ type ActiveSubmission struct {
 // BlockTs drives lastActivity internally; the frozen §5 vote keys end at
 // blockHeight, so it stays out of the body.
 type VoteRecord struct {
-	VerifyPinID      string `json:"verifyPinId"`
-	Voter            string `json:"voter"`
-	Verdict          string `json:"verdict"`
-	HasEvidence      bool   `json:"hasEvidence"`
-	HasFailreason    bool   `json:"hasFailreason"`
-	HasSemanticCheck bool   `json:"hasSemanticCheck"`
-	Counts           bool   `json:"counts"`
-	IgnoreReason     string `json:"ignoreReason,omitempty"`
-	BlockHeight      int64  `json:"blockHeight"`
-	BlockTs          int64  `json:"-"`
+	VerifyPinID      string  `json:"verifyPinId"`
+	Voter            string  `json:"voter"`
+	Verdict          string  `json:"verdict"`
+	HasEvidence      bool    `json:"hasEvidence"`
+	HasFailreason    bool    `json:"hasFailreason"`
+	HasSemanticCheck bool    `json:"hasSemanticCheck"`
+	Counts           bool    `json:"counts"`
+	IgnoreReason     *string `json:"ignoreReason"`
+	BlockHeight      int64   `json:"blockHeight"`
+	BlockTs          int64   `json:"-"`
 }
 
 // EventRecord is the freeze §5 node-detail event row (每条可回源).
 type EventRecord struct {
-	EventPinID   string `json:"eventPinId"`
-	Path         string `json:"path"`
-	Version      int64  `json:"version"`
-	BlockHeight  int64  `json:"blockHeight"`
-	BlockTs      int64  `json:"blockTs"`
-	Author       string `json:"author"`
-	Kind         string `json:"kind"`
-	Summary      string `json:"summary"`
-	Validity     string `json:"validity"` // counted|ignored
-	IgnoreReason string `json:"ignoreReason,omitempty"`
+	EventPinID   string  `json:"eventPinId"`
+	Path         string  `json:"path"`
+	Version      int64   `json:"version"`
+	BlockHeight  int64   `json:"blockHeight"`
+	BlockTs      int64   `json:"blockTs"`
+	Author       string  `json:"author"`
+	Kind         string  `json:"kind"`
+	Summary      string  `json:"summary"`
+	Validity     string  `json:"validity"` // counted|ignored
+	IgnoreReason *string `json:"ignoreReason"`
 }
 
 // NodeReplay is one node's replay conclusion. Its JSON keys are the frozen
@@ -239,24 +239,29 @@ type ballotRec struct {
 }
 
 type nodeState struct {
-	id         string
-	holder     *replayEvent // current holding claim; nil = node open
-	holderID   string       // holding claim's pinId
-	claimTs    int64
-	sub        *replayEvent // current cycle's effective submission; nil = none
-	subTs      int64
-	state      string
-	outcome    string
-	cycleSeq   int
-	ballots    map[string]ballotRec // bot -> last valid ballot on the active submission
-	passes     int
-	verifiedAt int64
-	lastWrite  string
-	lastActTs  int64
-	votes      []VoteRecord
-	events     []EventRecord
-	aggNote    string
-	inTree     bool
+	id       string
+	holder   *replayEvent // current holding claim; nil = node open
+	holderID string       // holding claim's pinId
+	claimTs  int64
+	sub      *replayEvent // current cycle's effective submission; nil = none
+	subTs    int64
+	state    string
+	outcome  string
+	cycleSeq int
+	ballots  map[string]ballotRec // bot -> last valid ballot on the active submission
+	passes   int
+	// quorumTs anchors the first ≺ position where the running pass count
+	// (last-per-bot folded) reaches policy.verify_quorum. Quorum satisfaction
+	// is NOT a stream transition (A2-1: the cycle terminal is decided at the
+	// evaluation boundary) — at B a still-alive submitted cycle with
+	// passes >= quorum becomes verified carrying this timestamp.
+	quorumTs  int64
+	lastWrite string
+	lastActTs int64
+	votes     []VoteRecord
+	events    []EventRecord
+	aggNote   string
+	inTree    bool
 }
 
 func (s *nodeState) subID() string {
@@ -333,6 +338,10 @@ func admitEvents(events map[string][]*Pin, boundary Boundary) (admitted map[stri
 	}
 	return admitted, mempool, rejected
 }
+
+// reasonPtr returns a pointer to a fresh string copy for the nullable
+// ignoreReason fields (A2-3: counted rows serialize the key with null).
+func reasonPtr(s string) *string { return &s }
 
 // DeriveBoundary picks the evaluation boundary for an enumerated event set:
 // an explicit to-block when given, else the newest confirmed event height
@@ -543,24 +552,28 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 	}
 
 	addEvent := func(s *nodeState, ev *replayEvent, validity, reason, summary string) {
-		s.events = append(s.events, EventRecord{
+		er := EventRecord{
 			EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
 			BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
-			Kind: PoolName(ev.pin.Path), Summary: summary, Validity: validity, IgnoreReason: reason,
-		})
+			Kind: PoolName(ev.pin.Path), Summary: summary, Validity: validity,
+		}
+		if reason != "" {
+			er.IgnoreReason = reasonPtr(reason)
+		}
+		s.events = append(s.events, er)
 	}
 
 	reject := func(s *nodeState, ev *replayEvent) {
-		// 裁定三 / A1-1 (fail 优先批式判定): any effective fail sends the node
-		// back to open — regardless of whether quorum was satisfied earlier in
-		// the cycle ("verified 为终态" is cycle-final stability, not a stream
-		// position barrier). The current cycle's submission stops being active.
+		// 裁定三 / A2-1 (fail 优先批式判定): any effective fail sends the node
+		// back to open — the FIRST decisive event wins, regardless of whether
+		// quorum was satisfied earlier in the cycle. The current cycle's
+		// submission stops being active and no verifiedAt survives.
 		s.state = StateOpen
 		s.outcome = OutcomeRejected
 		delete(activeSubOwner, s.subID())
 		s.sub, s.subTs = nil, 0
 		s.holder, s.holderID, s.claimTs = nil, "", 0
-		s.verifiedAt = 0 // a rejected cycle never carries a verifiedAt
+		s.quorumTs = 0 // a rejected cycle never carries a verifiedAt
 		touch(s, ev)
 	}
 
@@ -570,32 +583,34 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			node := payloadString(ev.body, "node")
 			s := getState(node)
 			summary := "claim node=" + node
-			switch {
-			case s.state == StateVerified:
-				// verified is terminal: claims bind only on open nodes.
-				addEvent(s, ev, "ignored", IgnoreNodeNotOpen, summary)
-				touch(s, ev)
-			case s.holder != nil:
+			// A2-1: quorum satisfaction is not decisive — the lock is held
+			// until a decisive event (valid fail / release), so a new claim
+			// on a quorum-satisfied node is simply superseded.
+			if s.holder != nil {
 				addEvent(s, ev, "ignored", IgnoreSupersededClaim, summary)
 				touch(s, ev)
-			default:
-				// new cycle
-				s.holder, s.holderID, s.claimTs = ev, ev.pin.ID, ev.ts
-				s.sub, s.subTs = nil, 0
-				s.ballots = map[string]ballotRec{}
-				s.passes = 0
-				s.cycleSeq++
-				s.outcome = OutcomeNone
-				s.state = StateClaimed
-				addEvent(s, ev, "counted", "", summary)
-				touch(s, ev)
+				break
 			}
+			// new cycle
+			s.holder, s.holderID, s.claimTs = ev, ev.pin.ID, ev.ts
+			s.sub, s.subTs = nil, 0
+			s.ballots = map[string]ballotRec{}
+			s.passes = 0
+			s.quorumTs = 0
+			s.cycleSeq++
+			s.outcome = OutcomeNone
+			s.state = StateClaimed
+			addEvent(s, ev, "counted", "", summary)
+			touch(s, ev)
 
 		case PathRelease:
 			node := payloadString(ev.body, "node")
 			s := getState(node)
 			summary := "release claimid=" + payloadString(ev.body, "claimid")
-			if s.state == StateVerified || s.holder == nil || s.holderID != payloadString(ev.body, "claimid") {
+			// A2-1: release is decisive whenever the holder matches — a
+			// quorum-satisfied cycle is still releasable (t47: release ends
+			// cycle 1 after quorum; verified only materializes via cycle 2).
+			if s.holder == nil || s.holderID != payloadString(ev.body, "claimid") {
 				addEvent(s, ev, "ignored", IgnoreNoMatchingClaim, summary)
 				touch(s, ev)
 				break
@@ -605,6 +620,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			s.sub, s.subTs = nil, 0
 			s.ballots = map[string]ballotRec{}
 			s.passes = 0
+			s.quorumTs = 0
 			s.state = StateOpen
 			s.outcome = OutcomeReleased
 			addEvent(s, ev, "counted", "", summary)
@@ -658,7 +674,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				if owner, known := allSubOwner[target]; known {
 					s := getState(owner)
 					vote.Counts = false
-					vote.IgnoreReason = IgnoreTargetNotActive
+					vote.IgnoreReason = reasonPtr(IgnoreTargetNotActive)
 					s.votes = append(s.votes, vote)
 					addEvent(s, ev, "ignored", IgnoreTargetNotActive, "verify target="+target)
 					touch(s, ev)
@@ -669,7 +685,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 						EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
 						BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
 						Kind: "verify", Summary: "verify target=" + target,
-						Validity: "ignored", IgnoreReason: IgnoreUnresolvedTarget,
+						Validity: "ignored", IgnoreReason: reasonPtr(IgnoreUnresolvedTarget),
 					})
 				}
 				break
@@ -679,7 +695,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			idx := len(s.votes) - 1
 			mark := func(reason string) {
 				s.votes[idx].Counts = false
-				s.votes[idx].IgnoreReason = reason
+				s.votes[idx].IgnoreReason = reasonPtr(reason)
 				addEvent(s, ev, "ignored", reason, "verify verdict="+vote.Verdict+" target="+target)
 				touch(s, ev)
 			}
@@ -705,7 +721,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				// Explicit verdict=invalid: sends back, occupies no fail slot
 				// (protocol verifyCount, all heights — freeze §3).
 				s.votes[idx].Counts = false
-				s.votes[idx].IgnoreReason = IgnoreVerdictInvalid
+				s.votes[idx].IgnoreReason = reasonPtr(IgnoreVerdictInvalid)
 				addEvent(s, ev, "ignored", IgnoreVerdictInvalid, "verify verdict=invalid target="+target)
 				reject(s, ev)
 			case vote.Verdict == "fail":
@@ -713,7 +729,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 					// A1-7: the superseded earlier ballot counts neither
 					// good nor bad once the bot's later valid ballot lands.
 					s.votes[prev.voteIdx].Counts = false
-					s.votes[prev.voteIdx].IgnoreReason = IgnoreDuplicateVote
+					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
 					if prev.verdict == "pass" {
 						s.passes-- // the bot's contribution switches pass→fail
 					}
@@ -731,7 +747,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			case vote.Verdict == "pass":
 				if prev, ok := s.ballots[vote.Voter]; ok {
 					s.votes[prev.voteIdx].Counts = false
-					s.votes[prev.voteIdx].IgnoreReason = IgnoreDuplicateVote
+					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
 					if prev.verdict == "fail" {
 						s.passes++ // the bot's contribution switches fail→pass
 					}
@@ -741,9 +757,12 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				s.ballots[vote.Voter] = ballotRec{verdict: "pass", voteIdx: idx}
 				s.votes[idx].Counts = true
 				addEvent(s, ev, "counted", "", "verify verdict=pass target="+target)
-				if s.passes >= res.Quorum && s.state != StateVerified {
-					s.state = StateVerified
-					s.verifiedAt = ev.ts
+				// A2-1: quorum satisfaction is NOT a stream transition — the
+				// cycle stays alive (releasable, claim-superseded only) and
+				// the verified verdict materializes at the boundary B. Only
+				// the anchor timestamp is recorded here.
+				if s.passes == res.Quorum && s.quorumTs == 0 {
+					s.quorumTs = ev.ts
 				}
 				touch(s, ev)
 			default:
@@ -752,12 +771,14 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		}
 	}
 
-	// ---- boundary expiry (freeze §3 [B] rows; strictly-greater deadlines) ----
+	// ---- boundary evaluation (freeze §3 [B] rows; strictly-greater deadlines)
+	// A2-1: quorum satisfaction is not a stream transition — the verified
+	// verdict materializes HERE for still-alive submitted cycles; expiry
+	// applies to the rest. ----
 	for _, s := range states {
-		if s.state == StateVerified {
-			continue
-		}
 		switch {
+		case s.state == StateSubmitted && s.sub != nil && s.passes >= res.Quorum:
+			s.state = StateVerified
 		case s.state == StateClaimed && s.holder != nil:
 			if wd := ttlDeadline(s.claimTs); wd != 0 && boundary.BlockTs > wd {
 				s.state = StateOpen
@@ -765,7 +786,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				s.holder, s.holderID, s.claimTs = nil, "", 0
 			}
 		case s.state == StateSubmitted && s.sub != nil:
-			if wd := windowDeadline(s.subTs); wd != 0 && boundary.BlockTs > wd && s.passes < res.Quorum {
+			if wd := windowDeadline(s.subTs); wd != 0 && boundary.BlockTs > wd {
 				s.state = StateOpen
 				s.outcome = OutcomeExpiredReviewWindow
 				delete(activeSubOwner, s.subID())
@@ -820,8 +841,8 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			Events: s.events,
 			InTree: s.inTree, AggNote: s.aggNote,
 		}
-		if s.verifiedAt > 0 {
-			vts := s.verifiedAt
+		if s.state == StateVerified && s.quorumTs > 0 {
+			vts := s.quorumTs
 			nr.VerifiedAtBlockTs = &vts
 		}
 		if s.lastWrite != "" {

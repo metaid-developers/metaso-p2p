@@ -3,6 +3,7 @@ package metatask
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -127,7 +128,7 @@ func TestVerifiedPath(t *testing.T) {
 	}
 	for _, v := range n.Votes {
 		if !v.Counts {
-			t.Fatalf("vote %s should count (reason %s)", v.VerifyPinID, v.IgnoreReason)
+			t.Fatalf("vote %s should count (reason %v)", v.VerifyPinID, v.IgnoreReason)
 		}
 	}
 	if n.LastWriteEventPinID == nil || *n.LastWriteEventPinID != "v2" {
@@ -151,7 +152,7 @@ func TestSupersededClaim(t *testing.T) {
 			superseded = &n.Events[i]
 		}
 	}
-	if superseded == nil || superseded.Validity != "ignored" || superseded.IgnoreReason != IgnoreSupersededClaim {
+	if superseded == nil || superseded.Validity != "ignored" || superseded.IgnoreReason == nil || *superseded.IgnoreReason != IgnoreSupersededClaim {
 		t.Fatalf("claim2 not marked superseded: %+v", superseded)
 	}
 }
@@ -207,7 +208,7 @@ func TestDualSubmissionSameCycle(t *testing.T) {
 			dup = &n.Events[i]
 		}
 	}
-	if dup == nil || dup.IgnoreReason != IgnoreNotEarliestInCyc {
+	if dup == nil || dup.IgnoreReason == nil || *dup.IgnoreReason != IgnoreNotEarliestInCyc {
 		t.Fatalf("sub2 not marked not_earliest: %+v", dup)
 	}
 }
@@ -228,7 +229,7 @@ func TestSubmitterNotHolder(t *testing.T) {
 			rec = &n.Events[i]
 		}
 	}
-	if rec == nil || rec.IgnoreReason != IgnoreSubmitterNotHolder {
+	if rec == nil || rec.IgnoreReason == nil || *rec.IgnoreReason != IgnoreSubmitterNotHolder {
 		t.Fatalf("sub1 not marked submitter_not_holder: %+v", rec)
 	}
 }
@@ -283,7 +284,7 @@ func TestFailGateDualTrack(t *testing.T) {
 		t.Fatalf("7a state: %s (outcome %s)", n.MachineState, n.CycleOutcome)
 	}
 	vf := findVote(n, "vF")
-	if vf == nil || vf.Counts || vf.IgnoreReason != "missing_failreason" {
+	if vf == nil || vf.Counts || vf.IgnoreReason == nil || *vf.IgnoreReason != "missing_failreason" {
 		t.Fatalf("7a vF: %+v", vf)
 	}
 
@@ -328,7 +329,7 @@ func TestSemanticCheckGate(t *testing.T) {
 		t.Fatalf("8a state: %s", n.MachineState)
 	}
 	v1 := findVote(n, "v1")
-	if v1 == nil || v1.Counts || v1.IgnoreReason != "missing_semantic_check" {
+	if v1 == nil || v1.Counts || v1.IgnoreReason == nil || *v1.IgnoreReason != "missing_semantic_check" {
 		t.Fatalf("8a v1: %+v", v1)
 	}
 
@@ -377,7 +378,7 @@ func TestWindowExpiryAndLateVotes(t *testing.T) {
 		t.Fatalf("expired window: %s/%s", n.MachineState, n.CycleOutcome)
 	}
 	v2 := findVote(n, "v2")
-	if v2 == nil || v2.Counts || v2.IgnoreReason != IgnoreAfterWindowClose {
+	if v2 == nil || v2.Counts || v2.IgnoreReason == nil || *v2.IgnoreReason != IgnoreAfterWindowClose {
 		t.Fatalf("v2: %+v", v2)
 	}
 }
@@ -508,7 +509,7 @@ func TestFailPriorityBatch(t *testing.T) {
 		t.Fatalf("cycle outcome: %s", n.CycleOutcome)
 	}
 	vp := findVote(n, "vP")
-	if vp == nil || vp.Counts || vp.IgnoreReason != IgnoreTargetNotActive {
+	if vp == nil || vp.Counts || vp.IgnoreReason == nil || *vp.IgnoreReason != IgnoreTargetNotActive {
 		t.Fatalf("post-reject pass: %+v", vp)
 	}
 }
@@ -531,7 +532,7 @@ func TestDuplicateVoteSuperseded(t *testing.T) {
 		t.Fatalf("folded state: %s", n.MachineState)
 	}
 	v1 := findVote(n, "v1")
-	if v1 == nil || v1.Counts || v1.IgnoreReason != IgnoreDuplicateVote {
+	if v1 == nil || v1.Counts || v1.IgnoreReason == nil || *v1.IgnoreReason != IgnoreDuplicateVote {
 		t.Fatalf("v1 superseded: %+v", v1)
 	}
 	v2 := findVote(n, "v2")
@@ -554,11 +555,85 @@ func TestZeroDropIgnoredTarget(t *testing.T) {
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
 	vs2 := findVote(n, "vS2")
-	if vs2 == nil || vs2.Counts || vs2.IgnoreReason != IgnoreTargetNotActive {
+	if vs2 == nil || vs2.Counts || vs2.IgnoreReason == nil || *vs2.IgnoreReason != IgnoreTargetNotActive {
 		t.Fatalf("vote on an ignored submission must hang on the node: %+v", vs2)
 	}
 	if len(res.Unresolved) != 1 || res.Unresolved[0].EventPinID != "vX" {
 		t.Fatalf("only the truly-unknown target stays unresolved: %+v", res.Unresolved)
+	}
+}
+
+func TestQuorumNotTerminalInStream(t *testing.T) {
+	// A2-1 (loop drill D-1, t47 shape): quorum satisfaction does NOT end the
+	// cycle in-stream. A release after quorum is decisive (released); the
+	// next claim opens cycle 2 whose submission carries the final verified
+	// verdict — cycleSeq=2, activeSubmission re-anchored.
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v2", HAct+2, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
+		tp(PathRelease, "release1", HAct+3, 0, tBase+5_000, aBot1, releasePayload("claim1")),
+		tp(PathClaim, "claim2", HAct+4, 0, tBase+6_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub2", HAct+5, 0, tBase+7_000, aBot1, subPayload("claim2", "n1")),
+		tp(PathVerify, "w1", HAct+6, 0, tBase+8_000, aBot2, votePayload("sub2", "pass", withSC)),
+		tp(PathVerify, "w2", HAct+7, 0, tBase+9_000, aBot3, votePayload("sub2", "pass", withSC)),
+	)...)
+	res := mustReplay(t, events, tNow)
+	n := nodeOf(t, res, "n1")
+	if n.MachineState != StateVerified {
+		t.Fatalf("final verdict via S2: %s", n.MachineState)
+	}
+	if n.CycleSeq != 2 {
+		t.Fatalf("cycleSeq must be 2 (release ends the quorum-met cycle 1): %d", n.CycleSeq)
+	}
+	if n.ActiveSubmission == nil || n.ActiveSubmission.SubmissionPinID != "sub2" {
+		t.Fatalf("activeSubmission must re-anchor to S2: %+v", n.ActiveSubmission)
+	}
+	if n.CurrentClaim == nil || n.CurrentClaim.ClaimPinID != "claim2" {
+		t.Fatalf("currentClaim must be claim2: %+v", n.CurrentClaim)
+	}
+	// Cycle 1's votes count (target was active at their ≺ position); the
+	// quorum anchor is cycle 2's second pass.
+	v2 := findVote(n, "v2")
+	if v2 == nil || !v2.Counts {
+		t.Fatalf("cycle-1 pass must count: %+v", v2)
+	}
+
+	// Same shape without the re-claim: release after quorum ends the cycle
+	// as released — the node never verifies on the released submission.
+	events = evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v2", HAct+2, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
+		tp(PathRelease, "release1", HAct+3, 0, tBase+5_000, aBot1, releasePayload("claim1")),
+	)...)
+	res = mustReplay(t, events, tNow)
+	n = nodeOf(t, res, "n1")
+	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeReleased {
+		t.Fatalf("release after quorum must be decisive: %s/%s", n.MachineState, n.CycleOutcome)
+	}
+	if n.VerifiedAtBlockTs != nil {
+		t.Fatalf("released cycle must not carry verifiedAt: %v", *n.VerifiedAtBlockTs)
+	}
+}
+
+func TestCountedVoteIgnoreReasonNull(t *testing.T) {
+	// A3-2 / loop drill D-3: a counted ballot serializes an explicit
+	// "ignoreReason": null — the key must exist, never be omitted.
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+	)...)
+	res := mustReplay(t, events, tNow)
+	b, err := CanonicalJSON(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"ignoreReason":null`) {
+		t.Fatalf("counted votes must carry explicit null ignoreReason: %s", b)
 	}
 }
 
