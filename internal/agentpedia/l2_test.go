@@ -511,3 +511,141 @@ func TestEntryListExposesGraveyardSummary(t *testing.T) {
 		t.Fatalf("graveyard reasons = %v, want unregistered=1", reasons)
 	}
 }
+
+// TestPinsEndpointCursorContract locks the surf-audit R6 contract of
+// GET /api/agentpedia/pins: newest-first order with chain-position tiebreaks,
+// truthful hasMore, gap-free/duplicate-free key-pinned cursor paging that
+// survives concurrent inserts, path/since filters, and strict 400s.
+func TestPinsEndpointCursorContract(t *testing.T) {
+	founders := []string{"idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", "idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz"}
+	const hexA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	rev := func(pin string, ts int64, height int64, tx int, title string) Event {
+		return Event{Pin: pin, Path: PathRev, Sender: founders[0], Height: height, TxIndex: tx, Timestamp: ts, ChainName: "mvc",
+			Payload: map[string]any{"v": 1.0, "type": "edit", "lang": "zh", "slug": "s", "title": title, "content": "正文 " + title, "summary": "摘要 " + title, "contentHash": hexA}}
+	}
+	challenge := Event{Pin: "c9", Path: PathChallenge, Sender: founders[1], Height: 190001, TxIndex: 3, Timestamp: 1789600000, ChainName: "mvc",
+		Payload: map[string]any{"v": 1.0, "targetRev": "r-new", "reason": "factual"}}
+	events := []Event{
+		rev("r-old", 1789500000, 189000, 0, "old"),
+		rev("r-mid", 1789555000, 189500, 0, "mid"),
+		// same-second pair: chain order (height, txIndex) breaks the tie
+		rev("r-tie-hi", 1789600500, 190100, 7, "tie-hi"),
+		rev("r-tie-lo", 1789600500, 190100, 2, "tie-lo"),
+		rev("r-new", 1789600900, 190200, 0, "new"),
+		challenge,
+	}
+	l := NewL2("http://manapi.invalid")
+	l.Seed(events)
+	mux := l.ServeMux()
+
+	fetch := func(query string) (int, map[string]any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/pins"+query, nil))
+		var body map[string]any
+		if rec.Code == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode %s: %v", query, err)
+			}
+		}
+		return rec.Code, body
+	}
+
+	// Order + tiebreak: newest first; the same-second pair orders by chain
+	// position (txIndex desc); title/summary/excerpt surfaced from the payload.
+	code, page := fetch("?size=3")
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, page)
+	}
+	rows := page["items"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("page1 items = %d, want 3", len(rows))
+	}
+	first := rows[0].(map[string]any)
+	if first["pinId"] != "r-new" || first["title"] != "new" || first["type"] != "edit" {
+		t.Fatalf("first row = %v", first)
+	}
+	if first["chainName"] != "mvc" || first["timestamp"].(float64) != 1789600900 {
+		t.Fatalf("first row provenance = %v", first)
+	}
+	if rows[1].(map[string]any)["pinId"] != "r-tie-hi" || rows[2].(map[string]any)["pinId"] != "r-tie-lo" {
+		t.Fatalf("same-second tiebreak wrong: %v then %v", rows[1], rows[2])
+	}
+	if page["hasMore"] != true {
+		t.Fatalf("hasMore = %v, want true", page["hasMore"])
+	}
+	cursor, _ := page["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatalf("nextCursor missing on a hasMore page")
+	}
+
+	// Gap-free completion with the cursor: paging yields every pin exactly
+	// once even though new events landed between the two pages.
+	l.Append([]Event{rev("r-late", 1789609999, 190300, 0, "late")})
+	code, page2 := fetch("?size=3&cursor=" + cursor)
+	if code != http.StatusOK {
+		t.Fatalf("page2 status %d", code)
+	}
+	seen := map[string]bool{"r-new": true, "r-tie-hi": true, "r-tie-lo": true}
+	for _, raw := range page2["items"].([]any) {
+		row := raw.(map[string]any)
+		pinId := row["pinId"].(string)
+		if seen[pinId] {
+			t.Fatalf("duplicate %s across pages", pinId)
+		}
+		seen[pinId] = true
+	}
+	if seen["r-late"] {
+		t.Fatalf("concurrent insert r-late must not leak into the resumed page (it sorts above the cursor; the next fresh query picks it up): %v", seen)
+	}
+	if !seen["c9"] || !seen["r-mid"] || !seen["r-old"] {
+		t.Fatalf("resumed page must complete the original window exactly: %v", seen)
+	}
+	if page2["hasMore"] != false {
+		t.Fatalf("final page hasMore = %v, want false", page2["hasMore"])
+	}
+
+	// Path filter accepts the full path and the short segment; other paths
+	// drop out entirely.
+	code, revOnly := fetch("?path=/protocols/agentpedia/rev&size=50")
+	if code != http.StatusOK {
+		t.Fatalf("path filter status %d", code)
+	}
+	for _, raw := range revOnly["items"].([]any) {
+		if raw.(map[string]any)["path"] != PathRev {
+			t.Fatalf("path filter leaked %v", raw)
+		}
+	}
+	if len(revOnly["items"].([]any)) != 6 { // 5 seeded revs + r-late
+		t.Fatalf("rev items = %d, want 6", len(revOnly["items"].([]any)))
+	}
+	code, short := fetch("?path=rev&size=1")
+	if code != http.StatusOK || short["hasMore"] != true {
+		t.Fatalf("short path filter failed: %d %v", code, short)
+	}
+
+	// Inclusive since bound.
+	code, sincePage := fetch("?path=rev&since=1789600500&size=50")
+	if code != http.StatusOK {
+		t.Fatalf("since status %d", code)
+	}
+	if len(sincePage["items"].([]any)) != 4 { // tie-hi, tie-lo, new, late
+		t.Fatalf("since items = %d, want 4", len(sincePage["items"].([]any)))
+	}
+
+	// Strict 400s: unknown path, garbage cursor, garbage since/size.
+	for _, query := range []string{"?path=/protocols/nope", "?cursor=zzz", "?since=abc", "?size=0"} {
+		if code, _ := fetch(query); code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want 400", query, code)
+		}
+	}
+
+	// Empty feed (pre-sync) renders an empty array, not null.
+	fresh := NewL2("http://manapi.invalid")
+	rec := httptest.NewRecorder()
+	fresh.ServeMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/agentpedia/pins", nil))
+	var empty map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &empty); err != nil || empty["items"] == nil {
+		t.Fatalf("pre-sync pins must render items: [], got %s", rec.Body.String())
+	}
+}

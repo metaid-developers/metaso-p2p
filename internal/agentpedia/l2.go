@@ -39,6 +39,9 @@ type pinMeta struct {
 	sender  string
 	path    string
 	title   string
+	ts      int64 // unix seconds (block time); 0 when the source page omitted it
+	addr    string
+	chain   string
 }
 
 // NewL2 builds an aggregator against a manapi base URL (e.g. https://manapi.metaid.io).
@@ -88,7 +91,7 @@ func (l *L2) rebuildLocked() {
 	l.pinMeta = map[string]pinMeta{}
 	l.contents = map[string]string{}
 	for _, ev := range l.events {
-		meta := pinMeta{height: ev.Height, txIndex: ev.TxIndex, sender: ev.Sender, path: ev.Path}
+		meta := pinMeta{height: ev.Height, txIndex: ev.TxIndex, sender: ev.Sender, path: ev.Path, ts: ev.Timestamp, chain: ev.ChainName}
 		if ev.Path == PathRev {
 			if title, ok := ev.Payload["title"].(string); ok {
 				meta.title = title
@@ -115,6 +118,9 @@ type manapiPage struct {
 			GenesisHeight int64  `json:"genesisHeight"`
 			TxIndex       int    `json:"txIndex"`
 			GlobalMetaID  string `json:"globalMetaId"`
+			Address       string `json:"address"`
+			ChainName     string `json:"chainName"`
+			Timestamp     int64  `json:"timestamp"`
 			ContentBody   any    `json:"contentBody"`
 		} `json:"list"`
 		NextCursor string `json:"nextCursor"`
@@ -187,6 +193,7 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 				l.events = append(l.events, Event{
 					Pin: pin.ID, Path: path, Height: pin.GenesisHeight,
 					TxIndex: pin.TxIndex, Sender: pin.GlobalMetaID, Payload: payload,
+					Timestamp: pin.Timestamp, Address: pin.Address, ChainName: pin.ChainName,
 				})
 				applied++
 			}
@@ -493,6 +500,7 @@ func (l *L2) ServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/agentpedia/entry_list", l.handleEntryList)
 	mux.HandleFunc("/api/agentpedia/backlinks", l.handleBacklinks)
 	mux.HandleFunc("/api/agentpedia/editor", l.handleEditor)
+	mux.HandleFunc("/api/agentpedia/pins", l.handlePins)
 	mux.HandleFunc("/api/agentpedia/sync", l.handleSync)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -691,6 +699,241 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total": len(items), "items": items[offset:end], "cursor": nextCursor, "sort": sortBy,
 		"graveyard": graveyard,
+	})
+}
+
+// ---- surf freshness: cursor-paged agentpedia pin listing (surf audit R6, 2026-09-17) ----
+
+// pinsExcerptMaxRunes caps contentExcerpt on GET /api/agentpedia/pins rows;
+// full bodies stay on the metaweb pin-read endpoints.
+const pinsExcerptMaxRunes = 280
+
+// pinsMaxSize caps the pins page size (1..200, default 50).
+const pinsMaxSize = 200
+
+// pinsItem is one row of GET /api/agentpedia/pins: a confirmed agentpedia pin
+// observed by the incremental sync, newest-first. Rows are RAW observations —
+// replay-validity filtering is not applied (freshness first; the graveyard
+// audit lives on entry_list). Mempool sightings never enter the stream.
+type pinsItem struct {
+	PinId          string `json:"pinId"`
+	Path           string `json:"path"`
+	ChainName      string `json:"chainName,omitempty"`
+	Timestamp      int64  `json:"timestamp"`
+	GenesisHeight  int64  `json:"genesisHeight"`
+	TxIndex        int    `json:"txIndex"`
+	GlobalMetaId   string `json:"globalMetaId"`
+	Address        string `json:"address,omitempty"`
+	Title          string `json:"title,omitempty"`
+	Summary        string `json:"summary,omitempty"`
+	ContentExcerpt string `json:"contentExcerpt,omitempty"`
+	Type           string `json:"type,omitempty"`
+}
+
+// pinsOrder is the feed comparator: newer first — timestamp desc, then chain
+// order (genesisHeight desc, txIndex desc), then pinId asc as the total-order
+// tiebreak. The cursor pins the exact last-emitted key, so paging over a
+// window is gap-free and duplicate-free under concurrent inserts (the R1
+// fresh-feed cursor contract).
+func pinsOrder(a, b pinsItem) bool {
+	if a.Timestamp != b.Timestamp {
+		return a.Timestamp > b.Timestamp
+	}
+	if a.GenesisHeight != b.GenesisHeight {
+		return a.GenesisHeight > b.GenesisHeight
+	}
+	if a.TxIndex != b.TxIndex {
+		return a.TxIndex > b.TxIndex
+	}
+	return a.PinId < b.PinId
+}
+
+// encodePinsCursor packs the last-emitted feed key into the opaque
+// continuation token; decodePinsCursor is the strict inverse.
+func encodePinsCursor(item pinsItem) string {
+	raw, _ := json.Marshal([4]any{item.Timestamp, item.GenesisHeight, item.TxIndex, item.PinId})
+	return "k:" + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodePinsCursor(cursor string) (pinsItem, bool) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		return pinsItem{}, true
+	}
+	if !strings.HasPrefix(cursor, "k:") {
+		return pinsItem{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(cursor, "k:"))
+	if err != nil {
+		return pinsItem{}, false
+	}
+	var tuple []any
+	if err := json.Unmarshal(raw, &tuple); err != nil || len(tuple) != 4 {
+		return pinsItem{}, false
+	}
+	ts, ok1 := tuple[0].(float64)
+	height, ok2 := tuple[1].(float64)
+	txIndex, ok3 := tuple[2].(float64)
+	pinId, ok4 := tuple[3].(string)
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return pinsItem{}, false
+	}
+	return pinsItem{Timestamp: int64(ts), GenesisHeight: int64(height), TxIndex: int(txIndex), PinId: pinId}, true
+}
+
+// resolvePinsPathFilter normalises the `path` query parameter: the full path
+// ("/protocols/agentpedia/rev") or its last segment ("rev"); empty = all
+// seven agentpedia paths. Unknown values are rejected (truthful, not lossy).
+func resolvePinsPathFilter(raw string) (string, bool) {
+	raw = strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
+	if raw == "" {
+		return "", true
+	}
+	for _, path := range syncPaths {
+		if raw == path {
+			return path, true
+		}
+		if raw == path[strings.LastIndex(path, "/")+1:] {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// pinsSnapshot copies the pin rows under lock; filtering, sorting and paging
+// stay lock-free in the handler.
+func (l *L2) pinsSnapshot() []pinsItem {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	items := make([]pinsItem, 0, len(l.events))
+	for _, ev := range l.events {
+		meta := l.pinMeta[ev.Pin]
+		row := pinsItem{
+			PinId:          ev.Pin,
+			Path:           ev.Path,
+			ChainName:      meta.chain,
+			Timestamp:      meta.ts,
+			GenesisHeight:  meta.height,
+			TxIndex:        meta.txIndex,
+			GlobalMetaId:   ev.Sender,
+			Address:        meta.addr,
+			Title:          str(ev.Payload, "title"),
+			Summary:        str(ev.Payload, "summary"),
+			Type:           str(ev.Payload, "type"),
+			ContentExcerpt: capRunes(str(ev.Payload, "content"), pinsExcerptMaxRunes),
+		}
+		if row.Summary == "" {
+			row.Summary = str(ev.Payload, "reason")
+		}
+		items = append(items, row)
+	}
+	return items
+}
+
+func capRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
+}
+
+// handlePins serves GET /api/agentpedia/pins — the cursor-paged agentpedia
+// freshness feed (surf audit R6): newest-first over every confirmed pin the
+// sync has observed, path-filterable, with a truthful hasMore and a
+// key-pinned opaque cursor matching the R1 fresh-feed contract.
+func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	pathFilter, ok := resolvePinsPathFilter(q.Get("path"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown agentpedia path"})
+		return
+	}
+
+	var since int64
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid since (unix seconds)"})
+			return
+		}
+		since = v
+	}
+
+	size := 50
+	if raw := strings.TrimSpace(q.Get("size")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid size"})
+			return
+		}
+		if v > pinsMaxSize {
+			v = pinsMaxSize
+		}
+		size = v
+	}
+
+	var cursorKey pinsItem
+	if rawCursor := strings.TrimSpace(q.Get("cursor")); rawCursor != "" {
+		decoded, ok := decodePinsCursor(rawCursor)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid cursor"})
+			return
+		}
+		cursorKey = decoded
+	}
+
+	all := l.pinsSnapshot()
+	if pathFilter != "" {
+		filtered := all[:0]
+		for _, item := range all {
+			if item.Path == pathFilter {
+				filtered = append(filtered, item)
+			}
+		}
+		all = filtered
+	}
+	sort.Slice(all, func(i, j int) bool { return pinsOrder(all[i], all[j]) })
+
+	// Inclusive since bound on the block timestamp; the feed is ts-desc, so
+	// the first item below the bound ends the window.
+	if since > 0 {
+		cut := len(all)
+		for i := range all {
+			if all[i].Timestamp < since {
+				cut = i
+				break
+			}
+		}
+		all = all[:cut]
+	}
+
+	// Resume strictly after the cursor key; once timestamps drop below the
+	// inclusive since bound nothing further can match (feed is ts-desc).
+	start := 0
+	if q.Get("cursor") != "" {
+		for start = 0; start < len(all); start++ {
+			if pinsOrder(cursorKey, all[start]) {
+				break
+			}
+		}
+	}
+	end := start + size
+	hasMore := end < len(all)
+	if !hasMore {
+		end = len(all)
+	}
+	page := all[start:end]
+	if page == nil {
+		page = []pinsItem{}
+	}
+	var nextCursor any
+	if hasMore && len(page) > 0 {
+		nextCursor = encodePinsCursor(page[len(page)-1])
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": page, "hasMore": hasMore, "nextCursor": nextCursor,
 	})
 }
 
