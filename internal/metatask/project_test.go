@@ -43,8 +43,14 @@ func TestBuildReplayMetaCursorAndCoverage(t *testing.T) {
 	if meta.Cursor.OutputIndex != -1 {
 		t.Fatalf("outputIndex sentinel: %d", meta.Cursor.OutputIndex)
 	}
-	if meta.CanonID != CanonID || CanonID != "canonJ-1.1.0" {
-		t.Fatalf("canonId: %q", meta.CanonID)
+	// v1.2 lock: canonId is a contract-external field (v1.3 retracted) — the
+	// serialized replayMeta must never carry it.
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "canonId") {
+		t.Fatalf("canonId leaked into serialized replayMeta: %s", raw)
 	}
 	if meta.Coverage.PerPath[PathVerify] != "partial" || meta.Coverage.PerPath[PathClaim] != "complete" {
 		t.Fatalf("perPath coverage: %+v", meta.Coverage.PerPath)
@@ -97,8 +103,8 @@ func TestBuildTaskIndexRowOrderAndParticipants(t *testing.T) {
 			row = &idx.Rows[i]
 		}
 	}
-	if row == nil || row.ParticipantsCount != 1 || row.Participants[0].MetaID != aBot3 || row.Participants[0].Reviews != 1 {
-		t.Fatalf("participants: %+v", row.Participants)
+	if row == nil || row.ParticipantsCount != 1 || len(row.Participants) != 1 || row.Participants[0] != aBot3 {
+		t.Fatalf("participants (v1.2: metaId list): %+v", row.Participants)
 	}
 	if row.LastActivity.EventPinID != "vv" || row.LastActivity.BlockTs != 900 {
 		t.Fatalf("lastActivity: %+v", row.LastActivity)

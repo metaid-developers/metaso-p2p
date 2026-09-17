@@ -17,7 +17,6 @@ type ReplayMeta struct {
 	ReplayAlgoVersion  string         `json:"replayAlgoVersion"`
 	ProtocolVersion    string         `json:"protocolVersion"`
 	ProtocolPinID      string         `json:"protocolPinId"`
-	CanonID            string         `json:"canonId"`
 	EvaluatedAtBlock   int64          `json:"evaluatedAtBlock"`
 	EvaluatedAtBlockTs int64          `json:"evaluatedAtBlockTs"`
 	Cursor             ReplayCursor   `json:"cursor"`
@@ -39,13 +38,12 @@ type ReplayCursor struct {
 	LastBlockTs int64 `json:"lastBlockTs"`
 }
 
-// ReplayCoverage carries the never-silent completeness report (freeze §7).
+// ReplayCoverage carries the never-silent completeness report (freeze §7;
+// v1.2 freezes exactly three subfields).
 type ReplayCoverage struct {
-	PerPath         map[string]string `json:"perPath"` // complete|partial per path
-	OrderFallback   bool              `json:"orderFallback"`
-	ExcludedMempool int               `json:"excludedMempool"`
-	RejectedPayload int               `json:"rejectedPayload"`
-	VersionEnum     string            `json:"versionEnum"`
+	PerPath       map[string]string `json:"perPath"` // complete|partial per path
+	OrderFallback bool              `json:"orderFallback"`
+	VersionEnum   string            `json:"versionEnum"`
 }
 
 // SemanticGate echoes the frozen dual-track switch (D10).
@@ -55,9 +53,9 @@ type SemanticGate struct {
 }
 
 // Freshness is the interface SLO the acceptance C6 reads: chain-head minus
-// evaluatedAtBlock must stay within MaxLagBlocks. Value per the v1.2 freeze
-// draft (§6/§7); final N is v1.1.1's to confirm — a constant, never
-// per-request configurable.
+// evaluatedAtBlock must stay within MaxLagBlocks (v1.2 froze N=5; a constant,
+// never per-request configurable; second-scale calibration is deployment-side
+// per R7).
 type Freshness struct {
 	MaxLagBlocks int64 `json:"maxLagBlocks"`
 }
@@ -93,15 +91,12 @@ func BuildReplayMeta(scope *RunScope, enum Enumeration, boundary Boundary) Repla
 		ReplayAlgoVersion:  ReplayAlgoVersion,
 		ProtocolVersion:    ProtocolVersion,
 		ProtocolPinID:      ProtocolPinID,
-		CanonID:            CanonID,
 		EvaluatedAtBlock:   boundary.Height,
 		EvaluatedAtBlockTs: boundary.BlockTs,
 		EventCountByPath:   map[string]int{},
 		Coverage: ReplayCoverage{
-			PerPath:         map[string]string{},
-			ExcludedMempool: scope.Mempool,
-			RejectedPayload: scope.Rejected,
-			VersionEnum:     "by_path",
+			PerPath:     map[string]string{},
+			VersionEnum: "by_path",
 		},
 		SemanticGate: SemanticGate{HAct: HAct, RulingPins: append([]string{}, SemanticGateRulingPins...)},
 		Freshness:    Freshness{MaxLagBlocks: 5},
@@ -183,17 +178,17 @@ func participantsOf(root string, res *ReplayResult, scope *RunScope) []Participa
 	return out
 }
 
-// TaskRow is one global task list row (freeze §6; participants[] per the
-// chair's ruling ① — same shape as the panorama participants).
+// TaskRow is one global task list row (freeze §6; v1.2 freezes
+// participants as a metaId list).
 type TaskRow struct {
-	RootPinID         string            `json:"rootPinId"`
-	Title             string            `json:"title"`
-	NodeProgress      NodeProgress      `json:"nodeProgress"`
-	Publisher         string            `json:"publisher"`
-	ParticipantsCount int               `json:"participantsCount"`
-	Participants      []ParticipantStat `json:"participants"`
-	TaskState         string            `json:"taskState"`
-	LastActivity      LastActivity      `json:"lastActivity"`
+	RootPinID         string       `json:"rootPinId"`
+	Title             string       `json:"title"`
+	NodeProgress      NodeProgress `json:"nodeProgress"`
+	Publisher         string       `json:"publisher"`
+	ParticipantsCount int          `json:"participantsCount"`
+	Participants      []string     `json:"participants"`
+	TaskState         string       `json:"taskState"`
+	LastActivity      LastActivity `json:"lastActivity"`
 }
 
 // NodeProgress counts tree-declared nodes only.
@@ -258,7 +253,7 @@ func BuildTaskIndex(results map[string]*ReplayResult, scope *RunScope, meta Repl
 			NodeProgress:      NodeProgress{Verified: countTreeNodes(res, StateVerified), Total: countTreeNodes(res, "")},
 			Publisher:         res.Publisher,
 			ParticipantsCount: len(parts),
-			Participants:      parts,
+			Participants:      participantIDs(parts),
 			TaskState:         taskStateOf(res.RootVerified),
 			LastActivity:      lastActivityOf(res),
 		}
@@ -283,6 +278,16 @@ func BuildTaskIndex(results map[string]*ReplayResult, scope *RunScope, meta Repl
 	})
 	idx.Leaderboard = buildLeaderboard(results)
 	return idx
+}
+
+// participantIDs flattens the participant aggregates to the frozen metaId
+// list (v1.2 rows.participants).
+func participantIDs(parts []ParticipantStat) []string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, p.MetaID)
+	}
+	return out
 }
 
 func countTreeNodes(res *ReplayResult, state string) int {
