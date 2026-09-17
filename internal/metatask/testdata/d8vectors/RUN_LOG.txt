@@ -1,0 +1,12 @@
+v10_below_h0_exempt        expect=reject  got=reject  reason=claim-rejected:t1:verified       PASS
+v11_at_h0_gated            expect=reject  got=reject  reason=claim-rejected:t1:claimed        PASS
+v1_open                    expect=allow   got=allow   reason=None                             PASS
+v2_claimed                 expect=reject  got=reject  reason=claim-rejected:t1:claimed        PASS
+v3_verified                expect=reject  got=reject  reason=claim-rejected:t1:verified       PASS
+v4_ttl_expired             expect=allow   got=allow   reason=None                             PASS
+v5_released                expect=allow   got=allow   reason=None                             PASS
+v6_missing_failreason      expect=reject  got=reject  reason=claim-rejected:t1:verified       PASS
+v7_with_failreason         expect=allow   got=allow   reason=None                             PASS
+v8_missing_semantic_check  expect=reject  got=reject  reason=claim-rejected:t1:claimed        PASS
+v9_with_semantic_check     expect=reject  got=reject  reason=claim-rejected:t1:verified       PASS
+SUMMARY: 11/11 PASS

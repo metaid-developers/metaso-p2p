@@ -325,6 +325,8 @@ func pinFromMap(m map[string]any) *Pin {
 			p.OutputValue = asInt(v, 0)
 		case "number":
 			p.Number = asInt(v, -1)
+		case "version":
+			p.Version = asInt(v, 0)
 		case "contentLength":
 			p.ContentLength = asInt(v, 0)
 		case "contentSummary":

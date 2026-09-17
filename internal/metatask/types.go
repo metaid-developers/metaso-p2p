@@ -60,6 +60,7 @@ type Pin struct {
 	OutputValue        int64  `json:"outputValue"`
 	Number             int64  `json:"number"`
 	ContentLength      int64  `json:"contentLength"`
+	Version            int64  `json:"version"`
 	ContentSummary     string `json:"contentSummary,omitempty"`
 
 	Payload        []byte `json:"-"`
