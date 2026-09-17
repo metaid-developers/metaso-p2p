@@ -540,6 +540,28 @@ func TestDuplicateVoteSuperseded(t *testing.T) {
 	}
 }
 
+func TestZeroDropIgnoredTarget(t *testing.T) {
+	// A1-6 zero-drop: a vote whose targetid names ANY in-scope submission
+	// event — effective or ignored — hangs on that node with counts=false;
+	// only a targetid matching no submission event at all stays unresolved.
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathSubmission, "sub2", 103, 0, tBase+2_500, aBot1, subPayload("claim1", "n1")), // not_earliest, ignored
+		tp(PathVerify, "vS2", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub2", "pass", withSC)),
+		tp(PathVerify, "vX", HAct+2, 0, tBase+4_000, aBot3, votePayload("subX", "pass", withSC)),
+	)...)
+	res := mustReplay(t, events, tNow)
+	n := nodeOf(t, res, "n1")
+	vs2 := findVote(n, "vS2")
+	if vs2 == nil || vs2.Counts || vs2.IgnoreReason != IgnoreTargetNotActive {
+		t.Fatalf("vote on an ignored submission must hang on the node: %+v", vs2)
+	}
+	if len(res.Unresolved) != 1 || res.Unresolved[0].EventPinID != "vX" {
+		t.Fatalf("only the truly-unknown target stays unresolved: %+v", res.Unresolved)
+	}
+}
+
 func TestReplayDeterministicUnderInputOrder(t *testing.T) {
 	pins := append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),

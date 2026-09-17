@@ -497,9 +497,20 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 	timeline = append(timeline, admitted[PathVerify]...) // verify filtered by target at processing time
 	sort.SliceStable(timeline, func(i, j int) bool { return replayLess(timeline[i], timeline[j]) })
 
-	// submission ownership: active (drives) and ever-attached (records only).
-	activeSubOwner := map[string]string{}   // submission pinId -> node (current cycle only)
-	attachedSubOwner := map[string]string{} // submission pinId -> node (any cycle)
+	// submission ownership maps. activeSubOwner drives the state machine
+	// (current cycle only). allSubOwner covers EVERY in-scope submission
+	// event — effective or not — so a verify vote can always find its node
+	// when its targetid names any real submission (A1-6 zero-drop: only a
+	// targetid matching no submission event at all stays unresolved).
+	activeSubOwner := map[string]string{} // submission pinId -> node (current cycle only)
+	allSubOwner := map[string]string{}    // submission pinId -> node (any submission event, effective or not)
+	for _, ev := range admitted[PathSubmission] {
+		if inScope(ev) {
+			if node := payloadString(ev.body, "node"); node != "" {
+				allSubOwner[ev.pin.ID] = node
+			}
+		}
+	}
 
 	ttlDeadline := func(claimTs int64) int64 {
 		if res.TTLHours <= 0 {
@@ -609,7 +620,6 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				s.sub, s.subTs = ev, ev.ts
 				s.state = StateSubmitted
 				activeSubOwner[ev.pin.ID] = node
-				attachedSubOwner[ev.pin.ID] = node
 				addEvent(s, ev, "counted", "", summary)
 				touch(s, ev)
 			}
@@ -628,7 +638,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			node, active := activeSubOwner[target]
 			if !active {
 				// Not the current cycle's active submission: recorded, never drives.
-				if owner, attached := attachedSubOwner[target]; attached {
+				// A1-6 zero-drop: any resolvable submission event (effective or
+				// ignored) hangs its votes on the node; the ignoreReason naming
+				// awaits the chair-confirmed closed enum.
+				if owner, known := allSubOwner[target]; known {
 					s := getState(owner)
 					vote.Counts = false
 					vote.IgnoreReason = IgnoreTargetNotActive
