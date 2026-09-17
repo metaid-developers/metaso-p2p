@@ -708,8 +708,33 @@ func (l *L2) handleEntryList(w http.ResponseWriter, r *http.Request) {
 // full bodies stay on the metaweb pin-read endpoints.
 const pinsExcerptMaxRunes = 280
 
-// pinsMaxSize caps the pins page size (1..200, default 50).
+// pinsMaxSize caps the pins page size (1..200, default 50); values outside
+// the range are REJECTED (40000), never silently clamped.
 const pinsMaxSize = 200
+
+// pinsCodeInvalidParam is the business error code of the pins envelope —
+// identical to the metaso-p2p aggregation convention (40000).
+const pinsCodeInvalidParam = 40000
+
+// writePinsSuccess / writePinsErr render the standard metaso-p2p aggregation
+// envelope on the L2's plain net/http stack: HTTP is always 200; success is
+// {"code":0,"data":…,"message":"","processingTime":N} and a business error is
+// {"code":…,"message":"…"} — matching /api/metaweb/* exactly. The other L2
+// endpoints predate this envelope and keep their bare shapes for their
+// existing consumers (live-audit R2 acceptance feedback, 2026-09-17).
+func writePinsSuccess(w http.ResponseWriter, start time.Time, data any) {
+	body := map[string]any{
+		"code":           0,
+		"data":           data,
+		"message":        "",
+		"processingTime": time.Since(start).Milliseconds(),
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func writePinsErr(w http.ResponseWriter, code int, message string) {
+	writeJSON(w, http.StatusOK, map[string]any{"code": code, "message": message})
+}
 
 // pinsItem is one row of GET /api/agentpedia/pins: a confirmed agentpedia pin
 // observed by the incremental sync, newest-first. Rows are RAW observations —
@@ -843,11 +868,12 @@ func capRunes(s string, n int) string {
 // sync has observed, path-filterable, with a truthful hasMore and a
 // key-pinned opaque cursor matching the R1 fresh-feed contract.
 func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
+	began := time.Now()
 	q := r.URL.Query()
 
 	pathFilter, ok := resolvePinsPathFilter(q.Get("path"))
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown agentpedia path"})
+		writePinsErr(w, pinsCodeInvalidParam, "unknown agentpedia path")
 		return
 	}
 
@@ -855,7 +881,7 @@ func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || v < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid since (unix seconds)"})
+			writePinsErr(w, pinsCodeInvalidParam, "invalid since (unix seconds)")
 			return
 		}
 		since = v
@@ -864,12 +890,9 @@ func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
 	size := 50
 	if raw := strings.TrimSpace(q.Get("size")); raw != "" {
 		v, err := strconv.Atoi(raw)
-		if err != nil || v < 1 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid size"})
+		if err != nil || v < 1 || v > pinsMaxSize {
+			writePinsErr(w, pinsCodeInvalidParam, "invalid size (1-200)")
 			return
-		}
-		if v > pinsMaxSize {
-			v = pinsMaxSize
 		}
 		size = v
 	}
@@ -878,7 +901,7 @@ func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
 	if rawCursor := strings.TrimSpace(q.Get("cursor")); rawCursor != "" {
 		decoded, ok := decodePinsCursor(rawCursor)
 		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid cursor"})
+			writePinsErr(w, pinsCodeInvalidParam, "invalid cursor")
 			return
 		}
 		cursorKey = decoded
@@ -932,7 +955,7 @@ func (l *L2) handlePins(w http.ResponseWriter, r *http.Request) {
 	if hasMore && len(page) > 0 {
 		nextCursor = encodePinsCursor(page[len(page)-1])
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writePinsSuccess(w, began, map[string]any{
 		"items": page, "hasMore": hasMore, "nextCursor": nextCursor,
 	})
 }
