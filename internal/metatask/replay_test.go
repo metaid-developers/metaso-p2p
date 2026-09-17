@@ -116,8 +116,8 @@ func TestVerifiedPath(t *testing.T) {
 	if n.MachineState != StateVerified || n.DisplayState != StateVerified {
 		t.Fatalf("state: %s/%s outcome=%s", n.MachineState, n.DisplayState, n.CycleOutcome)
 	}
-	if n.VerifiedAtBlockTs != tBase+4_000 {
-		t.Fatalf("verifiedAt: %d", n.VerifiedAtBlockTs)
+	if n.VerifiedAtBlockTs == nil || *n.VerifiedAtBlockTs != tBase+4_000 {
+		t.Fatalf("verifiedAt: %v", n.VerifiedAtBlockTs)
 	}
 	if !res.RootVerified {
 		t.Fatal("root should be verified")
@@ -130,8 +130,8 @@ func TestVerifiedPath(t *testing.T) {
 			t.Fatalf("vote %s should count (reason %s)", v.VerifyPinID, v.IgnoreReason)
 		}
 	}
-	if n.LastWriteEventPinID != "v2" {
-		t.Fatalf("lastWrite: %s", n.LastWriteEventPinID)
+	if n.LastWriteEventPinID == nil || *n.LastWriteEventPinID != "v2" {
+		t.Fatalf("lastWrite: %v", n.LastWriteEventPinID)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestFailRejectRequeue(t *testing.T) {
 	)...)
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
-	if n.MachineState != StateVerified || n.VerifiedAtBlockTs != tBase+7_000 {
+	if n.MachineState != StateVerified || n.VerifiedAtBlockTs == nil || *n.VerifiedAtBlockTs != tBase+7_000 {
 		t.Fatalf("state %s verifiedAt %d", n.MachineState, n.VerifiedAtBlockTs)
 	}
 	if n.CycleSeq != 2 {
@@ -486,7 +486,7 @@ func TestPostVerifyVotesDoNotDrive(t *testing.T) {
 	)...)
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
-	if n.MachineState != StateVerified || n.VerifiedAtBlockTs != tBase+4_000 {
+	if n.MachineState != StateVerified || n.VerifiedAtBlockTs == nil || *n.VerifiedAtBlockTs != tBase+4_000 {
 		t.Fatalf("post-verify votes must not drive: state=%s verifiedAt=%d", n.MachineState, n.VerifiedAtBlockTs)
 	}
 	for _, pid := range []string{"vF", "vP"} {

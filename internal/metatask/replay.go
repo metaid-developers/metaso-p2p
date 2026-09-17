@@ -109,13 +109,16 @@ func gateInvalid(b map[string]any, height int64) string {
 	return ""
 }
 
-// treeNodeInfo is the resolved per-node tree metadata.
+// treeNodeInfo is the resolved per-node tree metadata. parent/specid keep
+// their null-ness from the tree event (null parent = root; null specid =
+// inherit the task-root specid).
 type treeNodeInfo struct {
-	parent string
+	parent *string
 	title  string
 	kind   string
-	specid string
+	specid *string
 	deps   []string
+	params map[string]any
 }
 
 // replayEvent is one admitted event: confirmed, payload-accepted, decoded.
@@ -149,18 +152,22 @@ type CurrentClaim struct {
 
 // ActiveSubmission is the freeze §5 node submission view.
 type ActiveSubmission struct {
-	SubmissionPinID  string   `json:"submissionPinId"`
-	Submitter        string   `json:"submitter"`
-	BlockHeight      int64    `json:"blockHeight"`
-	BlockTs          int64    `json:"blockTs"`
-	Hash             string   `json:"hash"`
-	ContentType      string   `json:"contentType"`
-	Attachment       string   `json:"attachment"`
-	ChildIDs         []string `json:"childids"`
-	WindowDeadlineTs int64    `json:"windowDeadlineTs"` // 0 when policy has no window
+	SubmissionPinID string         `json:"submissionPinId"`
+	Submitter       string         `json:"submitter"`
+	BlockHeight     int64          `json:"blockHeight"`
+	BlockTs         int64          `json:"blockTs"`
+	Hash            string         `json:"hash"`
+	ContentType     string         `json:"contentType"`
+	Attachment      string         `json:"attachment"`
+	ChildIDs        []string       `json:"childids"`
+	Result          map[string]any `json:"result"`
+	// WindowDeadlineTs drives the §4.3 expiry but is not a frozen §5 key.
+	WindowDeadlineTs int64 `json:"-"`
 }
 
 // VoteRecord is one verify ballot, counted or not (freeze: votes[] 含不计票票).
+// BlockTs drives lastActivity internally; the frozen §5 vote keys end at
+// blockHeight, so it stays out of the body.
 type VoteRecord struct {
 	VerifyPinID      string `json:"verifyPinId"`
 	Voter            string `json:"voter"`
@@ -170,7 +177,7 @@ type VoteRecord struct {
 	Counts           bool   `json:"counts"`
 	IgnoreReason     string `json:"ignoreReason,omitempty"`
 	BlockHeight      int64  `json:"blockHeight"`
-	BlockTs          int64  `json:"blockTs"`
+	BlockTs          int64  `json:"-"`
 }
 
 // EventRecord is the freeze §5 node-detail event row (每条可回源).
@@ -187,27 +194,34 @@ type EventRecord struct {
 	IgnoreReason string `json:"ignoreReason,omitempty"`
 }
 
-// NodeReplay is one node's replay conclusion.
+// NodeReplay is one node's replay conclusion. Its JSON keys are the frozen
+// §5 nodes[i] set: id/parent/title/kind/params/deps/specid from the tree
+// event 原样 (parent/specid keep null-ness), plus the replay view keys.
+// Empty lastWrite/lastActivity/verifiedAt serialize as null (D7 needs one
+// zero-value convention — the independent replayer's null, not 0/"").
 type NodeReplay struct {
-	NodeID              string            `json:"nodeId"`
-	InTree              bool              `json:"inTree"`
-	Parent              string            `json:"parent,omitempty"`
-	Title               string            `json:"title,omitempty"`
-	Kind                string            `json:"kind,omitempty"`
-	SpecID              string            `json:"specId,omitempty"`
-	Deps                []string          `json:"deps,omitempty"`
+	ID                  string            `json:"id"`
+	Parent              *string           `json:"parent"`
+	Title               string            `json:"title"`
+	Kind                string            `json:"kind"`
+	Params              map[string]any    `json:"params"`
+	SpecID              *string           `json:"specid"`
+	Deps                []string          `json:"deps"`
 	MachineState        string            `json:"machineState"`
 	DisplayState        string            `json:"displayState"`
 	CycleOutcome        string            `json:"cycleOutcome"`
 	CycleSeq            int               `json:"cycleSeq"`
 	CurrentClaim        *CurrentClaim     `json:"currentClaim"`
 	ActiveSubmission    *ActiveSubmission `json:"activeSubmission"`
-	VerifiedAtBlockTs   int64             `json:"verifiedAtBlockTs"`
+	VerifiedAtBlockTs   *int64            `json:"verifiedAtBlockTs"`
 	Votes               []VoteRecord      `json:"votes,omitempty"`
-	LastWriteEventPinID string            `json:"lastWriteEventPinId"`
-	LastActivityTs      int64             `json:"lastActivityTs"`
+	LastWriteEventPinID *string           `json:"lastWriteEventPinId"`
+	LastActivityTs      *int64            `json:"lastActivityTs"`
 	Events              []EventRecord     `json:"events,omitempty"`
-	AggNote             string            `json:"aggNote,omitempty"`
+
+	// Internal accounting — not part of the frozen §5 key set.
+	InTree  bool   `json:"-"`
+	AggNote string `json:"-"`
 }
 
 type nodeState struct {
@@ -247,22 +261,26 @@ func (s *nodeState) subAuthor() string {
 
 // ReplayResult is the conclusion of F(E,B) for one task root.
 type ReplayResult struct {
-	RootPinID    string                 `json:"rootPinId"`
-	TaskTitle    string                 `json:"taskTitle"`
-	Publisher    string                 `json:"publisher"`
-	Policy       map[string]any         `json:"policy,omitempty"`
-	Quorum       int                    `json:"quorum"`
-	TTLHours     int                    `json:"claimTtlHours"`
-	WindowHours  int                    `json:"verifyWindowHours"`
-	TreeID       string                 `json:"treeId,omitempty"`
-	SpecID       string                 `json:"specId,omitempty"`
-	TreeResolved bool                   `json:"treeResolved"`
-	SpecResolved bool                   `json:"specResolved"`
-	RootVerified bool                   `json:"rootVerified"`
-	Boundary     Boundary               `json:"boundary"`
-	Nodes        map[string]*NodeReplay `json:"nodes"`
-	NodeOrder    []string               `json:"nodeOrder"`
-	Unresolved   []EventRecord          `json:"unresolved,omitempty"`
+	RootPinID    string         `json:"rootPinId"`
+	TaskTitle    string         `json:"taskTitle"`
+	Publisher    string         `json:"publisher"`
+	Policy       map[string]any `json:"policy,omitempty"`
+	Quorum       int            `json:"quorum"`
+	TTLHours     int            `json:"claimTtlHours"`
+	WindowHours  int            `json:"verifyWindowHours"`
+	TreeID       string         `json:"treeId,omitempty"`
+	SpecID       string         `json:"specId,omitempty"`
+	TreeResolved bool           `json:"treeResolved"`
+	SpecResolved bool           `json:"specResolved"`
+	RootVerified bool           `json:"rootVerified"`
+	Boundary     Boundary       `json:"boundary"`
+	// §7 echo: every replay response carries the evaluated boundary at the
+	// top level as well (the HTTP layer also echoes it in headers).
+	EvaluatedAtBlock   int64                  `json:"evaluatedAtBlock"`
+	EvaluatedAtBlockTs int64                  `json:"evaluatedAtBlockTs"`
+	Nodes              map[string]*NodeReplay `json:"nodes"`
+	NodeOrder          []string               `json:"nodeOrder"`
+	Unresolved         []EventRecord          `json:"unresolved,omitempty"`
 	// Scope accounting (transparency; additive fields).
 	EventCount       int            `json:"eventCount"`
 	EventCountByPath map[string]int `json:"eventCountByPath"`
@@ -302,17 +320,48 @@ func admitEvents(events map[string][]*Pin, boundary Boundary) (admitted map[stri
 	return admitted, mempool, rejected
 }
 
+// DeriveBoundary picks the evaluation boundary for an enumerated event set:
+// an explicit to-block when given, else the newest confirmed event height
+// with that height's newest block timestamp (the list API carries a per-pin
+// block time; an exact chain-RPC block timestamp is a server-side refinement).
+func DeriveBoundary(events map[string][]*Pin, toBlock int64) Boundary {
+	height := int64(-1)
+	ts := int64(0)
+	for _, path := range EventPaths {
+		for _, p := range events[path] {
+			if p.GenesisHeight < 0 {
+				continue
+			}
+			if toBlock > 0 && p.GenesisHeight > toBlock {
+				continue
+			}
+			switch {
+			case p.GenesisHeight > height:
+				height, ts = p.GenesisHeight, p.Timestamp
+			case p.GenesisHeight == height && p.Timestamp > ts:
+				ts = p.Timestamp
+			}
+		}
+	}
+	if height < 0 {
+		height = 0
+	}
+	return Boundary{Height: height, BlockTs: ts}
+}
+
 // Replay computes F(E,B) for one task root. events maps each protocol path to
 // its enumerated pins (raw, unfiltered); the function applies the freeze
 // collection rules itself: mempool excluded, payload-accepted only, taskid
 // scope, to-boundary filter.
 func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayResult, error) {
 	res := &ReplayResult{
-		RootPinID:        root,
-		Boundary:         boundary,
-		Nodes:            map[string]*NodeReplay{},
-		EventCountByPath: map[string]int{},
-		Policy:           map[string]any{},
+		RootPinID:          root,
+		Boundary:           boundary,
+		EvaluatedAtBlock:   boundary.Height,
+		EvaluatedAtBlockTs: boundary.BlockTs,
+		Nodes:              map[string]*NodeReplay{},
+		EventCountByPath:   map[string]int{},
+		Policy:             map[string]any{},
 	}
 	// ---- admit events: confirmed, in-boundary, payload-accepted ----
 	admitted, mempool, rejected := admitEvents(events, boundary)
@@ -371,11 +420,27 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 						continue
 					}
 					tm := tree[id]
-					tm.parent = payloadString(obj, "parent")
+					if v, ok := obj["parent"]; ok && v != nil {
+						if ps, ok2 := v.(string); ok2 {
+							tm.parent = &ps
+						}
+					}
 					tm.title = payloadString(obj, "title")
 					tm.kind = payloadString(obj, "kind")
-					tm.specid = payloadString(obj, "specid")
+					if v, ok := obj["specid"]; ok && v != nil {
+						if ss, ok2 := v.(string); ok2 {
+							tm.specid = &ss
+						}
+					}
 					tm.deps = payloadStrings(obj, "deps")
+					if tm.deps == nil {
+						tm.deps = []string{}
+					}
+					if pv, ok := obj["params"].(map[string]any); ok {
+						tm.params = pv
+					} else {
+						tm.params = map[string]any{}
+					}
 					tree[id] = tm
 				}
 				res.TreeResolved = true
@@ -697,18 +762,26 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			machine = StateSubmitted
 		}
 		nr := &NodeReplay{
-			NodeID: id, InTree: s.inTree,
-			Parent: tree[id].parent, Title: tree[id].title, Kind: tree[id].kind,
-			SpecID: tree[id].specid, Deps: tree[id].deps,
+			ID: id, Parent: tree[id].parent, Title: tree[id].title, Kind: tree[id].kind,
+			Params: tree[id].params, SpecID: tree[id].specid, Deps: tree[id].deps,
 			MachineState: machine,
 			DisplayState: displayStateOf(machine, s.outcome),
 			CycleOutcome: s.outcome, CycleSeq: s.cycleSeq,
-			VerifiedAtBlockTs:   s.verifiedAt,
-			Votes:               s.votes,
-			LastWriteEventPinID: s.lastWrite,
-			LastActivityTs:      s.lastActTs,
-			Events:              s.events,
-			AggNote:             s.aggNote,
+			Votes:  s.votes,
+			Events: s.events,
+			InTree: s.inTree, AggNote: s.aggNote,
+		}
+		if s.verifiedAt > 0 {
+			vts := s.verifiedAt
+			nr.VerifiedAtBlockTs = &vts
+		}
+		if s.lastWrite != "" {
+			lw := s.lastWrite
+			nr.LastWriteEventPinID = &lw
+		}
+		if s.lastActTs > 0 {
+			lts := s.lastActTs
+			nr.LastActivityTs = &lts
 		}
 		if _, isTree := tree[id]; !isTree {
 			nr.AggNote = joinNote(nr.AggNote, "node not declared in tree event")
@@ -721,7 +794,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			}
 		}
 		if s.sub != nil {
-			nr.ActiveSubmission = &ActiveSubmission{
+			as := &ActiveSubmission{
 				SubmissionPinID: s.sub.pin.ID, Submitter: s.sub.pin.GlobalMetaID,
 				BlockHeight: s.sub.pin.GenesisHeight, BlockTs: s.subTs,
 				Hash:             payloadString(s.sub.body, "hash"),
@@ -730,6 +803,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				ChildIDs:         payloadStrings(s.sub.body, "childids"),
 				WindowDeadlineTs: windowDeadline(s.subTs),
 			}
+			if r, ok := s.sub.body["result"].(map[string]any); ok {
+				as.Result = r
+			}
+			nr.ActiveSubmission = as
 		}
 		res.Nodes[id] = nr
 	}
@@ -766,7 +843,7 @@ func displayStateOf(state, outcome string) string {
 func treeChildren(tree map[string]treeNodeInfo, id string) []string {
 	var out []string
 	for nid, tm := range tree {
-		if tm.parent == id {
+		if tm.parent != nil && *tm.parent == id {
 			out = append(out, nid)
 		}
 	}
@@ -777,7 +854,7 @@ func treeChildren(tree map[string]treeNodeInfo, id string) []string {
 func treeRootOf(tree map[string]treeNodeInfo) string {
 	var roots []string
 	for id, tm := range tree {
-		if tm.parent == "" {
+		if tm.parent == nil {
 			roots = append(roots, id)
 		}
 	}

@@ -5,6 +5,12 @@
 //	go run ./cmd/metaso-p2p-metatask-indexer --snapshot <frozen-dir> --out data/metatask-projections
 //	go run ./cmd/metaso-p2p-metatask-indexer --snapshot <frozen-dir> --root <pinId>
 //
+// Serve mode exposes the four frozen §7 endpoints over HTTP with periodic
+// collection refreshes:
+//
+//	go run ./cmd/metaso-p2p-metatask-indexer --manapi https://manapi.metaid.io --serve --listen 127.0.0.1:8088 \
+//	  --refresh-seconds 30 --chain-rpc-host <host:port> --chain-rpc-user ... --chain-rpc-pass ...
+//
 // Outputs (--out): taskIndex.json, panorama/<root>.json, replay/<root>.json
 // (D7 canonical bytes — the fourth-party对数 dump), nodes/<root>/<node>.json.
 // Without --out the task index goes to stdout.
@@ -21,12 +27,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/metaid-developers/metaso-p2p/internal/chain/mvc"
+	"github.com/metaid-developers/metaso-p2p/internal/config"
 	"github.com/metaid-developers/metaso-p2p/internal/metatask"
 )
+
+// version is stamped at release build time (-X main.version=${VERSION}) and
+// reported in the X-Metatask-Indexer-Build response header only — never in a
+// projection body (D7/red line: deployment stamps stay out of contract bodies).
+var version = "dev"
 
 func main() {
 	var (
@@ -37,10 +52,20 @@ func main() {
 		root            = flag.String("root", "", "restrict to one task root pinId (default: all)")
 		out             = flag.String("out", "", "output directory for projection JSON files (default: task index to stdout)")
 		allowIncomplete = flag.Bool("allow-incomplete", false, "proceed when a path walk did not reach an explicit empty page (coverage flags partial)")
+		serve           = flag.Bool("serve", false, "run as an HTTP service exposing the four §7 endpoints")
+		listen          = flag.String("listen", "127.0.0.1:8088", "listen address in --serve mode")
+		refreshSeconds  = flag.Int("refresh-seconds", 30, "collection refresh cadence in --serve mode (freshness SLO: keep head−evaluated ≤ maxLagBlocks)")
+		chainRPCHost    = flag.String("chain-rpc-host", "", "MVC RPC host for the X-Metatask-Chain-Head freshness header (optional; without it the header falls back to the evaluated block)")
+		chainRPCUser    = flag.String("chain-rpc-user", "", "MVC RPC user")
+		chainRPCPass    = flag.String("chain-rpc-pass", "", "MVC RPC password")
 	)
 	flag.Parse()
 	if *snapshot == "" && *manapiURL == "" {
 		exitJSON(1, map[string]any{"error": "one of --snapshot / --manapi is required"})
+	}
+	if *serve {
+		serveMode(*manapiURL, *snapshot, *size, *listen, *refreshSeconds, *chainRPCHost, *chainRPCUser, *chainRPCPass)
+		return
 	}
 
 	ctx := context.Background()
@@ -66,7 +91,7 @@ func main() {
 		exitJSON(3, map[string]any{"error": "enumeration incomplete; refusing to emit partial projections", "unresolved": enum.Unresolved})
 	}
 
-	boundary := deriveBoundary(events, *toBlock)
+	boundary := metatask.DeriveBoundary(events, *toBlock)
 	scope := metatask.ScopeEvents(events, boundary)
 	roots := scope.TaskRoots()
 	if *root != "" {
@@ -116,33 +141,45 @@ func main() {
 	}
 }
 
-// deriveBoundary picks B: an explicit --to-block, or the newest confirmed
-// event height with that height's newest block timestamp (the list API
-// carries a per-pin block time; an exact chain-RPC block timestamp is a
-// server-mode concern beyond this skeleton).
-func deriveBoundary(events map[string][]*metatask.Pin, toBlock int64) metatask.Boundary {
-	height := int64(-1)
-	ts := int64(0)
-	for _, path := range metatask.EventPaths {
-		for _, p := range events[path] {
-			if p.GenesisHeight < 0 {
-				continue
-			}
-			if toBlock > 0 && p.GenesisHeight > toBlock {
-				continue
-			}
-			switch {
-			case p.GenesisHeight > height:
-				height, ts = p.GenesisHeight, p.Timestamp
-			case p.GenesisHeight == height && p.Timestamp > ts:
-				ts = p.Timestamp
+// serveMode runs the HTTP service: one initial refresh, then periodic
+// re-collection so the freshness SLO (chain head − evaluated block ≤
+// maxLagBlocks) holds between cycles. Without --chain-rpc-host the
+// chain-head header falls back to the evaluated block and the process says
+// so loudly — C6 must be judged against a real chain source.
+func serveMode(manapiURL, snapshotDir string, size int, listen string, refreshSeconds int, chainHost, chainUser, chainPass string) {
+	ctx := context.Background()
+	srv := &metatask.Server{BaseURL: manapiURL, Size: size, Version: version}
+	if snapshotDir != "" {
+		snap := metatask.NewSnapshotLister(snapshotDir)
+		srv.Lister, srv.Payloads = snap, snap
+	}
+	if chainHost != "" {
+		chain := mvc.NewChain(config.ChainRPCConfig{
+			RPCHost: chainHost, RPCUser: chainUser, RPCPass: chainPass, RPCHTTPPostMode: true,
+		})
+		if err := chain.Init(); err != nil {
+			exitJSON(1, map[string]any{"error": err.Error()})
+		}
+		srv.ChainHead = chain.GetBestHeight
+	} else {
+		fmt.Println("[metatask-indexer] WARNING: no --chain-rpc-host; X-Metatask-Chain-Head falls back to the evaluated block")
+	}
+	if err := srv.Refresh(ctx); err != nil {
+		exitJSON(1, map[string]any{"error": "initial refresh: " + err.Error()})
+	}
+	go func() {
+		t := time.NewTicker(time.Duration(refreshSeconds) * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if err := srv.Refresh(ctx); err != nil {
+				fmt.Println("[metatask-indexer] refresh error:", err)
 			}
 		}
+	}()
+	fmt.Printf("[metatask-indexer] serving on %s (version %s, refresh %ds)\n", listen, version, refreshSeconds)
+	if err := http.ListenAndServe(listen, srv.Handler()); err != nil {
+		exitJSON(1, map[string]any{"error": err.Error()})
 	}
-	if height < 0 {
-		height = 0
-	}
-	return metatask.Boundary{Height: height, BlockTs: ts}
 }
 
 func writeProjections(out string, scope *metatask.RunScope, meta metatask.ReplayMeta, index metatask.TaskIndex, roots []string, results map[string]*metatask.ReplayResult) error {

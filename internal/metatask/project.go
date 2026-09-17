@@ -161,7 +161,7 @@ func participantsOf(root string, res *ReplayResult, scope *RunScope) []Participa
 	}
 	for _, id := range res.NodeOrder {
 		n := res.Nodes[id]
-		if n.ActiveSubmission != nil && n.VerifiedAtBlockTs > 0 {
+		if n.ActiveSubmission != nil && n.VerifiedAtBlockTs != nil {
 			get(n.ActiveSubmission.Submitter).VerifiedContrib++
 		}
 		for i := range n.Votes {
@@ -350,7 +350,7 @@ func buildLeaderboard(results map[string]*ReplayResult) []LeaderboardRow {
 		for _, id := range res.NodeOrder {
 			n := res.Nodes[id]
 			verified := n.MachineState == StateVerified
-			if n.ActiveSubmission != nil && n.VerifiedAtBlockTs > 0 {
+			if n.ActiveSubmission != nil && n.VerifiedAtBlockTs != nil {
 				get(n.ActiveSubmission.Submitter).Contribution++
 			}
 			for i := range n.Votes {
@@ -413,8 +413,8 @@ type Panorama struct {
 	Brief        string            `json:"brief,omitempty"`
 	Publisher    string            `json:"publisher"`
 	Tags         []string          `json:"tags,omitempty"`
-	TreeID       string            `json:"treeId,omitempty"`
-	SpecID       string            `json:"specId,omitempty"`
+	TreeID       string            `json:"treeid,omitempty"`
+	SpecID       string            `json:"specid,omitempty"`
 	Spec         *SpecView         `json:"spec"`
 	Policy       map[string]any    `json:"policy"`
 	Nodes        []NodeReplay      `json:"nodes"`

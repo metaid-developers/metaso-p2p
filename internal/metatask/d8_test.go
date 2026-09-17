@@ -83,7 +83,7 @@ func guardView(n *NodeReplay) (verdict, reason string) {
 	if state == StateSubmitted {
 		state = StateClaimed // guard_state collapses submitted to claimed
 	}
-	return "reject", fmt.Sprintf("claim-rejected:%s:%s", n.NodeID, state)
+	return "reject", fmt.Sprintf("claim-rejected:%s:%s", n.ID, state)
 }
 
 // loadFixture reads one skill fixture directory: <pool>.json files holding

@@ -69,15 +69,15 @@ func TestBuildTaskIndexRowOrderAndParticipants(t *testing.T) {
 	old := &ReplayResult{
 		RootPinID: "rootOld", TaskTitle: "old", Publisher: aRoot, RootVerified: true,
 		Nodes: map[string]*NodeReplay{
-			"n1": {NodeID: "n1", InTree: true, MachineState: StateVerified, DisplayState: StateVerified,
-				ActiveSubmission: &ActiveSubmission{SubmissionPinID: "s", Submitter: aBot1}, VerifiedAtBlockTs: 100},
+			"n1": {ID: "n1", InTree: true, MachineState: StateVerified, DisplayState: StateVerified,
+				ActiveSubmission: &ActiveSubmission{SubmissionPinID: "s", Submitter: aBot1}, VerifiedAtBlockTs: &[]int64{100}[0]},
 		},
 		NodeOrder: []string{"n1"},
 	}
 	newer := &ReplayResult{
 		RootPinID: "rootNew", TaskTitle: "new", Publisher: aRoot,
 		Nodes: map[string]*NodeReplay{
-			"n1": {NodeID: "n1", InTree: true, MachineState: StateSubmitted, DisplayState: StateSubmitted,
+			"n1": {ID: "n1", InTree: true, MachineState: StateSubmitted, DisplayState: StateSubmitted,
 				ActiveSubmission: &ActiveSubmission{SubmissionPinID: "s2", Submitter: aBot2},
 				Votes:            []VoteRecord{{VerifyPinID: "vv", Voter: aBot3, Verdict: "pass", Counts: true, BlockTs: 900}}},
 		},
@@ -158,7 +158,7 @@ func TestBuildPanoramaProgressAndSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ne.Node.NodeID != "n1" || len(ne.Events) < 2 {
+	if ne.Node.ID != "n1" || len(ne.Events) < 2 {
 		t.Fatalf("node events: %+v", ne)
 	}
 }
