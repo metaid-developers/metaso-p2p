@@ -122,7 +122,7 @@ func ExtractPublished(protocolPath string, payload map[string]any, payloadText s
 	default:
 		// Unknown paths (pin-read remote fallback): best-effort generic fields.
 		out.Title = firstNonEmpty(stringField(payload, "title"), stringField(payload, "name"))
-		out.Summary = firstNonEmpty(stringField(payload, "intro"), stringField(payload, "description"))
+		out.Summary = firstNonEmpty(stringField(payload, "summary"), stringField(payload, "intro"), stringField(payload, "description"))
 		out.Tags = stringSliceField(payload, "tags")
 		out.ContentExcerpt = CapRunes(firstNonEmpty(stringField(payload, "content"), out.Summary), ContentMaxRunes)
 		if out.ContentExcerpt == "" {
@@ -155,21 +155,26 @@ func ExtractSkillService(in SkillServiceFields) Extracted {
 
 // TextForProtocol unwraps the protocol's LLM-ready body field for the
 // pin-read endpoint (markdown passthrough, no stripping). Returns "" when the
-// payload carries no known content field; the caller renders that as null.
+// payload carries no non-empty content field; the caller renders that as null.
 func TextForProtocol(protocolKey string, payload map[string]any, payloadText string) string {
 	if payload == nil {
 		// Plain text/markdown bodies pass through as-is.
 		return strings.TrimSpace(payloadText)
 	}
 	switch protocolKey {
-	case KeySimpleNote, KeySimpleBuzz, KeyMetaProtocol, KeySimpleQuestion, KeySimpleAnswer:
-		return stringField(payload, "content")
 	case KeyMetaBotSkill, KeySkillService:
 		return stringField(payload, "description")
 	case KeyMetaApp:
 		return stringField(payload, "intro")
 	default:
-		return ""
+		// The known content protocols (simplenote/simplebuzz/metaprotocol/
+		// simplequestion/simpleanswer) plus the generic JSON-protocol
+		// fallback (surf audit R5.1, 2026-09-17): any payload object with a
+		// non-empty string `content` — paycomment, agentpedia rev, future
+		// JSON protocols — unwraps it as the text body. An empty extraction
+		// still renders as null text (truncated/totalLength null) with
+		// `payload` as the documented continuation path.
+		return stringField(payload, "content")
 	}
 }
 
