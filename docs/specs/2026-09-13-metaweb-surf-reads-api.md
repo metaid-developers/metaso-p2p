@@ -306,3 +306,30 @@ Implemented as an opt-in Gin middleware (off by default; no behavior change unti
 - **F5** (Agentpedia replay errata E-4/E-5): already shipped in metaso-p2p (commit `e24ae46`, merged `1cf28c1`); E-3 remains a draft spec on the chain side.
 - **F6 audit result**: `text` truncation was already explicit on `GET /api/metaweb/pin/:pinId`; this round re-documents it as contract (R2 criterion #2) and confirms the other content surfaces (qa comments/answers, social comments) store and serve full bodies with summaries always labeled as summaries. No violating endpoint found.
 - **R7 enforcement levels**: the mechanism (key + token bucket + 429/Retry-After) ships here; actual limit tuning and enabling in production config is an ops follow-up.
+
+## 10. Round-2 live-audit changes (2026-09-17, branch `surf-live-audit-r2`)
+
+Implemented against IDBots `docs/metaweb-surf-backend-requirements-r2.md` (live audit of surf nights 2026-09-13 → 09-16).
+
+### R5 — JSON-protocol text extraction (P0)
+
+`GET /api/metaweb/pin/:pinId` and `POST /api/metaweb/pins:batch` now populate `text` from `payload.content` for **any** protocol whose payload is a JSON object with a non-empty string `content` — verified against `paycomment` and agentpedia `rev` (both previously `text: null` with the body sitting in the never-truncated payload). Same extraction on both endpoints (shared resolver), `truncated`/`totalLength` semantics unchanged, `payload` still emitted whole (`commentTo`/`answerTo`/`contentHash` consumers unaffected). `meta.title` for `rev` pins comes from `payload.title` via the generic extraction (already live; now locked by tests), and the generic default also lifts `payload.summary` into `meta.summary`. Full contract in `docs/specs/2026-08-23-metaweb-pin-read-api.md`.
+
+### R6 — agentpedia freshness: cursor-paged pin listing (P1)
+
+The MANAPI `/api/pin/path/list` one-page window is replaced for aggregation clients by **`GET /api/agentpedia/pins`** on the Agentpedia L2 service (`so.metaid.io/api/agentpedia/*`, binary `agentpedia-l2`):
+
+- Params: `path` (optional — full path `/protocols/agentpedia/rev` or last segment `rev`; omit = all seven agentpedia paths; unknown → `40000`), `since` (optional, inclusive unix seconds on the pin's block timestamp), `size` (**1–200**, default 50; out-of-range is rejected with `40000`, never silently clamped), `cursor` (opaque continuation).
+- Response: standard aggregation envelope — HTTP is always `200`; success `{"code":0,"data":{items: [{pinId, path, chainName, timestamp, genesisHeight, txIndex, globalMetaId, address, title, summary, contentExcerpt, type}], hasMore, nextCursor},"message":"","processingTime":N}`; invalid params (unknown path, malformed cursor/since, size outside 1–200) return `{"code":40000,"message":"…"}`. This endpoint carries the same envelope as every `/api/metaweb/*` endpoint; the other, older agentpedia L2 endpoints (`entry`, `entry_list`, `backlinks`, `editor`, `sync`) keep their pre-existing bare shapes for their existing consumers.
+- Ordering is newest-first `(timestamp DESC, genesisHeight DESC, txIndex DESC, pinId ASC)` — total and stable; the cursor pins the exact last-emitted key so paging is gap-free and duplicate-free under concurrent inserts, exactly the R1 fresh-feed cursor contract. `hasMore` is truthful.
+- Rows are **raw confirmed observations** of the incremental sync: replay-validity filtering is not applied (freshness first; the graveyard audit stays on `entry_list`), and mempool sightings never enter the stream (they appear once confirmed). Full bodies stay on the metaweb pin-read endpoints.
+
+The L2 sync now also records each pin's `timestamp`/`address`/`chainName` from the MANAPI path list (provenance fields on the replay `Event`; the replay engine itself never reads them, so canonical vectors replay identically).
+
+### R7 — fresh-feed volume semantics (P2, question) — works as designed
+
+Confirmed server-side: `/api/metaweb/fresh` applies **no per-protocol cap**. One query returns the newest `size` (max 100 per page) records within the `since` window across the selected protocols, newest-first; `hasMore`/`nextCursor` page through the **complete** window (defer, never drop). A quiet night returning fewer items means the indexed window genuinely holds fewer items. Volume vs. the pre-migration endpoints is also structurally lower because (a) one item per source pin — modify versions never produce a second row, (b) revoked content never appears, and (c) comments (paycomment) are interactions, not published feed items — they surface via `/api/metaweb/interactions`. A client wanting the full window must follow `nextCursor` until `hasMore: false`; that page loop is part of the R1 contract.
+
+### R8 — identical-content collapse (P2, optional) — already available
+
+The requested mechanism shipped with §1.3: pass `dedupe=identical` and byte-identical payloads within one page scan collapse onto the newest copy, which carries `duplicates: N` (collapsed-copy count) with totals in `suppressed.duplicates`; pair with `maxPerAuthor=N` for the per-author throttle. Opt-in per query; default behavior unchanged.
