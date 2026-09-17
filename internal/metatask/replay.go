@@ -76,9 +76,9 @@ const (
 	IgnoreNodeNotOpen        = "node_not_open"
 	IgnoreTargetNotActive    = "target_not_active"
 	IgnoreUnresolvedTarget   = "unresolved_target"
-	IgnoreDuplicateVote      = "duplicate_vote"
+	IgnoreDuplicateVote      = "duplicate_vote_superseded"
 	IgnoreVoterIsSubmitter   = "voter_is_submitter"
-	IgnoreVoterIsRootAuthor  = "voter_is_root_author"
+	IgnoreVoterIsTaskAuthor  = "voter_is_task_author"
 	IgnoreEmptyMethod        = "empty_method"
 	IgnoreAfterWindowClose   = "after_window_close"
 	IgnoreVerdictInvalid     = "verdict_invalid"
@@ -173,6 +173,7 @@ type VoteRecord struct {
 	VerifyPinID      string `json:"verifyPinId"`
 	Voter            string `json:"voter"`
 	Verdict          string `json:"verdict"`
+	HasEvidence      bool   `json:"hasEvidence"`
 	HasFailreason    bool   `json:"hasFailreason"`
 	HasSemanticCheck bool   `json:"hasSemanticCheck"`
 	Counts           bool   `json:"counts"`
@@ -502,9 +503,15 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 	// event — effective or not — so a verify vote can always find its node
 	// when its targetid names any real submission (A1-6 zero-drop: only a
 	// targetid matching no submission event at all stays unresolved).
+	// globalSubTask maps EVERY admitted submission (any task) to its task so
+	// a vote belonging to another task's submission is skipped here instead
+	// of polluting this root's unresolved set (keeps per-root unresolved
+	// sets disjoint for the run-level unresolvedCount sum).
 	activeSubOwner := map[string]string{} // submission pinId -> node (current cycle only)
-	allSubOwner := map[string]string{}    // submission pinId -> node (any submission event, effective or not)
+	allSubOwner := map[string]string{}    // submission pinId -> node (any in-scope submission event, effective or not)
+	globalSubTask := map[string]string{}  // submission pinId -> task root (any admitted submission event)
 	for _, ev := range admitted[PathSubmission] {
+		globalSubTask[ev.pin.ID] = payloadString(ev.body, "taskid")
 		if inScope(ev) {
 			if node := payloadString(ev.body, "node"); node != "" {
 				allSubOwner[ev.pin.ID] = node
@@ -630,6 +637,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				VerifyPinID:      ev.pin.ID,
 				Voter:            ev.pin.GlobalMetaID,
 				Verdict:          payloadString(ev.body, "verdict"),
+				HasEvidence:      payloadPresent(ev.body, "evidence"),
 				HasFailreason:    payloadPresent(ev.body, "failreason"),
 				HasSemanticCheck: payloadPresent(ev.body, "semantic_check"),
 				BlockHeight:      ev.pin.GenesisHeight,
@@ -640,7 +648,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				// Not the current cycle's active submission: recorded, never drives.
 				// A1-6 zero-drop: any resolvable submission event (effective or
 				// ignored) hangs its votes on the node; the ignoreReason naming
-				// awaits the chair-confirmed closed enum.
+				// awaits the chair-confirmed closed enum. A vote whose target
+				// belongs to ANOTHER task's submission is skipped here — that
+				// task's own replay hangs it — keeping per-root unresolved
+				// sets disjoint for the run-level unresolvedCount.
 				if owner, known := allSubOwner[target]; known {
 					s := getState(owner)
 					vote.Counts = false
@@ -648,6 +659,8 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 					s.votes = append(s.votes, vote)
 					addEvent(s, ev, "ignored", IgnoreTargetNotActive, "verify target="+target)
 					touch(s, ev)
+				} else if gt, gok := globalSubTask[target]; gok && gt != root {
+					// other task's submission — handled by that root's replay
 				} else {
 					res.Unresolved = append(res.Unresolved, EventRecord{
 						EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
@@ -676,7 +689,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			case vote.Voter == s.subAuthor():
 				mark(IgnoreVoterIsSubmitter)
 			case vote.Voter == rootAuthor:
-				mark(IgnoreVoterIsRootAuthor)
+				mark(IgnoreVoterIsTaskAuthor)
 			case !payloadPresent(ev.body, "method"):
 				mark(IgnoreEmptyMethod)
 			case gateReason != "":

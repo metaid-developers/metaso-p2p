@@ -116,6 +116,7 @@ func main() {
 		}
 		results[r] = res
 	}
+	scope.UnresolvedCount = metatask.SumUnresolved(results)
 
 	meta := metatask.BuildReplayMeta(scope, enum, boundary)
 	index := metatask.BuildTaskIndex(results, scope, meta)

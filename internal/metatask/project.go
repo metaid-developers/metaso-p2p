@@ -39,11 +39,13 @@ type ReplayCursor struct {
 }
 
 // ReplayCoverage carries the never-silent completeness report (freeze §7;
-// v1.2 freezes exactly three subfields).
+// unresolvedCount is the A2-8 fourth subfield, added with the freeze
+// clarification increment).
 type ReplayCoverage struct {
-	PerPath       map[string]string `json:"perPath"` // complete|partial per path
-	OrderFallback bool              `json:"orderFallback"`
-	VersionEnum   string            `json:"versionEnum"`
+	PerPath         map[string]string `json:"perPath"` // complete|partial per path
+	OrderFallback   bool              `json:"orderFallback"`
+	VersionEnum     string            `json:"versionEnum"`
+	UnresolvedCount int               `json:"unresolvedCount"`
 }
 
 // SemanticGate echoes the frozen dual-track switch (D10).
@@ -66,12 +68,27 @@ type RunScope struct {
 	Admitted map[string][]*replayEvent
 	Mempool  int
 	Rejected int
+	// UnresolvedCount is set by the driver after replaying all roots: the
+	// run-level count of verify votes whose targetid matches no submission
+	// event at all (A2-8; per-root details live in each ReplayResult).
+	UnresolvedCount int
 }
 
 // ScopeEvents applies the collection boundary to an enumerated event set.
 func ScopeEvents(events map[string][]*Pin, boundary Boundary) *RunScope {
 	admitted, mempool, rejected := admitEvents(events, boundary)
 	return &RunScope{Admitted: admitted, Mempool: mempool, Rejected: rejected}
+}
+
+// SumUnresolved aggregates the per-root unresolved vote counts into the
+// run-level figure for coverage.unresolvedCount (A2-8). Per-root scoping in
+// Replay keeps the sets disjoint, so a plain sum never double-counts.
+func SumUnresolved(results map[string]*ReplayResult) int {
+	n := 0
+	for _, res := range results {
+		n += len(res.Unresolved)
+	}
+	return n
 }
 
 // TaskRoots lists the task roots present in the scope, sorted.
@@ -95,8 +112,9 @@ func BuildReplayMeta(scope *RunScope, enum Enumeration, boundary Boundary) Repla
 		EvaluatedAtBlockTs: boundary.BlockTs,
 		EventCountByPath:   map[string]int{},
 		Coverage: ReplayCoverage{
-			PerPath:     map[string]string{},
-			VersionEnum: "by_path",
+			PerPath:         map[string]string{},
+			VersionEnum:     "by_path",
+			UnresolvedCount: scope.UnresolvedCount,
 		},
 		SemanticGate: SemanticGate{HAct: HAct, RulingPins: append([]string{}, SemanticGateRulingPins...)},
 		Freshness:    Freshness{MaxLagBlocks: 5},
@@ -239,7 +257,11 @@ type TaskIndex struct {
 func BuildTaskIndex(results map[string]*ReplayResult, scope *RunScope, meta ReplayMeta) TaskIndex {
 	idx := TaskIndex{
 		ReplayMeta: meta,
-		Stats:      TaskStats{NodesByState: map[string]int{}},
+		// A2-3: a present set field carries explicit zero keys — claimed and
+		// rejected appear even when no node sits in those display states.
+		Stats: TaskStats{NodesByState: map[string]int{
+			"open": 0, "claimed": 0, "submitted": 0, "verified": 0, "rejected": 0, "expired": 0,
+		}},
 	}
 	participantsAll := map[string]bool{}
 	for root, res := range results {

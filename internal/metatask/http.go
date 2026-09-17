@@ -75,6 +75,7 @@ func (s *Server) Refresh(ctx context.Context) error {
 		}
 		results[root] = res
 	}
+	scope.UnresolvedCount = SumUnresolved(results)
 	meta := BuildReplayMeta(scope, enum, boundary)
 	snap := &Snapshot{
 		Raw: events, Scope: scope, Boundary: boundary, Enum: enum,
@@ -93,7 +94,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/metatask/tasks/{rootPinId}", s.handlePanorama)
 	mux.HandleFunc("GET /api/metatask/tasks/{rootPinId}/nodes/{nodeId}", s.handleNode)
 	mux.HandleFunc("GET /api/metatask/replay/{rootPinId}", s.handleReplay)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	return mux
+}
+
+// handleHealthz is the deployment-layer liveness probe (contract-external
+// route): it stamps the build header so the ops runbook can verify the
+// serving binary without touching a projection body.
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Metatask-Indexer-Build", s.Version)
+	w.WriteHeader(http.StatusOK)
+	b, err := CanonicalJSON(map[string]any{"status": "ok", "version": s.Version})
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(b)
 }
 
 func (s *Server) write(w http.ResponseWriter, status int, boundary Boundary, v any) {
@@ -150,6 +166,7 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request) (*resolved, boo
 			results[root] = res
 		}
 	}
+	scope.UnresolvedCount = SumUnresolved(results)
 	return &resolved{snap: snap, boundary: boundary, scope: scope, results: results}, true
 }
 
