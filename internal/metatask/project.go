@@ -179,7 +179,11 @@ func participantsOf(root string, res *ReplayResult, scope *RunScope) []Participa
 	}
 	for _, id := range res.NodeOrder {
 		n := res.Nodes[id]
-		if n.ActiveSubmission != nil && n.VerifiedAtBlockTs != nil {
+		// §6 verifiedContrib counts submissions whose node is finally
+		// verified (the aggregation-gated machine state), not merely
+		// quorum-satisfied — an agg-blocked parent's submission is not a
+		// verified one.
+		if n.MachineState == StateVerified && n.ActiveSubmission != nil {
 			get(n.ActiveSubmission.Submitter).VerifiedContrib++
 		}
 		for i := range n.Votes {
@@ -372,7 +376,10 @@ func buildLeaderboard(results map[string]*ReplayResult) []LeaderboardRow {
 		for _, id := range res.NodeOrder {
 			n := res.Nodes[id]
 			verified := n.MachineState == StateVerified
-			if n.ActiveSubmission != nil && n.VerifiedAtBlockTs != nil {
+			// §6 contribution counts finally-verified submissions: the
+			// machine state is the aggregation-gated verdict, so a merely
+			// quorum-satisfied (agg-blocked) parent does not contribute.
+			if verified && n.ActiveSubmission != nil {
 				get(n.ActiveSubmission.Submitter).Contribution++
 			}
 			for i := range n.Votes {

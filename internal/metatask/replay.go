@@ -142,24 +142,27 @@ func replayLess(a, b *replayEvent) bool {
 	return a.pin.ID < b.pin.ID
 }
 
-// CurrentClaim is the freeze §5 node claim view.
+// CurrentClaim is the freeze §5 node claim view. TTLDeadlineTs is null when
+// the policy has no TTL (A2-3: absence is null, never zero).
 type CurrentClaim struct {
 	ClaimPinID    string `json:"claimPinId"`
 	Claimant      string `json:"claimant"`
 	BlockHeight   int64  `json:"blockHeight"`
 	BlockTs       int64  `json:"blockTs"`
-	TTLDeadlineTs int64  `json:"ttlDeadlineTs"` // 0 when policy has no TTL
+	TTLDeadlineTs *int64 `json:"ttlDeadlineTs"`
 }
 
-// ActiveSubmission is the freeze §5 node submission view.
+// ActiveSubmission is the freeze §5 node submission view. ContentType and
+// Attachment are null when the payload omits them (A2-3: an absent value is
+// JSON null — an empty string is reserved for a real empty-string value).
 type ActiveSubmission struct {
 	SubmissionPinID string         `json:"submissionPinId"`
 	Submitter       string         `json:"submitter"`
 	BlockHeight     int64          `json:"blockHeight"`
 	BlockTs         int64          `json:"blockTs"`
 	Hash            string         `json:"hash"`
-	ContentType     string         `json:"contentType"`
-	Attachment      string         `json:"attachment"`
+	ContentType     *string        `json:"contentType"`
+	Attachment      *string        `json:"attachment"`
 	ChildIDs        []string       `json:"childids"`
 	Result          map[string]any `json:"result"`
 	// WindowDeadlineTs drives the §4.3 expiry but is not a frozen §5 key.
@@ -836,7 +839,9 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			nr.CurrentClaim = &CurrentClaim{
 				ClaimPinID: s.holderID, Claimant: s.holder.pin.GlobalMetaID,
 				BlockHeight: s.holder.pin.GenesisHeight, BlockTs: s.claimTs,
-				TTLDeadlineTs: ttlDeadline(s.claimTs),
+			}
+			if wd := ttlDeadline(s.claimTs); wd > 0 {
+				nr.CurrentClaim.TTLDeadlineTs = &wd
 			}
 		}
 		if s.sub != nil {
@@ -844,10 +849,14 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				SubmissionPinID: s.sub.pin.ID, Submitter: s.sub.pin.GlobalMetaID,
 				BlockHeight: s.sub.pin.GenesisHeight, BlockTs: s.subTs,
 				Hash:             payloadString(s.sub.body, "hash"),
-				ContentType:      payloadString(s.sub.body, "contentType"),
-				Attachment:       payloadString(s.sub.body, "attachment"),
 				ChildIDs:         payloadStrings(s.sub.body, "childids"),
 				WindowDeadlineTs: windowDeadline(s.subTs),
+			}
+			if v := payloadString(s.sub.body, "contentType"); v != "" {
+				as.ContentType = &v
+			}
+			if v := payloadString(s.sub.body, "attachment"); v != "" {
+				as.Attachment = &v
 			}
 			if r, ok := s.sub.body["result"].(map[string]any); ok {
 				as.Result = r
