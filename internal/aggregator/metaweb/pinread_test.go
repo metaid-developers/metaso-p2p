@@ -309,6 +309,104 @@ func TestHandlePinRead_RemoteEncryptedAndEmpty(t *testing.T) {
 	}
 }
 
+func TestHandlePinRead_RemoteJSONProtocolContentExtraction(t *testing.T) {
+	// Surf audit R5 (2026-09-17): JSON-body protocols outside the known table
+	// (paycomment, agentpedia rev) must surface payload.content as `text` on
+	// the pin-read path, keep the full payload object, and lift payload.title
+	// into meta.title for rev pins — same extraction on detail and batch.
+	cases := []struct {
+		name        string
+		path        string
+		protocolKey string
+		body        string
+		wantText    string
+		wantTitle   string
+	}{
+		{
+			name:        "paycomment",
+			path:        "/protocols/paycomment",
+			protocolKey: "paycomment",
+			body:        `{"commentTo":"` + hexPinId('a', 3) + `","content":"nice post!","contentType":"text/markdown"}`,
+			wantText:    "nice post!",
+		},
+		{
+			name:        "agentpedia rev",
+			path:        "/protocols/agentpedia/rev",
+			protocolKey: "rev",
+			body:        `{"v":1,"slug":"charter","lang":"zh","title":"世界计算机宪章","type":"edit","content":"# 世界计算机宪章\n\nbody","summary":"修订说明"}`,
+			wantText:    "# 世界计算机宪章\n\nbody",
+			wantTitle:   "世界计算机宪章",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pinId := hexPinId('d', 0)
+			agg := newTestAggregator(t)
+			agg.SetPinLookups(setupPublishedContent(t), nil)
+			agg.SetRemotePinFetcher(&fakeFetcher{pin: &RemotePin{
+				PinId:       pinId,
+				Path:        tc.path,
+				Operation:   "create",
+				ContentType: "application/json",
+				ContentBody: []byte(tc.body),
+				ChainName:   "mvc",
+				Timestamp:   1755000000,
+			}})
+			router := newTestRouter(agg)
+
+			envelope := doPinRead(t, router, pinId)
+			if envelope.Code != 0 {
+				t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+			}
+			if envelope.Data.Protocol != tc.protocolKey {
+				t.Fatalf("protocol = %q, want %q", envelope.Data.Protocol, tc.protocolKey)
+			}
+			if envelope.Data.Text == nil || *envelope.Data.Text != tc.wantText {
+				t.Fatalf("text = %v, want %q", envelope.Data.Text, tc.wantText)
+			}
+			if envelope.Data.Truncated == nil || *envelope.Data.Truncated {
+				t.Fatalf("truncated = %v, want false", envelope.Data.Truncated)
+			}
+			if envelope.Data.Meta.Title != tc.wantTitle {
+				t.Fatalf("meta.title = %q, want %q", envelope.Data.Meta.Title, tc.wantTitle)
+			}
+			if !json.Valid(envelope.Data.Payload) {
+				t.Fatalf("payload must stay a valid JSON object: %s", string(envelope.Data.Payload))
+			}
+			if !strings.Contains(string(envelope.Data.Payload), `"content"`) {
+				t.Fatalf("payload must keep the raw content field: %s", string(envelope.Data.Payload))
+			}
+		})
+	}
+}
+
+func TestHandlePinRead_RemoteJSONProtocolWithoutContentStaysNull(t *testing.T) {
+	// A JSON protocol whose payload has no non-empty string `content` still
+	// renders text: null with truncated/totalLength null (payload is the
+	// continuation path) — the R5 fallback must not invent text.
+	pinId := hexPinId('e', 0)
+	agg := newTestAggregator(t)
+	agg.SetPinLookups(setupPublishedContent(t), nil)
+	agg.SetRemotePinFetcher(&fakeFetcher{pin: &RemotePin{
+		PinId:       pinId,
+		Path:        "/protocols/agentpedia/challenge",
+		Operation:   "create",
+		ContentType: "application/json",
+		ContentBody: []byte(`{"targetRev":"` + hexPinId('e', 1) + `","reason":"factual"}`),
+		ChainName:   "mvc",
+		Timestamp:   1755000000,
+	}})
+	router := newTestRouter(agg)
+	envelope := doPinRead(t, router, pinId)
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d message = %q", envelope.Code, envelope.Message)
+	}
+	if envelope.Data.Text != nil || envelope.Data.Truncated != nil || envelope.Data.TotalLength != nil {
+		t.Fatalf("text/truncated/totalLength = %v/%v/%v, want all null",
+			envelope.Data.Text, envelope.Data.Truncated, envelope.Data.TotalLength)
+	}
+}
+
 func TestMANAPIPinFetcher_DecodesLiveShape(t *testing.T) {
 	pinId := hexPinId('9', 0)
 	payload := `{"title":"Remote Note","content":"remote body"}`

@@ -58,6 +58,7 @@ incremental lastCursor".
 | `GET /api/agentpedia/entry?lang=&slug=` | `{entryKey, head:{pin,title,author,content,contentRef,height}, status, disputed[], featured, history[{pin,author,height,type}], backlinks[], editorBreakdown[], contests[], redirect}` — `head.pin` is the unique headRevId; consumers must not infer it from history |
 | `GET /api/agentpedia/entry_list?lang=&sort=updated\|featured&cursor=&limit=` | `{total, items[{lang,slug,entryKey,head,status,updatedAt}], cursor}` — cursor is the next offset |
 | `GET /api/agentpedia/backlinks?lang=&slug=` | `{entryKey, backlinks[{fromEntry,fromRev}]}` — per-revision wikilink scan (`[[slug]]` / `[[lang:slug]]`) |
+| `GET /api/agentpedia/pins?path=&since=&size=&cursor=` | `{items[{pinId,path,chainName,timestamp,genesisHeight,txIndex,globalMetaId,address,title,summary,contentExcerpt,type}], hasMore, nextCursor}` — cursor-paged freshness feed over every confirmed observed pin, newest-first `(timestamp, genesisHeight, txIndex DESC, pinId ASC)`, key-pinned opaque cursor (R1 fresh-feed contract; surf audit R6). Rows are raw observations (no replay-validity filter; mempool never enters). `path` takes the full path or last segment (`rev`); `since` is inclusive unix seconds |
 | `GET /api/agentpedia/sync` | manapi incremental pull over all seven paths; returns the per-path `lastCursor` map (incremental-sync contract, acceptance item 4) |
 | `GET /healthz` | liveness |
 

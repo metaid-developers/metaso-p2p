@@ -29,14 +29,20 @@ import (
 // still applies; nothing else in the engine changes.
 const transferSlugAliasPlate = true
 
-// Event mirrors one Agentpedia protocol pin in chain order.
+// Event mirrors one Agentpedia protocol pin in chain order. Timestamp,
+// Address and ChainName are provenance carried for the L2 read side (surf
+// freshness, surf audit R6); the replay engine itself never reads them, so
+// canonical vectors (which omit them) replay identically.
 type Event struct {
-	Pin     string         `json:"pin"`
-	Path    string         `json:"path"`
-	Height  int64          `json:"height"`
-	TxIndex int            `json:"txIndex"`
-	Sender  string         `json:"sender"`
-	Payload map[string]any `json:"payload"`
+	Pin       string         `json:"pin"`
+	Path      string         `json:"path"`
+	Height    int64          `json:"height"`
+	TxIndex   int            `json:"txIndex"`
+	Sender    string         `json:"sender"`
+	Payload   map[string]any `json:"payload"`
+	Timestamp int64          `json:"timestamp,omitempty"`
+	Address   string         `json:"address,omitempty"`
+	ChainName string         `json:"chainName,omitempty"`
 }
 
 // Options carries scenario/runtime tuning for Replay.
