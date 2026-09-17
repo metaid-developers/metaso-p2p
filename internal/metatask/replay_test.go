@@ -472,28 +472,71 @@ func TestToBlockBoundaryFilter(t *testing.T) {
 	}
 }
 
-func TestPostVerifyVotesDoNotDrive(t *testing.T) {
-	// Freeze §3: verified is terminal. Once quorum completes, the cycle's
-	// submission stops being 当期生效 — later votes (including fails) are
-	// recorded as target_not_active and never drive the state machine.
+func TestFailPriorityBatch(t *testing.T) {
+	// A1-1 (fail 优先批式判定): a valid fail rejects the cycle regardless of
+	// its ≺ position relative to the quorum-satisfying vote — the v7
+	// discriminant shape. A rejected cycle never carries a verifiedAt.
 	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
 		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
 		tp(PathVerify, "v2", HAct+2, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
 		tp(PathVerify, "vF", HAct+3, 0, tBase+5_000, aBot2, votePayload("sub1", "fail", withSCFR)),
-		tp(PathVerify, "vP", HAct+4, 0, tBase+6_000, aBot3, votePayload("sub1", "pass", withSC)),
 	)...)
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
-	if n.MachineState != StateVerified || n.VerifiedAtBlockTs == nil || *n.VerifiedAtBlockTs != tBase+4_000 {
-		t.Fatalf("post-verify votes must not drive: state=%s verifiedAt=%d", n.MachineState, n.VerifiedAtBlockTs)
+	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeRejected {
+		t.Fatalf("post-quorum fail must reject (A1-1): %s/%s", n.MachineState, n.CycleOutcome)
 	}
-	for _, pid := range []string{"vF", "vP"} {
-		v := findVote(n, pid)
-		if v == nil || v.Counts || v.IgnoreReason != IgnoreTargetNotActive {
-			t.Fatalf("%s must be target_not_active: %+v", pid, v)
-		}
+	if n.VerifiedAtBlockTs != nil {
+		t.Fatalf("rejected cycle must not carry verifiedAt: %v", *n.VerifiedAtBlockTs)
+	}
+	vf := findVote(n, "vF")
+	if vf == nil || !vf.Counts {
+		t.Fatalf("the rejecting fail counts: %+v", vf)
+	}
+	// After the send-back and before the next claim, the target is not active.
+	events = evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "vF", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "fail", withSCFR)),
+		tp(PathVerify, "vP", HAct+2, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
+	)...)
+	res = mustReplay(t, events, tNow)
+	n = nodeOf(t, res, "n1")
+	if n.CycleOutcome != OutcomeRejected {
+		t.Fatalf("cycle outcome: %s", n.CycleOutcome)
+	}
+	vp := findVote(n, "vP")
+	if vp == nil || vp.Counts || vp.IgnoreReason != IgnoreTargetNotActive {
+		t.Fatalf("post-reject pass: %+v", vp)
+	}
+}
+
+func TestDuplicateVoteSuperseded(t *testing.T) {
+	// A1-7: a ballot superseded by the same bot's later valid ballot counts
+	// neither good nor bad — the earlier one is back-marked counts=false.
+	// (Reason string pending the chair-confirmed ignoreReason enum; the code
+	// uses IgnoreDuplicateVote.)
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v2", HAct+2, 0, tBase+4_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v3", HAct+3, 0, tBase+5_000, aBot3, votePayload("sub1", "pass", withSC)),
+	)...)
+	res := mustReplay(t, events, tNow)
+	n := nodeOf(t, res, "n1")
+	if n.MachineState != StateVerified {
+		t.Fatalf("folded state: %s", n.MachineState)
+	}
+	v1 := findVote(n, "v1")
+	if v1 == nil || v1.Counts || v1.IgnoreReason != IgnoreDuplicateVote {
+		t.Fatalf("v1 superseded: %+v", v1)
+	}
+	v2 := findVote(n, "v2")
+	if v2 == nil || !v2.Counts {
+		t.Fatalf("v2 is the bot's last valid ballot: %+v", v2)
 	}
 }
 
