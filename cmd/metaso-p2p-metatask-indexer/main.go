@@ -142,6 +142,19 @@ func main() {
 	}
 }
 
+// chainRPCConfig assembles the chain-source RPC config for --serve mode.
+// RPCDisableTLS mirrors the internal/config block-index defaults: the RPC
+// target is plain http, and the rpcclient only speaks http when DisableTLS
+// is set — without it every attempt goes https and GetBestHeight silently
+// falls back to 0 (deployment-blocking defect found in the 2026-09-18
+// pre-fire check).
+func chainRPCConfig(host, user, pass string) config.ChainRPCConfig {
+	return config.ChainRPCConfig{
+		RPCHost: host, RPCUser: user, RPCPass: pass,
+		RPCHTTPPostMode: true, RPCDisableTLS: true,
+	}
+}
+
 // serveMode runs the HTTP service: one initial refresh, then periodic
 // re-collection so the freshness SLO (chain head − evaluated block ≤
 // maxLagBlocks) holds between cycles. Without --chain-rpc-host the
@@ -155,9 +168,7 @@ func serveMode(manapiURL, snapshotDir string, size int, listen string, refreshSe
 		srv.Lister, srv.Payloads = snap, snap
 	}
 	if chainHost != "" {
-		chain := mvc.NewChain(config.ChainRPCConfig{
-			RPCHost: chainHost, RPCUser: chainUser, RPCPass: chainPass, RPCHTTPPostMode: true,
-		})
+		chain := mvc.NewChain(chainRPCConfig(chainHost, chainUser, chainPass))
 		if err := chain.Init(); err != nil {
 			exitJSON(1, map[string]any{"error": err.Error()})
 		}
