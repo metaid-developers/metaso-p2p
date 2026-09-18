@@ -1,1 +1,1 @@
-{"now": 1789315000, "expect_verdict": "reject", "expect_reason": "claim-rejected:t1:verified"}
+{"now": 1789315000, "expect_verdict": "reject", "expect_reason": "claim-rejected:t1:verified", "expect_cycle_seq": 2, "expect_active_submission": "a30eb9db4db56802581dda4ed4b12dd06f86412ea6d2f87a8a32212fa1fe8668i0"}

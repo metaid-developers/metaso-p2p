@@ -40,9 +40,11 @@ func TestD8VectorsAgainstSkillFixtures(t *testing.T) {
 				t.Fatalf("read expect: %v", err)
 			}
 			var exp struct {
-				Now           int64   `json:"now"`
-				ExpectVerdict string  `json:"expect_verdict"`
-				ExpectReason  *string `json:"expect_reason"`
+				Now                    int64   `json:"now"`
+				ExpectVerdict          string  `json:"expect_verdict"`
+				ExpectReason           *string `json:"expect_reason"`
+				ExpectCycleSeq         *int    `json:"expect_cycle_seq"`
+				ExpectActiveSubmission *string `json:"expect_active_submission"`
 			}
 			if err := json.Unmarshal(raw, &exp); err != nil {
 				t.Fatalf("decode expect: %v", err)
@@ -67,6 +69,18 @@ func TestD8VectorsAgainstSkillFixtures(t *testing.T) {
 			if gotReason != wantReason {
 				t.Fatalf("reason: got %q want %q", gotReason, wantReason)
 			}
+			// Node-level discriminants (A4-5): the guard view alone cannot
+			// tell a correct cycle-2 verdict from the cycle-boundary-blind
+			// cycle-1 verdict — both collapse to verified. When the fixture
+			// pins the cycle anchor, assert it.
+			if exp.ExpectCycleSeq != nil && node.CycleSeq != *exp.ExpectCycleSeq {
+				t.Fatalf("cycleSeq: got %d want %d (cycle-boundary discriminant; activeSub=%s)",
+					node.CycleSeq, *exp.ExpectCycleSeq, activeSubID(node))
+			}
+			if exp.ExpectActiveSubmission != nil && activeSubID(node) != *exp.ExpectActiveSubmission {
+				t.Fatalf("activeSubmission: got %q want %q",
+					activeSubID(node), *exp.ExpectActiveSubmission)
+			}
 		})
 	}
 	if ran != 13 {
@@ -84,6 +98,13 @@ func guardView(n *NodeReplay) (verdict, reason string) {
 		state = StateClaimed // guard_state collapses submitted to claimed
 	}
 	return "reject", fmt.Sprintf("claim-rejected:%s:%s", n.ID, state)
+}
+
+func activeSubID(n *NodeReplay) string {
+	if n.ActiveSubmission == nil {
+		return ""
+	}
+	return n.ActiveSubmission.SubmissionPinID
 }
 
 // loadFixture reads one skill fixture directory: <pool>.json files holding
