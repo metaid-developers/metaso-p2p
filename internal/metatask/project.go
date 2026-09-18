@@ -219,11 +219,15 @@ type NodeProgress struct {
 	Total    int `json:"total"`
 }
 
-// LastActivity is the 最近动静 provenance triple (freeze §6).
+// LastActivity is the 最近动静 provenance triple (freeze §6). The unexported
+// order key (A4-3) decides same-block ties by the full ≺ order.
 type LastActivity struct {
 	BlockTs    int64  `json:"blockTs"`
 	EventPinID string `json:"eventPinId"`
 	Path       string `json:"path"`
+	h          int64
+	tx         int64
+	ver        int64
 }
 
 type TaskStats struct {
@@ -337,29 +341,45 @@ func taskStateOf(rootVerified bool) string {
 	return "active"
 }
 
-// lastActivityOf picks the newest in-scope event of a task (max blockTs, ties
-// by smallest pinId for determinism) across node event streams, votes and
-// unresolved records.
+// lastActivityOf picks the ≺-max in-scope event of a task (A4-3: the full
+// order decides same-block ties — never arrival or collection order) across
+// node event streams, votes and unresolved records.
 func lastActivityOf(res *ReplayResult) LastActivity {
 	best := LastActivity{}
-	better := func(ts int64, pinID, path string) {
-		if ts > best.BlockTs || (ts == best.BlockTs && (best.EventPinID == "" || pinID < best.EventPinID)) {
-			best = LastActivity{BlockTs: ts, EventPinID: pinID, Path: path}
+	better := func(h, tx, ver int64, ts int64, pinID, path string) {
+		if best.EventPinID == "" || activityOrderLess(best.h, best.tx, best.ver, best.EventPinID, h, tx, ver, pinID) {
+			best = LastActivity{BlockTs: ts, EventPinID: pinID, Path: path, h: h, tx: tx, ver: ver}
 		}
 	}
 	for _, id := range res.NodeOrder {
 		n := res.Nodes[id]
 		for _, e := range n.Events {
-			better(e.BlockTs, e.EventPinID, e.Path)
+			better(e.BlockHeight, e.txIdx, e.Version, e.BlockTs, e.EventPinID, e.Path)
 		}
 		for _, v := range n.Votes {
-			better(v.BlockTs, v.VerifyPinID, PathVerify)
+			better(v.BlockHeight, v.txIdx, v.ver, v.BlockTs, v.VerifyPinID, PathVerify)
 		}
 	}
 	for _, e := range res.Unresolved {
-		better(e.BlockTs, e.EventPinID, e.Path)
+		better(e.BlockHeight, e.txIdx, e.Version, e.BlockTs, e.EventPinID, e.Path)
 	}
 	return best
+}
+
+// activityOrderLess is the frozen §2 ≺ tuple comparison (height, txIndex,
+// version, pinId) over the unexported ordering keys — named apart from the
+// pin-level orderLess in types.go.
+func activityOrderLess(h1, tx1, v1 int64, p1 string, h2, tx2, v2 int64, p2 string) bool {
+	if h1 != h2 {
+		return h1 < h2
+	}
+	if tx1 != tx2 {
+		return tx1 < tx2
+	}
+	if v1 != v2 {
+		return v1 < v2
+	}
+	return p1 < p2
 }
 
 func buildLeaderboard(results map[string]*ReplayResult) []LeaderboardRow {

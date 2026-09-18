@@ -69,8 +69,8 @@ func TestD8VectorsAgainstSkillFixtures(t *testing.T) {
 			}
 		})
 	}
-	if ran != 12 {
-		t.Fatalf("expected 12 vector directories, ran %d", ran)
+	if ran != 13 {
+		t.Fatalf("expected 13 vector directories, ran %d", ran)
 	}
 }
 

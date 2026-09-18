@@ -105,6 +105,15 @@ func findVote(n *NodeReplay, pinID string) *VoteRecord {
 	return nil
 }
 
+func findEvent(n *NodeReplay, pinID string) *EventRecord {
+	for i := range n.Events {
+		if n.Events[i].EventPinID == pinID {
+			return &n.Events[i]
+		}
+	}
+	return nil
+}
+
 func TestVerifiedPath(t *testing.T) {
 	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
@@ -535,9 +544,34 @@ func TestDuplicateVoteSuperseded(t *testing.T) {
 	if v1 == nil || v1.Counts || v1.IgnoreReason == nil || *v1.IgnoreReason != IgnoreDuplicateVote {
 		t.Fatalf("v1 superseded: %+v", v1)
 	}
+	// A4-1: the events[] row for the superseded ballot carries the same tags.
+	e1 := findEvent(n, "v1")
+	if e1 == nil || e1.Validity != "ignored" || e1.IgnoreReason == nil || *e1.IgnoreReason != IgnoreDuplicateVote {
+		t.Fatalf("A4-1: events[] must mirror the vote back-mark: %+v", e1)
+	}
 	v2 := findVote(n, "v2")
 	if v2 == nil || !v2.Counts {
 		t.Fatalf("v2 is the bot's last valid ballot: %+v", v2)
+	}
+}
+
+func TestStateNoOpAndActivityOrderMax(t *testing.T) {
+	// A4-2: an ignored release (mismatched claimid on the live holder) records
+	// state_no_op. A4-3: lastWrite/lastActivity = the ≺-max recorded event —
+	// ignored cleanup events count as recorded，and the full order decides.
+	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathRelease, "relX", 103, 0, tBase+2_100, aBot1, releasePayload("claimX")),
+	)...)
+	res := mustReplay(t, events, tNow)
+	n := nodeOf(t, res, "n1")
+	er := findEvent(n, "relX")
+	if er == nil || er.Validity != "ignored" || er.IgnoreReason == nil || *er.IgnoreReason != IgnoreStateNoOp {
+		t.Fatalf("A4-2: ignored release reason must be state_no_op: %+v", er)
+	}
+	if n.LastWriteEventPinID == nil || *n.LastWriteEventPinID != "relX" {
+		t.Fatalf("A4-3: lastWrite must be the ≺-max recorded event (incl. ignored): %v", n.LastWriteEventPinID)
 	}
 }
 
@@ -560,6 +594,10 @@ func TestZeroDropIgnoredTarget(t *testing.T) {
 	}
 	if len(res.Unresolved) != 1 || res.Unresolved[0].EventPinID != "vX" {
 		t.Fatalf("only the truly-unknown target stays unresolved: %+v", res.Unresolved)
+	}
+	// A4-2: unresolvable references carry the closed-set name.
+	if res.Unresolved[0].IgnoreReason == nil || *res.Unresolved[0].IgnoreReason != IgnoreUnresolvableTarget {
+		t.Fatalf("unresolved reason must be unresolvable_target: %+v", res.Unresolved[0])
 	}
 }
 

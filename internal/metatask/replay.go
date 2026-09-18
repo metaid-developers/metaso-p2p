@@ -67,15 +67,17 @@ const (
 
 // Vote/record ignore reasons. missing_semantic_check / missing_failreason are
 // the frozen §3.1 gate reasons; the rest carry the counting preconditions.
+// A4-2: non-vote ignored events use the five-name closed set
+// (superseded_by_earlier_claim / claimid_mismatch / not_earliest_in_cycle /
+// state_no_op / unresolvable_target).
 const (
 	IgnoreSupersededClaim    = "superseded_by_earlier_claim"
 	IgnoreNotEarliestInCyc   = "not_earliest_in_cycle"
 	IgnoreClaimIDMismatch    = "claimid_mismatch"
 	IgnoreSubmitterNotHolder = "submitter_not_holder"
-	IgnoreNoMatchingClaim    = "no_matching_active_claim"
-	IgnoreNodeNotOpen        = "node_not_open"
+	IgnoreStateNoOp          = "state_no_op"
 	IgnoreTargetNotActive    = "target_not_active"
-	IgnoreUnresolvedTarget   = "unresolved_target"
+	IgnoreUnresolvableTarget = "unresolvable_target"
 	IgnoreDuplicateVote      = "duplicate_vote_superseded"
 	IgnoreVoterIsSubmitter   = "voter_is_submitter"
 	IgnoreVoterIsTaskAuthor  = "voter_is_task_author"
@@ -183,6 +185,8 @@ type VoteRecord struct {
 	IgnoreReason     *string `json:"ignoreReason"`
 	BlockHeight      int64   `json:"blockHeight"`
 	BlockTs          int64   `json:"-"`
+	txIdx            int64   // A4-3 ordering key, not serialized
+	ver              int64   // A4-3 ordering key, not serialized
 }
 
 // EventRecord is the freeze §5 node-detail event row (每条可回源).
@@ -197,6 +201,7 @@ type EventRecord struct {
 	Summary      string  `json:"summary"`
 	Validity     string  `json:"validity"` // counted|ignored
 	IgnoreReason *string `json:"ignoreReason"`
+	txIdx        int64   // A4-3 ordering key, not serialized
 }
 
 // NodeReplay is one node's replay conclusion. Its JSON keys are the frozen
@@ -234,8 +239,9 @@ type NodeReplay struct {
 // ballot can back-mark the superseded one (A1-7: a superseded duplicate
 // counts neither good nor bad).
 type ballotRec struct {
-	verdict string
-	voteIdx int
+	verdict  string
+	voteIdx  int
+	eventIdx int // index into nodeState.events, so back-marking keeps events[] and votes[] in lockstep (A4-1)
 }
 
 type nodeState struct {
@@ -255,13 +261,14 @@ type nodeState struct {
 	// is NOT a stream transition (A2-1: the cycle terminal is decided at the
 	// evaluation boundary) — at B a still-alive submitted cycle with
 	// passes >= quorum becomes verified carrying this timestamp.
-	quorumTs  int64
-	lastWrite string
-	lastActTs int64
-	votes     []VoteRecord
-	events    []EventRecord
-	aggNote   string
-	inTree    bool
+	quorumTs int64
+	// lastTouched carries the ≺-max recorded event (A4-3); lastWrite/
+	// lastActivity render from it.
+	lastTouched *replayEvent
+	votes       []VoteRecord
+	events      []EventRecord
+	aggNote     string
+	inTree      bool
 }
 
 func (s *nodeState) subID() string {
@@ -544,10 +551,11 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		return subTs + int64(res.WindowHours)*3600
 	}
 
+	// A4-3: lastWrite/lastActivity = the ≺-max recorded event (the full
+	// order decides same-block ties — never arrival or collection order).
 	touch := func(s *nodeState, ev *replayEvent) {
-		s.lastWrite = ev.pin.ID
-		if ev.ts > s.lastActTs {
-			s.lastActTs = ev.ts
+		if s.lastTouched == nil || replayLess(s.lastTouched, ev) {
+			s.lastTouched = ev
 		}
 	}
 
@@ -556,6 +564,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
 			BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
 			Kind: PoolName(ev.pin.Path), Summary: summary, Validity: validity,
+			txIdx: ev.pin.TxIndex,
 		}
 		if reason != "" {
 			er.IgnoreReason = reasonPtr(reason)
@@ -611,7 +620,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			// quorum-satisfied cycle is still releasable (t47: release ends
 			// cycle 1 after quorum; verified only materializes via cycle 2).
 			if s.holder == nil || s.holderID != payloadString(ev.body, "claimid") {
-				addEvent(s, ev, "ignored", IgnoreNoMatchingClaim, summary)
+				addEvent(s, ev, "ignored", IgnoreStateNoOp, summary)
 				touch(s, ev)
 				break
 			}
@@ -661,6 +670,8 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				HasSemanticCheck: payloadPresent(ev.body, "semantic_check"),
 				BlockHeight:      ev.pin.GenesisHeight,
 				BlockTs:          ev.ts,
+				txIdx:            ev.pin.TxIndex,
+				ver:              ev.pin.Version,
 			}
 			node, active := activeSubOwner[target]
 			if !active {
@@ -685,7 +696,7 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 						EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
 						BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
 						Kind: "verify", Summary: "verify target=" + target,
-						Validity: "ignored", IgnoreReason: reasonPtr(IgnoreUnresolvedTarget),
+						Validity: "ignored", IgnoreReason: reasonPtr(IgnoreUnresolvableTarget),
 					})
 				}
 				break
@@ -728,15 +739,18 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				if prev, ok := s.ballots[vote.Voter]; ok {
 					// A1-7: the superseded earlier ballot counts neither
 					// good nor bad once the bot's later valid ballot lands.
+					// A4-1: events[] carries the same tags as votes[].
 					s.votes[prev.voteIdx].Counts = false
 					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
+					s.events[prev.eventIdx].Validity = "ignored"
+					s.events[prev.eventIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
 					if prev.verdict == "pass" {
 						s.passes-- // the bot's contribution switches pass→fail
 					}
 				}
-				s.ballots[vote.Voter] = ballotRec{verdict: "fail", voteIdx: idx}
 				s.votes[idx].Counts = true
 				addEvent(s, ev, "counted", "", "verify verdict=fail target="+target)
+				s.ballots[vote.Voter] = ballotRec{verdict: "fail", voteIdx: idx, eventIdx: len(s.events) - 1}
 				if ev.pin.GenesisHeight < HAct && !payloadPresent(ev.body, "evidence") {
 					// v1.1 semantics below the switch: a fail without evidence
 					// neither rejects nor blocks verification (freeze §3.1).
@@ -748,15 +762,17 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 				if prev, ok := s.ballots[vote.Voter]; ok {
 					s.votes[prev.voteIdx].Counts = false
 					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
+					s.events[prev.eventIdx].Validity = "ignored"
+					s.events[prev.eventIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
 					if prev.verdict == "fail" {
 						s.passes++ // the bot's contribution switches fail→pass
 					}
 				} else {
 					s.passes++
 				}
-				s.ballots[vote.Voter] = ballotRec{verdict: "pass", voteIdx: idx}
 				s.votes[idx].Counts = true
 				addEvent(s, ev, "counted", "", "verify verdict=pass target="+target)
+				s.ballots[vote.Voter] = ballotRec{verdict: "pass", voteIdx: idx, eventIdx: len(s.events) - 1}
 				// A2-1: quorum satisfaction is NOT a stream transition — the
 				// cycle stays alive (releasable, claim-superseded only) and
 				// the verified verdict materializes at the boundary B. Only
@@ -845,12 +861,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 			vts := s.quorumTs
 			nr.VerifiedAtBlockTs = &vts
 		}
-		if s.lastWrite != "" {
-			lw := s.lastWrite
+		if s.lastTouched != nil {
+			lw := s.lastTouched.pin.ID
 			nr.LastWriteEventPinID = &lw
-		}
-		if s.lastActTs > 0 {
-			lts := s.lastActTs
+			lts := s.lastTouched.ts
 			nr.LastActivityTs = &lts
 		}
 		if _, isTree := tree[id]; !isTree {
