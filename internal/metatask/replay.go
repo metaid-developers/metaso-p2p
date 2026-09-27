@@ -1,45 +1,47 @@
 package metatask
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 )
 
-// Freeze-draft replay engine (v1.1, pin://4c733705605f944c774da2f314d55d8f83cae7b18c6cfd2b8181ccbcd934c46bi0):
-// a pure function  conclusion = F(E, B)  over the seven-path event set E and
-// the evaluation boundary B (block height + that block's timestamp).
+// v1.2.1 replay renderer. The semantics live in v121.go (ReplayV121 — the
+// three-engine consistency engine, ported from the IDBots TS reference); this
+// file keeps the frozen §5 projection shape (字段即契约 — field names are the
+// API contract) and renders it from the v1.2.1 conclusion:
 //
-// Differences from the pool read path (aggregate.go/settle.go, pinned to
-// metatask-replay v1.2.0 semantics — both stay untouched):
-//   - dual-track vote gate: the #8/#9 requirements apply only at block height
-//     >= HAct (freeze §3.1); below it the v1.1.0 protocol semantics hold;
-//   - total order excludes seenTime (freeze §2/D3): (height, txIndex, version,
-//     pinId) — the list API exposes no outputIndex, so the unique pinId takes
-//     the final slot; still a pure function of E;
-//   - mempool pins (genesisHeight < 0) never enter E (freeze §1.3);
-//   - sequential state machine: a valid fail sends the node back to open at
-//     its own block (裁定三, freeze 计票结果 row has no state precondition);
-//     claim TTL / review-window expiry are evaluated against B, never a wall
-//     clock (D2).
+//   - conclusion = F(E, B): a pure function over the nine-path event set E
+//     (task/tree/spec/claim/release/submission/verify/amend/challenge) and
+//     the evaluation boundary B (block height + that block's timestamp);
+//   - the unified ordered walk, #8/#9 gates (H_ACT), the v1.2 feature gates
+//     (H_ACT2), supersedeid, /amend, /challenge, the aggregation
+//     precondition, settlement and eventSetHash are all v1.2.1 semantics —
+//     the pre-upgrade freeze calibration (the 448-field comparison against
+//     the on-chain skill engine read path) is realigned here per v1.2.1;
+//   - mempool pins (genesisHeight < 0) never enter E; payload §〇 rejection
+//     stays a collection-boundary concern (admitEvents);
+//   - expiry (claim TTL / review window / challenge TTL) reads the boundary
+//     timestamp only, never a wall clock.
 //
-// Validated against the skill v1.2.2 discriminant vectors 11/11
-// (testdata/d8vectors, see d8_test.go and RUN_LOG.txt).
+// Validated against the v1.2.1 conformance vector set (16/16,
+// testdata/metatask-conformance-vectors.v1.2.1.json + the TS-engine golden
+// parity harness) and the vendored skill D8 guard fixtures (13/13 — their
+// shapes do not reach the v1.1→v1.2.1 divergence points).
 
 const (
-	// HAct is the frozen dual-track switch (freeze §3.1; ruling pin chain in
-	// SemanticGateRulingPins). Explicit block-height constant, no per-event
-	// version forking.
+	// HAct is the frozen #8/#9 vote-gate switch (ruling pin chain in
+	// SemanticGateRulingPins; v1.2.1 activation.H_ACT, unchanged).
 	HAct = 190000
 
-	// ReplayAlgoVersion identifies the frozen algorithm this engine implements.
-	// Any change to the algorithm or to HAct bumps it and forces a full replay
-	// (freeze D10). Contract = freeze draft v1.2 (pin://1d6ac1cc…, chair-locked
-	// as the sole frozen version; the late-landing v1.3 was retracted to
-	// reference-only, so no canonId echoes anywhere in the projections).
-	ReplayAlgoVersion = "metatask-replay-indexer/1.0.0+freeze1.2"
-	// ProtocolVersion / ProtocolPinID anchor the protocol the semantics come from.
-	ProtocolVersion = "1.1.0"
-	ProtocolPinID   = "ff7d0b59a44d760a84c3660e8656e37fe5cef3dde6a67b217ea87d6d216789bfi0"
+	// ReplayAlgoVersion identifies the algorithm this engine implements. Any
+	// semantic change bumps it and forces a full replay (D10). v2.0.0 = the
+	// v1.2.1 registration-body semantics (supersedes the freeze draft).
+	ReplayAlgoVersion = "metatask-replay-indexer/2.0.0+v1.2.1"
+	// ProtocolVersion / ProtocolPinID anchor the protocol the semantics come
+	// from (v1.2.1 registration body).
+	ProtocolVersion = ProtocolVersionV121
+	ProtocolPinID   = ProtocolPinIDV121
 )
 
 // SemanticGateRulingPins is the frozen ruling-pin chain cited by freeze §0:
@@ -66,15 +68,14 @@ const (
 )
 
 // Vote/record ignore reasons. missing_semantic_check / missing_failreason are
-// the frozen §3.1 gate reasons; the rest carry the counting preconditions.
-// A4-2: non-vote ignored events use the five-name closed set
-// (superseded_by_earlier_claim / claimid_mismatch / not_earliest_in_cycle /
-// state_no_op / unresolvable_target).
+// the #8/#9 gate reasons; the v1.2.1 reasons (duplicate_without_supersede,
+// supersede_predicate_failed, same_side_roster) mirror the reference engine's
+// closed set; the rest carry the counting preconditions.
 const (
 	IgnoreSupersededClaim    = "superseded_by_earlier_claim"
-	IgnoreNotEarliestInCyc   = "not_earliest_in_cycle"
+	IgnoreNotEarliestInCyc   = "not_earliest_in_cycle" // pre-v1.2.1 name, kept for history
 	IgnoreClaimIDMismatch    = "claimid_mismatch"
-	IgnoreSubmitterNotHolder = "submitter_not_holder"
+	IgnoreSubmitterNotHolder = "submitter_not_holder" // pre-v1.2.1 name (v1.2.1 attaches by claimid)
 	IgnoreStateNoOp          = "state_no_op"
 	IgnoreTargetNotActive    = "target_not_active"
 	IgnoreUnresolvableTarget = "unresolvable_target"
@@ -82,9 +83,13 @@ const (
 	IgnoreVoterIsSubmitter   = "voter_is_submitter"
 	IgnoreVoterIsTaskAuthor  = "voter_is_task_author"
 	IgnoreEmptyMethod        = "empty_method"
-	IgnoreAfterWindowClose   = "after_window_close"
+	IgnoreAfterWindowClose   = "after_window_close" // pre-v1.2.1 name
 	IgnoreVerdictInvalid     = "verdict_invalid"
 	IgnoreUnknownVerdict     = "unknown_verdict"
+
+	IgnoreDuplicateWithoutSupersede = "duplicate_without_supersede"
+	IgnoreSupersedePredicateFailed  = "supersede_predicate_failed"
+	IgnoreSameSideRoster            = "same_side_roster"
 )
 
 // Boundary is B of F(E,B) (freeze §2): block height and that block's timestamp.
@@ -95,33 +100,10 @@ type Boundary struct {
 	BlockTs int64 `json:"blockTs"`
 }
 
-// gateInvalid mirrors metatask-replay v1.2.2 vote_invalid(b, height): the
-// #8/#9 requirements bind only at block height >= HAct. payloadPresent is the
-// python-parity "present and non-empty" test (payload.go), matching the
-// engine's str(value or "").strip() rule, so parity holds field by field.
+// gateInvalid kept for the freeze-era §3.1 narrative; v1.2.1 gating lives in
+// v121GateReason (v121.go).
 func gateInvalid(b map[string]any, height int64) string {
-	if height < HAct {
-		return "" // v1.1 semantics below the switch: no #8/#9 requirements
-	}
-	if !payloadPresent(b, "semantic_check") {
-		return "missing_semantic_check"
-	}
-	if payloadString(b, "verdict") == "fail" && !payloadPresent(b, "failreason") {
-		return "missing_failreason"
-	}
-	return ""
-}
-
-// treeNodeInfo is the resolved per-node tree metadata. parent/specid keep
-// their null-ness from the tree event (null parent = root; null specid =
-// inherit the task-root specid).
-type treeNodeInfo struct {
-	parent *string
-	title  string
-	kind   string
-	specid *string
-	deps   []string
-	params map[string]any
+	return v121GateReason(b, height, HAct)
 }
 
 // replayEvent is one admitted event: confirmed, payload-accepted, decoded.
@@ -167,7 +149,7 @@ type ActiveSubmission struct {
 	Attachment      *string        `json:"attachment"`
 	ChildIDs        []string       `json:"childids"`
 	Result          map[string]any `json:"result"`
-	// WindowDeadlineTs drives the §4.3 expiry but is not a frozen §5 key.
+	// WindowDeadlineTs drives the review-window expiry but is not a frozen §5 key.
 	WindowDeadlineTs int64 `json:"-"`
 }
 
@@ -184,7 +166,7 @@ type VoteRecord struct {
 	Counts           bool    `json:"counts"`
 	IgnoreReason     *string `json:"ignoreReason"`
 	BlockHeight      int64   `json:"blockHeight"`
-	BlockTs          int64   `json:"-"`
+	BlockTs          int64   `json:"blockTs"`
 	txIdx            int64   // A4-3 ordering key, not serialized
 	ver              int64   // A4-3 ordering key, not serialized
 }
@@ -205,10 +187,8 @@ type EventRecord struct {
 }
 
 // NodeReplay is one node's replay conclusion. Its JSON keys are the frozen
-// §5 nodes[i] set: id/parent/title/kind/params/deps/specid from the tree
-// event 原样 (parent/specid keep null-ness), plus the replay view keys.
-// Empty lastWrite/lastActivity/verifiedAt serialize as null (D7 needs one
-// zero-value convention — the independent replayer's null, not 0/"").
+// §5 nodes[i] set plus the v1.2.1 additions (weight/disputed — additive per
+// D7 只加不改). Empty lastWrite/lastActivity/verifiedAt serialize as null.
 type NodeReplay struct {
 	ID                  string            `json:"id"`
 	Parent              *string           `json:"parent"`
@@ -217,10 +197,12 @@ type NodeReplay struct {
 	Params              map[string]any    `json:"params"`
 	SpecID              *string           `json:"specid"`
 	Deps                []string          `json:"deps"`
+	Weight              *int64            `json:"weight"`
 	MachineState        string            `json:"machineState"`
 	DisplayState        string            `json:"displayState"`
 	CycleOutcome        string            `json:"cycleOutcome"`
 	CycleSeq            int               `json:"cycleSeq"`
+	Disputed            bool              `json:"disputed"`
 	CurrentClaim        *CurrentClaim     `json:"currentClaim"`
 	ActiveSubmission    *ActiveSubmission `json:"activeSubmission"`
 	VerifiedAtBlockTs   *int64            `json:"verifiedAtBlockTs"`
@@ -234,58 +216,10 @@ type NodeReplay struct {
 	AggNote string `json:"-"`
 }
 
-// ballotRec is a bot's last valid ballot on the active submission: the
-// verdict plus the index into the node's votes slice, so a later valid
-// ballot can back-mark the superseded one (A1-7: a superseded duplicate
-// counts neither good nor bad).
-type ballotRec struct {
-	verdict  string
-	voteIdx  int
-	eventIdx int // index into nodeState.events, so back-marking keeps events[] and votes[] in lockstep (A4-1)
-}
-
-type nodeState struct {
-	id       string
-	holder   *replayEvent // current holding claim; nil = node open
-	holderID string       // holding claim's pinId
-	claimTs  int64
-	sub      *replayEvent // current cycle's effective submission; nil = none
-	subTs    int64
-	state    string
-	outcome  string
-	cycleSeq int
-	ballots  map[string]ballotRec // bot -> last valid ballot on the active submission
-	passes   int
-	// quorumTs anchors the first ≺ position where the running pass count
-	// (last-per-bot folded) reaches policy.verify_quorum. Quorum satisfaction
-	// is NOT a stream transition (A2-1: the cycle terminal is decided at the
-	// evaluation boundary) — at B a still-alive submitted cycle with
-	// passes >= quorum becomes verified carrying this timestamp.
-	quorumTs int64
-	// lastTouched carries the ≺-max recorded event (A4-3); lastWrite/
-	// lastActivity render from it.
-	lastTouched *replayEvent
-	votes       []VoteRecord
-	events      []EventRecord
-	aggNote     string
-	inTree      bool
-}
-
-func (s *nodeState) subID() string {
-	if s.sub == nil {
-		return ""
-	}
-	return s.sub.pin.ID
-}
-
-func (s *nodeState) subAuthor() string {
-	if s.sub == nil {
-		return ""
-	}
-	return s.sub.pin.GlobalMetaID
-}
-
-// ReplayResult is the conclusion of F(E,B) for one task root.
+// ReplayResult is the conclusion of F(E,B) for one task root. The frozen §7
+// keys are unchanged; the v1.2.1 block (taskComplete / eventSetHash /
+// boundaryBlock / settlement / ignoredEvents / disputedNodes / amendHead /
+// hAct2) is additive (D7).
 type ReplayResult struct {
 	RootPinID    string         `json:"rootPinId"`
 	TaskTitle    string         `json:"taskTitle"`
@@ -300,8 +234,7 @@ type ReplayResult struct {
 	SpecResolved bool           `json:"specResolved"`
 	RootVerified bool           `json:"rootVerified"`
 	// §7 echo: every replay response carries the evaluated boundary at the
-	// top level (A1-5: "boundary" is a naming deviation — the contract keys
-	// are evaluatedAtBlock / evaluatedAtBlockTs).
+	// top level (A1-5).
 	EvaluatedAtBlock   int64                  `json:"evaluatedAtBlock"`
 	EvaluatedAtBlockTs int64                  `json:"evaluatedAtBlockTs"`
 	Nodes              map[string]*NodeReplay `json:"nodes"`
@@ -313,12 +246,21 @@ type ReplayResult struct {
 	ExcludedMempool  int            `json:"excludedMempool"`
 	RejectedPayload  int            `json:"rejectedPayload"`
 	OrderFallback    bool           `json:"orderFallback"`
+
+	// v1.2.1 additions (registration body settlement / aggregation).
+	TaskComplete  bool           `json:"taskComplete"`
+	EventSetHash  string         `json:"eventSetHash"`
+	BoundaryBlock int64          `json:"boundaryBlock"`
+	Settlement    map[string]any `json:"settlement"` // null until the task settles
+	IgnoredEvents []IgnoredEvent `json:"ignoredEvents"`
+	DisputedNodes []string       `json:"disputedNodes"`
+	AmendHead     string         `json:"amendHead,omitempty"`
+	HAct2Height   int64          `json:"hAct2"`
 }
 
-// admitEvents applies the freeze collection boundary: dedup by pinId (the
-// event unique key is (pinId, version); the list API exposes no version, so
-// one pinId = one event), mempool excluded and counted, payload-accepted
-// only, optional to-block filter (Height 0 disables it).
+// admitEvents applies the collection boundary: dedup by pinId, mempool
+// excluded and counted, payload-accepted only, optional to-block filter
+// (Height 0 disables it).
 func admitEvents(events map[string][]*Pin, boundary Boundary) (admitted map[string][]*replayEvent, mempool, rejected int) {
 	admitted = map[string][]*replayEvent{}
 	seen := map[string]bool{}
@@ -352,8 +294,7 @@ func reasonPtr(s string) *string { return &s }
 
 // DeriveBoundary picks the evaluation boundary for an enumerated event set:
 // an explicit to-block when given, else the newest confirmed event height
-// with that height's newest block timestamp (the list API carries a per-pin
-// block time; an exact chain-RPC block timestamp is a server-side refinement).
+// with that height's newest block timestamp.
 func DeriveBoundary(events map[string][]*Pin, toBlock int64) Boundary {
 	height := int64(-1)
 	ts := int64(0)
@@ -379,10 +320,27 @@ func DeriveBoundary(events map[string][]*Pin, toBlock int64) Boundary {
 	return Boundary{Height: height, BlockTs: ts}
 }
 
-// Replay computes F(E,B) for one task root. events maps each protocol path to
-// its enumerated pins (raw, unfiltered); the function applies the freeze
-// collection rules itself: mempool excluded, payload-accepted only, taskid
-// scope, to-boundary filter.
+// chainEventsFrom converts admitted pins into the v1.2.1 engine's neutral
+// event form (path short names; timestamps normalized to milliseconds — pin
+// timestamps are chain seconds).
+func chainEventsFrom(admitted map[string][]*replayEvent) []*ChainEvent {
+	out := []*ChainEvent{}
+	for _, path := range EventPaths {
+		for _, ev := range admitted[path] {
+			out = append(out, &ChainEvent{
+				PinID: ev.pin.ID, Path: PoolName(path), Author: ev.pin.GlobalMetaID,
+				Height: ev.pin.GenesisHeight, TxIndex: ev.pin.TxIndex,
+				TimestampMs: ev.ts * 1000, Body: ev.body,
+			})
+		}
+	}
+	return out
+}
+
+// Replay computes F(E,B) for one task root under v1.2.1 semantics and renders
+// the frozen §5 projection. events maps each protocol path to its enumerated
+// pins (raw, unfiltered); the collection rules (mempool, payload §〇,
+// to-boundary filter) are applied here.
 func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayResult, error) {
 	res := &ReplayResult{
 		RootPinID:          root,
@@ -391,8 +349,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		Nodes:              map[string]*NodeReplay{},
 		EventCountByPath:   map[string]int{},
 		Policy:             map[string]any{},
+		IgnoredEvents:      []IgnoredEvent{},
+		DisputedNodes:      []string{},
+		HAct2Height:        HAct2,
 	}
-	// ---- admit events: confirmed, in-boundary, payload-accepted ----
 	admitted, mempool, rejected := admitEvents(events, boundary)
 	res.ExcludedMempool = mempool
 	res.RejectedPayload = rejected
@@ -401,29 +361,20 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		res.EventCount += len(admitted[path])
 	}
 
-	// ---- task root ----
-	var taskEv *replayEvent
-	for _, ev := range admitted[PathTask] {
-		if ev.pin.ID == root {
-			taskEv = ev
-			break
-		}
+	v, err := ReplayV121(chainEventsFrom(admitted), V121Options{RootPinID: root, NowMs: boundary.BlockTs * 1000})
+	if err != nil {
+		return nil, err
 	}
-	if taskEv == nil {
-		return nil, fmt.Errorf("task root %s not found among admitted /protocols/metatask/task events", root)
-	}
-	res.Publisher = taskEv.pin.GlobalMetaID
-	res.TaskTitle = payloadString(taskEv.body, "title")
-	res.TreeID = payloadString(taskEv.body, "treeid")
-	res.SpecID = payloadString(taskEv.body, "specid")
-	if p, ok := taskEv.body["policy"].(map[string]any); ok {
-		res.Policy = p
-	}
-	res.Quorum = policyInt(res.Policy, "verify_quorum", 2)
-	res.TTLHours = policyInt(res.Policy, "claim_ttl_hours", 0)
-	res.WindowHours = policyInt(res.Policy, "verify_window_hours", 0)
 
-	// spec resolution (panorama直链用).
+	res.Publisher = v.Publisher
+	res.TaskTitle = v.Title
+	res.TreeID = v.TreePinID
+	res.SpecID = v.SpecID
+	res.Policy = v.RawPolicy
+	res.Quorum = v.Quorum
+	res.TTLHours = v.TTLHours
+	res.WindowHours = v.WindowHours
+	res.TreeResolved = v.TreePinID != "" && v.EffectiveTree != nil
 	for _, ev := range admitted[PathSpec] {
 		if ev.pin.ID == res.SpecID {
 			res.SpecResolved = true
@@ -431,481 +382,283 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		}
 	}
 
-	// tree: node universe + parent/title/kind/specid/deps.
-	tree := map[string]treeNodeInfo{}
-	if res.TreeID != "" {
-		for _, ev := range admitted[PathTree] {
-			if ev.pin.ID != res.TreeID {
-				continue
-			}
-			if nodes, ok := ev.body["nodes"].([]any); ok {
-				for _, n := range nodes {
-					obj, ok := n.(map[string]any)
-					if !ok {
-						continue
-					}
-					id := payloadString(obj, "id")
-					if id == "" {
-						continue
-					}
-					tm := tree[id]
-					if v, ok := obj["parent"]; ok && v != nil {
-						if ps, ok2 := v.(string); ok2 {
-							tm.parent = &ps
-						}
-					}
-					tm.title = payloadString(obj, "title")
-					tm.kind = payloadString(obj, "kind")
-					if v, ok := obj["specid"]; ok && v != nil {
-						if ss, ok2 := v.(string); ok2 {
-							tm.specid = &ss
-						}
-					}
-					tm.deps = payloadStrings(obj, "deps")
-					if tm.deps == nil {
-						tm.deps = []string{}
-					}
-					if pv, ok := obj["params"].(map[string]any); ok {
-						tm.params = pv
-					} else {
-						tm.params = map[string]any{}
-					}
-					tree[id] = tm
-				}
-				res.TreeResolved = true
-			}
-			break
+	res.TaskComplete = v.TaskComplete
+	res.RootVerified = v.TaskComplete
+	res.EventSetHash = v.EventSetHash
+	res.BoundaryBlock = v.BoundaryBlock
+	res.AmendHead = v.AmendHead
+	res.IgnoredEvents = v.IgnoredEvents
+	for _, node := range v.NodeOrder {
+		if v.DisputedNodes[node] {
+			res.DisputedNodes = append(res.DisputedNodes, node)
 		}
 	}
-	rootAuthor := taskEv.pin.GlobalMetaID
-
-	// ---- node states ----
-	states := map[string]*nodeState{}
-	getState := func(id string) *nodeState {
-		if s, ok := states[id]; ok {
-			return s
+	if v.Settlement != nil {
+		var m map[string]any
+		if err := json.Unmarshal(v.Settlement.Canonical, &m); err != nil {
+			return nil, fmt.Errorf("decode settlement manifest: %w", err)
 		}
-		s := &nodeState{id: id, state: StateOpen, outcome: OutcomeNone, ballots: map[string]ballotRec{}}
-		if _, ok := tree[id]; ok {
-			s.inTree = true
-		}
-		states[id] = s
-		return s
-	}
-	for id := range tree {
-		getState(id)
+		res.Settlement = m
 	}
 
-	// merged timeline: claim + release + submission (+ verify) in ≺ order.
-	var timeline []*replayEvent
-	inScope := func(ev *replayEvent) bool { return payloadString(ev.body, "taskid") == root }
-	for _, ev := range admitted[PathClaim] {
-		if inScope(ev) {
-			timeline = append(timeline, ev)
-		}
-	}
-	for _, ev := range admitted[PathRelease] {
-		if inScope(ev) {
-			timeline = append(timeline, ev)
-		}
-	}
-	for _, ev := range admitted[PathSubmission] {
-		if inScope(ev) {
-			timeline = append(timeline, ev)
-		}
-	}
-	timeline = append(timeline, admitted[PathVerify]...) // verify filtered by target at processing time
-	sort.SliceStable(timeline, func(i, j int) bool { return replayLess(timeline[i], timeline[j]) })
-
-	// submission ownership maps. activeSubOwner drives the state machine
-	// (current cycle only). allSubOwner covers EVERY in-scope submission
-	// event — effective or not — so a verify vote can always find its node
-	// when its targetid names any real submission (A1-6 zero-drop: only a
-	// targetid matching no submission event at all stays unresolved).
-	// globalSubTask maps EVERY admitted submission (any task) to its task so
-	// a vote belonging to another task's submission is skipped here instead
-	// of polluting this root's unresolved set (keeps per-root unresolved
-	// sets disjoint for the run-level unresolvedCount sum).
-	activeSubOwner := map[string]string{} // submission pinId -> node (current cycle only)
-	allSubOwner := map[string]string{}    // submission pinId -> node (any in-scope submission event, effective or not)
-	globalSubTask := map[string]string{}  // submission pinId -> task root (any admitted submission event)
+	// Verify pins whose targetid matches no submission event at all stay
+	// unresolved (A1-6 zero-drop); votes on another task's submissions are
+	// that root's business and never pollute this root's set.
+	globalSubTask := map[string]string{}
 	for _, ev := range admitted[PathSubmission] {
 		globalSubTask[ev.pin.ID] = payloadString(ev.body, "taskid")
-		if inScope(ev) {
-			if node := payloadString(ev.body, "node"); node != "" {
-				allSubOwner[ev.pin.ID] = node
-			}
+	}
+
+	childrenOf := map[string][]string{}
+	for _, id := range v.TreeOrder {
+		n := v.EffectiveTree[id]
+		if n == nil {
+			continue
+		}
+		if p, isStr := n.Parent.(string); isStr {
+			childrenOf[p] = append(childrenOf[p], id)
 		}
 	}
 
-	ttlDeadline := func(claimTs int64) int64 {
-		if res.TTLHours <= 0 {
-			return 0
-		}
-		return claimTs + int64(res.TTLHours)*3600
-	}
-	windowDeadline := func(subTs int64) int64 {
-		if res.WindowHours <= 0 {
-			return 0
-		}
-		return subTs + int64(res.WindowHours)*3600
-	}
+	for _, id := range v.NodeOrder {
+		st := v.NodeStates[id]
+		treeRec := v.EffectiveTree[id]
 
-	// A4-3: lastWrite/lastActivity = the ≺-max recorded event (the full
-	// order decides same-block ties — never arrival or collection order).
-	touch := func(s *nodeState, ev *replayEvent) {
-		if s.lastTouched == nil || replayLess(s.lastTouched, ev) {
-			s.lastTouched = ev
-		}
-	}
-
-	addEvent := func(s *nodeState, ev *replayEvent, validity, reason, summary string) {
-		er := EventRecord{
-			EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
-			BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
-			Kind: PoolName(ev.pin.Path), Summary: summary, Validity: validity,
-			txIdx: ev.pin.TxIndex,
-		}
-		if reason != "" {
-			er.IgnoreReason = reasonPtr(reason)
-		}
-		s.events = append(s.events, er)
-	}
-
-	reject := func(s *nodeState, ev *replayEvent) {
-		// 裁定三 / A2-1 (fail 优先批式判定): any effective fail sends the node
-		// back to open — the FIRST decisive event wins, regardless of whether
-		// quorum was satisfied earlier in the cycle. The current cycle's
-		// submission stops being active and no verifiedAt survives.
-		s.state = StateOpen
-		s.outcome = OutcomeRejected
-		delete(activeSubOwner, s.subID())
-		s.sub, s.subTs = nil, 0
-		s.holder, s.holderID, s.claimTs = nil, "", 0
-		s.quorumTs = 0 // a rejected cycle never carries a verifiedAt
-		touch(s, ev)
-	}
-
-	for _, ev := range timeline {
-		switch ev.pin.Path {
-		case PathClaim:
-			node := payloadString(ev.body, "node")
-			s := getState(node)
-			summary := "claim node=" + node
-			// A2-1: quorum satisfaction is not decisive — the lock is held
-			// until a decisive event (valid fail / release), so a new claim
-			// on a quorum-satisfied node is simply superseded.
-			if s.holder != nil {
-				addEvent(s, ev, "ignored", IgnoreSupersededClaim, summary)
-				touch(s, ev)
-				break
-			}
-			// new cycle
-			s.holder, s.holderID, s.claimTs = ev, ev.pin.ID, ev.ts
-			s.sub, s.subTs = nil, 0
-			s.ballots = map[string]ballotRec{}
-			s.passes = 0
-			s.quorumTs = 0
-			s.cycleSeq++
-			s.outcome = OutcomeNone
-			s.state = StateClaimed
-			addEvent(s, ev, "counted", "", summary)
-			touch(s, ev)
-
-		case PathRelease:
-			node := payloadString(ev.body, "node")
-			s := getState(node)
-			summary := "release claimid=" + payloadString(ev.body, "claimid")
-			// A2-1: release is decisive whenever the holder matches — a
-			// quorum-satisfied cycle is still releasable (t47: release ends
-			// cycle 1 after quorum; verified only materializes via cycle 2).
-			if s.holder == nil || s.holderID != payloadString(ev.body, "claimid") {
-				addEvent(s, ev, "ignored", IgnoreStateNoOp, summary)
-				touch(s, ev)
-				break
-			}
-			s.holder, s.holderID, s.claimTs = nil, "", 0
-			delete(activeSubOwner, s.subID())
-			s.sub, s.subTs = nil, 0
-			s.ballots = map[string]ballotRec{}
-			s.passes = 0
-			s.quorumTs = 0
-			s.state = StateOpen
-			s.outcome = OutcomeReleased
-			addEvent(s, ev, "counted", "", summary)
-			touch(s, ev)
-
-		case PathSubmission:
-			node := payloadString(ev.body, "node")
-			s := getState(node)
-			summary := "submission node=" + node
-			switch {
-			case s.holder == nil || payloadString(ev.body, "claimid") != s.holderID:
-				addEvent(s, ev, "ignored", IgnoreClaimIDMismatch, summary)
-				touch(s, ev)
-			case ev.pin.GlobalMetaID != s.holder.pin.GlobalMetaID:
-				// Freeze submission row: 作者=当期持有人 — the right claim
-				// ridden by anyone else never attaches.
-				addEvent(s, ev, "ignored", IgnoreSubmitterNotHolder, summary)
-				touch(s, ev)
-			case s.sub != nil:
-				addEvent(s, ev, "ignored", IgnoreNotEarliestInCyc, summary)
-				touch(s, ev)
-			default:
-				s.sub, s.subTs = ev, ev.ts
-				s.state = StateSubmitted
-				activeSubOwner[ev.pin.ID] = node
-				addEvent(s, ev, "counted", "", summary)
-				touch(s, ev)
-			}
-
-		case PathVerify:
-			target := payloadString(ev.body, "targetid")
-			vote := VoteRecord{
-				VerifyPinID:      ev.pin.ID,
-				Voter:            ev.pin.GlobalMetaID,
-				Verdict:          payloadString(ev.body, "verdict"),
-				HasEvidence:      payloadPresent(ev.body, "evidence"),
-				HasFailreason:    payloadPresent(ev.body, "failreason"),
-				HasSemanticCheck: payloadPresent(ev.body, "semantic_check"),
-				BlockHeight:      ev.pin.GenesisHeight,
-				BlockTs:          ev.ts,
-				txIdx:            ev.pin.TxIndex,
-				ver:              ev.pin.Version,
-			}
-			node, active := activeSubOwner[target]
-			if !active {
-				// Not the current cycle's active submission: recorded, never drives.
-				// A1-6 zero-drop: any resolvable submission event (effective or
-				// ignored) hangs its votes on the node; the ignoreReason naming
-				// awaits the chair-confirmed closed enum. A vote whose target
-				// belongs to ANOTHER task's submission is skipped here — that
-				// task's own replay hangs it — keeping per-root unresolved
-				// sets disjoint for the run-level unresolvedCount.
-				if owner, known := allSubOwner[target]; known {
-					s := getState(owner)
-					vote.Counts = false
-					vote.IgnoreReason = reasonPtr(IgnoreTargetNotActive)
-					s.votes = append(s.votes, vote)
-					addEvent(s, ev, "ignored", IgnoreTargetNotActive, "verify target="+target)
-					touch(s, ev)
-				} else if gt, gok := globalSubTask[target]; gok && gt != root {
-					// other task's submission — handled by that root's replay
-				} else {
-					res.Unresolved = append(res.Unresolved, EventRecord{
-						EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
-						BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
-						Kind: "verify", Summary: "verify target=" + target,
-						Validity: "ignored", IgnoreReason: reasonPtr(IgnoreUnresolvableTarget),
-					})
-				}
-				break
-			}
-			s := getState(node)
-			s.votes = append(s.votes, vote)
-			idx := len(s.votes) - 1
-			mark := func(reason string) {
-				s.votes[idx].Counts = false
-				s.votes[idx].IgnoreReason = reasonPtr(reason)
-				addEvent(s, ev, "ignored", reason, "verify verdict="+vote.Verdict+" target="+target)
-				touch(s, ev)
-			}
-			gateReason := gateInvalid(ev.body, ev.pin.GenesisHeight)
-			windowOver := false
-			if wd := windowDeadline(s.subTs); wd != 0 && ev.ts > wd {
-				windowOver = true
-			}
-			switch {
-			case vote.Voter == s.subAuthor():
-				mark(IgnoreVoterIsSubmitter)
-			case vote.Voter == rootAuthor:
-				mark(IgnoreVoterIsTaskAuthor)
-			case !payloadPresent(ev.body, "method"):
-				mark(IgnoreEmptyMethod)
-			case gateReason != "":
-				mark(gateReason)
-			case windowOver:
-				// R2: votes arriving after the review-window close never count;
-				// the fact is kept in votes[]/events.
-				mark(IgnoreAfterWindowClose)
-			case vote.Verdict == "invalid":
-				// Explicit verdict=invalid: sends back, occupies no fail slot
-				// (protocol verifyCount, all heights — freeze §3).
-				s.votes[idx].Counts = false
-				s.votes[idx].IgnoreReason = reasonPtr(IgnoreVerdictInvalid)
-				addEvent(s, ev, "ignored", IgnoreVerdictInvalid, "verify verdict=invalid target="+target)
-				reject(s, ev)
-			case vote.Verdict == "fail":
-				if prev, ok := s.ballots[vote.Voter]; ok {
-					// A1-7: the superseded earlier ballot counts neither
-					// good nor bad once the bot's later valid ballot lands.
-					// A4-1: events[] carries the same tags as votes[].
-					s.votes[prev.voteIdx].Counts = false
-					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
-					s.events[prev.eventIdx].Validity = "ignored"
-					s.events[prev.eventIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
-					if prev.verdict == "pass" {
-						s.passes-- // the bot's contribution switches pass→fail
-					}
-				}
-				s.votes[idx].Counts = true
-				addEvent(s, ev, "counted", "", "verify verdict=fail target="+target)
-				s.ballots[vote.Voter] = ballotRec{verdict: "fail", voteIdx: idx, eventIdx: len(s.events) - 1}
-				if ev.pin.GenesisHeight < HAct && !payloadPresent(ev.body, "evidence") {
-					// v1.1 semantics below the switch: a fail without evidence
-					// neither rejects nor blocks verification (freeze §3.1).
-					touch(s, ev)
-					break
-				}
-				reject(s, ev)
-			case vote.Verdict == "pass":
-				if prev, ok := s.ballots[vote.Voter]; ok {
-					s.votes[prev.voteIdx].Counts = false
-					s.votes[prev.voteIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
-					s.events[prev.eventIdx].Validity = "ignored"
-					s.events[prev.eventIdx].IgnoreReason = reasonPtr(IgnoreDuplicateVote)
-					if prev.verdict == "fail" {
-						s.passes++ // the bot's contribution switches fail→pass
-					}
-				} else {
-					s.passes++
-				}
-				s.votes[idx].Counts = true
-				addEvent(s, ev, "counted", "", "verify verdict=pass target="+target)
-				s.ballots[vote.Voter] = ballotRec{verdict: "pass", voteIdx: idx, eventIdx: len(s.events) - 1}
-				// A2-1: quorum satisfaction is NOT a stream transition — the
-				// cycle stays alive (releasable, claim-superseded only) and
-				// the verified verdict materializes at the boundary B. Only
-				// the anchor timestamp is recorded here.
-				if s.passes == res.Quorum && s.quorumTs == 0 {
-					s.quorumTs = ev.ts
-				}
-				touch(s, ev)
-			default:
-				mark(IgnoreUnknownVerdict)
-			}
-		}
-	}
-
-	// ---- boundary evaluation (freeze §3 [B] rows; strictly-greater deadlines)
-	// A2-1: quorum satisfaction is not a stream transition — the verified
-	// verdict materializes HERE for still-alive submitted cycles; expiry
-	// applies to the rest. ----
-	for _, s := range states {
+		machine := StateOpen
 		switch {
-		case s.state == StateSubmitted && s.sub != nil && s.passes >= res.Quorum:
-			s.state = StateVerified
-		case s.state == StateClaimed && s.holder != nil:
-			if wd := ttlDeadline(s.claimTs); wd != 0 && boundary.BlockTs > wd {
-				s.state = StateOpen
-				s.outcome = OutcomeExpiredClaim
-				s.holder, s.holderID, s.claimTs = nil, "", 0
-			}
-		case s.state == StateSubmitted && s.sub != nil:
-			if wd := windowDeadline(s.subTs); wd != 0 && boundary.BlockTs > wd {
-				s.state = StateOpen
-				s.outcome = OutcomeExpiredReviewWindow
-				delete(activeSubOwner, s.subID())
-				s.sub, s.subTs = nil, 0
-				s.ballots = map[string]ballotRec{}
-				s.passes = 0
-			}
-		}
-	}
-
-	// ---- aggregation: parent verified = all children verified && own passed ----
-	aggVerified := map[string]bool{}
-	var agg func(id string) bool
-	agg = func(id string) bool {
-		if v, ok := aggVerified[id]; ok {
-			return v
-		}
-		s := states[id]
-		if s == nil {
-			aggVerified[id] = false
-			return false
-		}
-		own := s.state == StateVerified
-		all := true
-		for _, cid := range treeChildren(tree, id) {
-			if !agg(cid) {
-				all = false
-			}
-		}
-		out := own && all
-		if own && !all {
-			s.aggNote = joinNote(s.aggNote, "own quorum met but not all child nodes verified")
-		}
-		aggVerified[id] = out
-		return out
-	}
-
-	// ---- render ----
-	for id, s := range states {
-		machine := s.state
-		if s.state == StateVerified && !agg(id) {
-			// Aggregation gates the parent's verified state (freeze §3).
+		case st.Status == "verified":
+			machine = StateVerified
+		case st.Holder != nil && st.Cycle != nil && st.Cycle.Effective != nil:
 			machine = StateSubmitted
+		case st.Holder != nil:
+			machine = StateClaimed
 		}
+		outcome := st.LastOutcome
+		if outcome == "" {
+			outcome = OutcomeNone
+		}
+		claimCycles := 0
+		for _, ev := range v.ClaimEventsByNode[id] {
+			if v.ClaimCounted[ev.PinID] {
+				claimCycles++
+			}
+		}
+
 		nr := &NodeReplay{
-			ID: id, Parent: tree[id].parent, Title: tree[id].title, Kind: tree[id].kind,
-			Params: tree[id].params, SpecID: tree[id].specid, Deps: tree[id].deps,
+			ID:           id,
 			MachineState: machine,
-			DisplayState: displayStateOf(machine, s.outcome),
-			CycleOutcome: s.outcome, CycleSeq: s.cycleSeq,
-			Votes:  s.votes,
-			Events: s.events,
-			InTree: s.inTree, AggNote: s.aggNote,
+			DisplayState: displayStateOf(machine, outcome),
+			CycleOutcome: outcome,
+			CycleSeq:     claimCycles,
+			Disputed:     st.Disputed,
+			Votes:        []VoteRecord{},
+			Events:       []EventRecord{},
+			InTree:       st.InTree,
 		}
-		if s.state == StateVerified && s.quorumTs > 0 {
-			vts := s.quorumTs
-			nr.VerifiedAtBlockTs = &vts
-		}
-		if s.lastTouched != nil {
-			lw := s.lastTouched.pin.ID
-			nr.LastWriteEventPinID = &lw
-			lts := s.lastTouched.ts
-			nr.LastActivityTs = &lts
-		}
-		if _, isTree := tree[id]; !isTree {
+		if treeRec != nil {
+			if p, isStr := treeRec.Parent.(string); isStr {
+				nr.Parent = &p
+			}
+			nr.Title = treeRec.Title
+			nr.Kind = treeRec.Kind
+			if s, isStr := treeRec.SpecID.(string); isStr {
+				nr.SpecID = &s
+			}
+			nr.Params = treeRec.Params
+			if nr.Params == nil {
+				nr.Params = map[string]any{}
+			}
+			nr.Deps = treeRec.Deps
+			if nr.Deps == nil {
+				nr.Deps = []string{}
+			}
+			if st.Weight != nil {
+				w := *st.Weight
+				nr.Weight = &w
+			}
+		} else {
+			nr.Params = map[string]any{}
+			nr.Deps = []string{}
 			nr.AggNote = joinNote(nr.AggNote, "node not declared in tree event")
 		}
-		if s.holder != nil {
-			nr.CurrentClaim = &CurrentClaim{
-				ClaimPinID: s.holderID, Claimant: s.holder.pin.GlobalMetaID,
-				BlockHeight: s.holder.pin.GenesisHeight, BlockTs: s.claimTs,
+		if st.Cycle != nil && st.Cycle.Outcome == "verified" && !v.FinalVerified[id] {
+			allKids := true
+			for _, c := range childrenOf[id] {
+				if !v.FinalVerified[c] {
+					allKids = false
+					break
+				}
 			}
-			if wd := ttlDeadline(s.claimTs); wd > 0 {
+			if allKids && len(childrenOf[id]) > 0 {
+				nr.AggNote = joinNote(nr.AggNote, "aggregation childids do not correspond to the children's verified submissions")
+			} else {
+				nr.AggNote = joinNote(nr.AggNote, "own quorum met but not all child nodes verified")
+			}
+		}
+		if st.VerifiedAtMs > 0 && v.FinalVerified[id] {
+			vts := st.VerifiedAtMs / 1000
+			nr.VerifiedAtBlockTs = &vts
+		}
+
+		if st.Holder != nil {
+			nr.CurrentClaim = &CurrentClaim{
+				ClaimPinID:  st.Holder.PinID,
+				Claimant:    st.Holder.Claimant,
+				BlockHeight: st.Holder.Height,
+				BlockTs:     st.Holder.SinceMs / 1000,
+			}
+			if res.TTLHours > 0 {
+				wd := (st.Holder.SinceMs + int64(res.TTLHours)*3_600_000) / 1000
 				nr.CurrentClaim.TTLDeadlineTs = &wd
 			}
 		}
-		if s.sub != nil {
+		if st.Cycle != nil && st.Cycle.Effective != nil {
+			sub := st.Cycle.Effective
 			as := &ActiveSubmission{
-				SubmissionPinID: s.sub.pin.ID, Submitter: s.sub.pin.GlobalMetaID,
-				BlockHeight: s.sub.pin.GenesisHeight, BlockTs: s.subTs,
-				Hash:             payloadString(s.sub.body, "hash"),
-				ChildIDs:         payloadStrings(s.sub.body, "childids"),
-				WindowDeadlineTs: windowDeadline(s.subTs),
+				SubmissionPinID: sub.PinID,
+				Submitter:       sub.Author,
+				BlockHeight:     sub.Height,
+				BlockTs:         sub.AtMs / 1000,
+				Hash:            payloadString(sub.Body, "hash"),
+				ChildIDs:        payloadStrings(sub.Body, "childids"),
 			}
-			if v := payloadString(s.sub.body, "contentType"); v != "" {
-				as.ContentType = &v
+			if as.ChildIDs == nil {
+				as.ChildIDs = []string{}
 			}
-			if v := payloadString(s.sub.body, "attachment"); v != "" {
-				as.Attachment = &v
+			if cv := payloadString(sub.Body, "contentType"); cv != "" {
+				as.ContentType = &cv
 			}
-			if r, ok := s.sub.body["result"].(map[string]any); ok {
+			if av := payloadString(sub.Body, "attachment"); av != "" {
+				as.Attachment = &av
+			}
+			if r, ok := sub.Body["result"].(map[string]any); ok {
 				as.Result = r
+			}
+			if res.WindowHours > 0 {
+				as.WindowDeadlineTs = (sub.AtMs + int64(res.WindowHours)*3_600_000) / 1000
 			}
 			nr.ActiveSubmission = as
 		}
+
+		// -- per-node event stream + votes (A4-1: events[] mirrors votes[]) ----
+		type row struct {
+			rec  EventRecord
+			vote *VoteRecord
+			key  ordKey
+		}
+		rows := []row{}
+		addRow := func(ev *ChainEvent, path, kind, validity, reason, summary string, vote *VoteRecord) {
+			er := EventRecord{
+				EventPinID: ev.PinID, Path: path, Version: 0,
+				BlockHeight: ev.Height, BlockTs: ev.TimestampMs / 1000,
+				Author: ev.Author, Kind: kind, Summary: summary, Validity: validity,
+				txIdx: ev.TxIndex,
+			}
+			if reason != "" {
+				er.IgnoreReason = reasonPtr(reason)
+				if vote != nil {
+					vote.Counts = false
+					vote.IgnoreReason = reasonPtr(reason)
+				}
+			}
+			rows = append(rows, row{rec: er, vote: vote, key: ordKeyOf(ev)})
+		}
+
+		for _, ev := range v.ClaimEventsByNode[id] {
+			validity, reason := "counted", ""
+			if !v.ClaimCounted[ev.PinID] {
+				validity, reason = "ignored", IgnoreSupersededClaim
+			}
+			addRow(ev, PathClaim, "claim", validity, reason, "claim node="+id, nil)
+		}
+		for _, ev := range v.ReleaseEventsByNode[id] {
+			validity, reason := "counted", ""
+			if !v.ReleaseCounted[ev.PinID] {
+				validity, reason = "ignored", IgnoreStateNoOp
+			}
+			addRow(ev, PathRelease, "release", validity, reason, "release claimid="+payloadString(ev.Body, "claimid"), nil)
+		}
+		for _, ev := range v.SubmissionEventsByNode[id] {
+			validity, reason := "counted", ""
+			if v.SubmissionCycle[ev.PinID] == nil {
+				validity = "ignored"
+				reason = v.IgnoredByPin[ev.PinID]
+				if reason != IgnoreDuplicateWithoutSupersede && reason != IgnoreSupersedePredicateFailed {
+					reason = IgnoreClaimIDMismatch
+				}
+			}
+			addRow(ev, PathSubmission, "submission", validity, reason, "submission node="+id, nil)
+		}
+		effectivePin := ""
+		if st.Cycle != nil && st.Cycle.Effective != nil {
+			effectivePin = st.Cycle.Effective.PinID
+		}
+		for _, sub := range v.SubmissionEventsByNode[id] {
+			for _, ev := range v.VerifyByTarget[sub.PinID] {
+				d := v.VerifyDisposition[ev.PinID]
+				vr := &VoteRecord{
+					VerifyPinID:      ev.PinID,
+					Voter:            ev.Author,
+					Verdict:          payloadString(ev.Body, "verdict"),
+					HasEvidence:      payloadPresent(ev.Body, "evidence"),
+					HasFailreason:    payloadPresent(ev.Body, "failreason"),
+					HasSemanticCheck: payloadPresent(ev.Body, "semantic_check"),
+					Counts:           d != nil && d.Counts,
+					BlockHeight:      ev.Height,
+					BlockTs:          ev.TimestampMs / 1000,
+					txIdx:            ev.TxIndex,
+				}
+				validity, reason := "counted", ""
+				if d == nil || !d.Counts {
+					validity = "ignored"
+					reason = IgnoreUnknownVerdict
+					if d != nil && d.Reason != "" {
+						reason = d.Reason
+					}
+					if d != nil && d.Reason == "" && sub.PinID != effectivePin {
+						reason = IgnoreTargetNotActive
+					}
+				}
+				addRow(ev, PathVerify, "verify", validity, reason,
+					"verify verdict="+vr.Verdict+" target="+sub.PinID, vr)
+			}
+		}
+		sort.SliceStable(rows, func(i, j int) bool { return ordLess(rows[i].key, rows[j].key) })
+		var lastKey ordKey
+		haveLast := false
+		for _, r := range rows {
+			nr.Events = append(nr.Events, r.rec)
+			if r.vote != nil {
+				nr.Votes = append(nr.Votes, *r.vote)
+			}
+			if !haveLast || ordLess(lastKey, r.key) {
+				lastKey, haveLast = r.key, true
+				lw := r.rec.EventPinID
+				nr.LastWriteEventPinID = &lw
+				lts := r.rec.BlockTs
+				nr.LastActivityTs = &lts
+			}
+		}
 		res.Nodes[id] = nr
 	}
-	res.NodeOrder = sortedNodeIDs(states)
-	if rootID := treeRootOf(tree); rootID != "" {
-		if rootState := states[rootID]; rootState != nil {
-			res.RootVerified = agg(rootID)
+	res.NodeOrder = append([]string{}, v.NodeOrder...)
+
+	for _, ev := range admitted[PathVerify] {
+		target := payloadString(ev.body, "targetid")
+		if _, known := globalSubTask[target]; known {
+			continue // that submission's own node carries it (this task or another)
 		}
+		res.Unresolved = append(res.Unresolved, EventRecord{
+			EventPinID: ev.pin.ID, Path: ev.pin.Path, Version: ev.pin.Version,
+			BlockHeight: ev.pin.GenesisHeight, BlockTs: ev.ts, Author: ev.pin.GlobalMetaID,
+			Kind: "verify", Summary: "verify target=" + target,
+			Validity: "ignored", IgnoreReason: reasonPtr(IgnoreUnresolvableTarget),
+			txIdx: ev.pin.TxIndex,
+		})
 	}
+	sort.SliceStable(res.Unresolved, func(i, j int) bool {
+		return replayLess(&replayEvent{pin: &Pin{GenesisHeight: res.Unresolved[i].BlockHeight, TxIndex: res.Unresolved[i].txIdx, Version: res.Unresolved[i].Version, ID: res.Unresolved[i].EventPinID}}, &replayEvent{pin: &Pin{GenesisHeight: res.Unresolved[j].BlockHeight, TxIndex: res.Unresolved[j].txIdx, Version: res.Unresolved[j].Version, ID: res.Unresolved[j].EventPinID}})
+	})
 	return res, nil
 }
 
@@ -928,46 +681,6 @@ func displayStateOf(state, outcome string) string {
 		return "verified"
 	}
 	return state
-}
-
-func treeChildren(tree map[string]treeNodeInfo, id string) []string {
-	var out []string
-	for nid, tm := range tree {
-		if tm.parent != nil && *tm.parent == id {
-			out = append(out, nid)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func treeRootOf(tree map[string]treeNodeInfo) string {
-	var roots []string
-	for id, tm := range tree {
-		if tm.parent == nil {
-			roots = append(roots, id)
-		}
-	}
-	if len(roots) == 0 {
-		return ""
-	}
-	sort.Strings(roots) // deterministic pick when a malformed tree has several
-	return roots[0]
-}
-
-func sortedNodeIDs(states map[string]*nodeState) []string {
-	out := make([]string, 0, len(states))
-	for id := range states {
-		out = append(out, id)
-	}
-	// (len, lexicographic) — same node ordering the pool read path uses.
-	sort.SliceStable(out, func(i, j int) bool {
-		if len(out[i]) != len(out[j]) {
-			return len(out[i]) < len(out[j])
-		}
-		return out[i] < out[j]
-	})
-	return out
 }
 
 func joinNote(a, b string) string {

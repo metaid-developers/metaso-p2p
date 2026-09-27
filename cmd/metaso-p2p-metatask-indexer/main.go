@@ -1,5 +1,6 @@
 // Command metaso-p2p-metatask-indexer runs the metatask replay indexer over
-// the seven protocol paths and emits the frozen projections:
+// the nine protocol paths (v1.2.1: task/tree/spec/claim/release/submission/
+// verify/amend/challenge) and emits the frozen projections:
 //
 //	go run ./cmd/metaso-p2p-metatask-indexer --manapi https://manapi.metaid.io --out data/metatask-projections
 //	go run ./cmd/metaso-p2p-metatask-indexer --snapshot <frozen-dir> --out data/metatask-projections

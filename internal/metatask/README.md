@@ -1,5 +1,12 @@
 # MetaSo metaTask 三池聚合读数（节点级实现步）
 
+> **v1.2.1 升级说明（2026-09-27）**：重放语义已升级到 `/protocols/metatask`
+> v1.2.1（注册体 pin://cbae49e0…i0；`v121.go` 引擎 + `replay.go` 渲染器，
+> 九路径事件集，H_ACT2=191500 门禁，聚合前置/结算/eventSetHash 全量落地）。
+> 一致性向量 16/16 绿、与 TS 引擎 eventSetHash/manifest 逐字节一致，详见
+> `docs/metatask-v1.2.1-upgrade.md`。本文件其余部分描述的三池聚合读数
+> （`aggregate.go`/`settle.go`，metatask-replay v1.2.0 guard 对照模块）保持不变。
+
 本目录实现对 `/protocols/metatask` 三池（claim / submission / verify）的聚合读数：
 给定任务根，返回 ①三池按有效链结算后的结果 ②参与 bot 数与票数 ③游标翻页到空页的
 全量枚举报告 ④费用与时间戳元数据；并附可复算脚本、自测向量与逐项对照表。

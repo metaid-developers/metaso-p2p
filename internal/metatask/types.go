@@ -20,7 +20,9 @@ package metatask
 
 import "time"
 
-// Protocol paths of the seven metaTask event families.
+// Protocol paths of the nine metaTask event families (v1.2.1 eventSetHash
+// path order: task, tree, spec, claim, release, submission, verify, amend,
+// challenge).
 const (
 	PathTask       = "/protocols/metatask/task"
 	PathTree       = "/protocols/metatask/tree"
@@ -29,11 +31,13 @@ const (
 	PathRelease    = "/protocols/metatask/release"
 	PathSubmission = "/protocols/metatask/submission"
 	PathVerify     = "/protocols/metatask/verify"
+	PathAmend      = "/protocols/metatask/amend"
+	PathChallenge  = "/protocols/metatask/challenge"
 )
 
-// EventPaths is the full set of paths the replay consumes, in the order the
-// on-chain engine documents them.
-var EventPaths = []string{PathTask, PathTree, PathSpec, PathClaim, PathRelease, PathSubmission, PathVerify}
+// EventPaths is the full set of paths the replay consumes, in the v1.2.1
+// eventSetHash order (settlement.eventSetHash.recipe).
+var EventPaths = []string{PathTask, PathTree, PathSpec, PathClaim, PathRelease, PathSubmission, PathVerify, PathAmend, PathChallenge}
 
 // PoolPaths are the three pools the aggregation reports on.
 var PoolPaths = []string{PathClaim, PathSubmission, PathVerify}
@@ -86,6 +90,10 @@ func PoolName(path string) string {
 		return "spec"
 	case PathRelease:
 		return "release"
+	case PathAmend:
+		return "amend"
+	case PathChallenge:
+		return "challenge"
 	}
 	return path
 }
@@ -228,7 +236,7 @@ type Enumeration struct {
 	Complete bool                       `json:"complete"`
 	// Unresolved lists paths whose walk did not reach an explicit empty page.
 	Unresolved []string `json:"unresolved,omitempty"`
-	// PinSetSHA256 is sha256 over the sorted unique pin ids of all seven
+	// PinSetSHA256 is sha256 over the sorted unique pin ids of all walked
 	// paths — the reproducible identity of the frozen material.
 	PinSetSHA256 string `json:"pin_set_sha256"`
 }

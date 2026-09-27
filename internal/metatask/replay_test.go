@@ -217,29 +217,27 @@ func TestDualSubmissionSameCycle(t *testing.T) {
 			dup = &n.Events[i]
 		}
 	}
-	if dup == nil || dup.IgnoreReason == nil || *dup.IgnoreReason != IgnoreNotEarliestInCyc {
-		t.Fatalf("sub2 not marked not_earliest: %+v", dup)
+	// v1.2.1 (paths.submission.supersedeRule): a repeat submission without
+	// supersedeid is ignored as duplicate_without_supersede (the pre-v1.2.1
+	// freeze name was not_earliest_in_cycle).
+	if dup == nil || dup.IgnoreReason == nil || *dup.IgnoreReason != IgnoreDuplicateWithoutSupersede {
+		t.Fatalf("sub2 not marked duplicate_without_supersede: %+v", dup)
 	}
 }
 
-func TestSubmitterNotHolder(t *testing.T) {
+func TestSubmitterRidesClaim(t *testing.T) {
+	// v1.2.1 realignment: submission validity rides the CLAIM (claimid = the
+	// live claim), not the pin author — the reference walk attaches a
+	// submission authored by anyone as long as it names the current holder
+	// claim. The pre-v1.2.1 freeze rejected it as submitter_not_holder.
 	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot2, subPayload("claim1", "n1")),
 	)...)
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
-	if n.MachineState != StateClaimed || n.ActiveSubmission != nil {
-		t.Fatalf("submission by non-holder attached: %+v", n.ActiveSubmission)
-	}
-	var rec *EventRecord
-	for i := range n.Events {
-		if n.Events[i].EventPinID == "sub1" {
-			rec = &n.Events[i]
-		}
-	}
-	if rec == nil || rec.IgnoreReason == nil || *rec.IgnoreReason != IgnoreSubmitterNotHolder {
-		t.Fatalf("sub1 not marked submitter_not_holder: %+v", rec)
+	if n.MachineState != StateSubmitted || n.ActiveSubmission == nil || n.ActiveSubmission.Submitter != aBot2 {
+		t.Fatalf("submission riding the live claim must attach: %s %+v", n.MachineState, n.ActiveSubmission)
 	}
 }
 
@@ -309,17 +307,17 @@ func TestFailGateDualTrack(t *testing.T) {
 		t.Fatalf("7b: %s/%s", n.MachineState, n.CycleOutcome)
 	}
 
-	// < H_ACT without evidence: neither rejects nor blocks verification.
+	// < H_ACT without evidence: v1.2.1 realignment — any valid fail (with or
+	// without evidence) rejects immediately (ruling three; the pre-v1.2.1
+	// freeze kept the v1.1 evidence condition below the switch).
 	events = evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
 		tp(PathVerify, "vF", HAct-1, 0, tBase+3_000, aBot2, votePayload("sub1", "fail", `,"semantic_check":"ok"`)),
-		tp(PathVerify, "v1", HAct, 0, tBase+4_000, aBot3, votePayload("sub1", "pass", withSC)),
-		tp(PathVerify, "v2", HAct+1, 0, tBase+5_000, aBot2, votePayload("sub1", "pass", withSC)),
 	)...)
 	res = mustReplay(t, events, tNow)
 	n = nodeOf(t, res, "n1")
-	if n.MachineState != StateVerified || n.CycleOutcome != OutcomeNone {
+	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeRejected {
 		t.Fatalf("7c: %s/%s", n.MachineState, n.CycleOutcome)
 	}
 }
@@ -373,7 +371,11 @@ func TestTTLExpiryAtBoundary(t *testing.T) {
 	}
 }
 
-func TestWindowExpiryAndLateVotes(t *testing.T) {
+func TestWindowExpiryLateVoteCompletesQuorum(t *testing.T) {
+	// v1.2.1 realignment (replayRules.reviewWindow): the window only reopens
+	// a node whose quorum is still UNMET at expiry. A late ballot that
+	// completes the quorum verifies the cycle — the pre-v1.2.1 freeze marked
+	// it after_window_close and expired the cycle.
 	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
@@ -383,16 +385,31 @@ func TestWindowExpiryAndLateVotes(t *testing.T) {
 	)...)
 	res := mustReplay(t, events, tBase+2_000+24*3600+1_000)
 	n := nodeOf(t, res, "n1")
+	if n.MachineState != StateVerified {
+		t.Fatalf("late quorum-completing vote must verify: %s", n.MachineState)
+	}
+	v2 := findVote(n, "v2")
+	if v2 == nil || !v2.Counts {
+		t.Fatalf("v2 must count: %+v", v2)
+	}
+
+	// Without the late vote the window expiry still reopens the node.
+	events = evMap(append(baseEvents(48, 2, 24, treeOneNode),
+		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct+1, 0, tBase+3_000, aBot2, votePayload("sub1", "pass", withSC)),
+	)...)
+	res = mustReplay(t, events, tBase+2_000+24*3600+1_000)
+	n = nodeOf(t, res, "n1")
 	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeExpiredReviewWindow {
 		t.Fatalf("expired window: %s/%s", n.MachineState, n.CycleOutcome)
 	}
-	v2 := findVote(n, "v2")
-	if v2 == nil || v2.Counts || v2.IgnoreReason == nil || *v2.IgnoreReason != IgnoreAfterWindowClose {
-		t.Fatalf("v2: %+v", v2)
-	}
 }
 
-func TestVerdictInvalidSendsBack(t *testing.T) {
+func TestVerdictInvalidDoesNotSendBack(t *testing.T) {
+	// v1.2.1 realignment (paths.verify.fields): a missing failreason maps to
+	// verdict=invalid semantics — it occupies no fail slot and never triggers
+	// the send-back. The pre-v1.2.1 freeze sent the node back to open.
 	events := evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
@@ -400,39 +417,47 @@ func TestVerdictInvalidSendsBack(t *testing.T) {
 	)...)
 	res := mustReplay(t, events, tNow)
 	n := nodeOf(t, res, "n1")
-	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeRejected {
-		t.Fatalf("invalid should send back: %s/%s", n.MachineState, n.CycleOutcome)
+	if n.MachineState != StateSubmitted || n.CycleOutcome != OutcomeNone {
+		t.Fatalf("invalid verdict must not send back: %s/%s", n.MachineState, n.CycleOutcome)
 	}
 	vi := findVote(n, "vI")
-	if vi == nil || vi.Counts {
+	if vi == nil || vi.Counts || vi.IgnoreReason == nil || *vi.IgnoreReason != IgnoreVerdictInvalid {
 		t.Fatalf("invalid vote must not occupy a slot: %+v", vi)
 	}
 }
 
 func TestAggregationGatesParent(t *testing.T) {
-	childOK := []*Pin{
-		tp(PathClaim, "claim2", 101, 1, tBase+1_000, aBot2, claimPayload("n2")),
-		tp(PathSubmission, "sub2", 102, 1, tBase+2_000, aBot2, subPayload("claim2", "n2")),
-		tp(PathVerify, "w1", HAct+1, 1, tBase+3_000, aBot1, votePayload("sub2", "pass", withSC)),
-		tp(PathVerify, "w2", HAct+2, 1, tBase+4_000, aBot3, votePayload("sub2", "pass", withSC)),
-	}
+	// 12a: below H_ACT2 (grandfather band, paths.aggregationPrecondition.
+	// disclosedDivergence): a parent whose own quorum met keeps its recorded
+	// vote-level verified state even while a child is stuck claimed.
 	parent := []*Pin{
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
 		tp(PathVerify, "v1", HAct+3, 0, tBase+5_000, aBot2, votePayload("sub1", "pass", withSC)),
 		tp(PathVerify, "v2", HAct+4, 0, tBase+6_000, aBot3, votePayload("sub1", "pass", withSC)),
 	}
-	// 12a: child verified + parent quorum met → parent verified, root done.
-	events := evMap(append(baseEvents(48, 2, 24, treeTwoNodes), append(childOK, parent...)...)...)
+	stuckChild := []*Pin{
+		tp(PathClaim, "claim2", 101, 1, tBase+1_000, aBot2, claimPayload("n2")),
+	}
+	events := evMap(append(append(baseEvents(48, 2, 24, treeTwoNodes), stuckChild...), parent...)...)
 	res := mustReplay(t, events, tNow)
 	n1 := nodeOf(t, res, "n1")
 	if n1.MachineState != StateVerified || !res.RootVerified {
-		t.Fatalf("12a: n1=%s root=%v note=%s", n1.MachineState, res.RootVerified, n1.AggNote)
+		t.Fatalf("12a grandfather: n1=%s root=%v note=%s", n1.MachineState, res.RootVerified, n1.AggNote)
 	}
-	// 12b: child stuck claimed → parent agg-blocked (submitted + note).
-	base := append(baseEvents(48, 2, 24, treeTwoNodes), tp(PathClaim, "claim2", 101, 1, tBase+1_000, aBot2, claimPayload("n2")))
-	base = append(base, parent...)
-	events = evMap(base...)
+
+	// 12b: H_ACT2-era heights (task/tree/submission ≥ 191500) — the
+	// aggregation precondition is enforced: child unverified ⇒ parent blocked.
+	parentH2 := []*Pin{
+		tp(PathClaim, "claim1", HAct2+1, 0, tBase+1_000, aBot1, claimPayload("n1")),
+		tp(PathSubmission, "sub1", HAct2+2, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
+		tp(PathVerify, "v1", HAct2+3, 0, tBase+5_000, aBot2, votePayload("sub1", "pass", withSC)),
+		tp(PathVerify, "v2", HAct2+4, 0, tBase+6_000, aBot3, votePayload("sub1", "pass", withSC)),
+	}
+	childH2 := []*Pin{
+		tp(PathClaim, "claim2", HAct2+1, 1, tBase+1_000, aBot2, claimPayload("n2")),
+	}
+	events = evMap(append(append(baseEvents(48, 2, 24, treeTwoNodes), childH2...), parentH2...)...)
 	res = mustReplay(t, events, tNow)
 	n1 = nodeOf(t, res, "n1")
 	if n1.MachineState != StateSubmitted || n1.DisplayState != StateSubmitted {
@@ -638,8 +663,10 @@ func TestQuorumNotTerminalInStream(t *testing.T) {
 		t.Fatalf("cycle-1 pass must count: %+v", v2)
 	}
 
-	// Same shape without the re-claim: release after quorum ends the cycle
-	// as released — the node never verifies on the released submission.
+	// Same shape without the re-claim: v1.2.1 realignment — quorum met at v2
+	// verifies the cycle immediately (verify.rules: 时间＝满足 quorum 那票的块
+	// 时间); the later release only drops the claim, it cannot unverify a
+	// concluded cycle (the pre-v1.2.1 freeze ended it as released/open).
 	events = evMap(append(baseEvents(48, 2, 24, treeOneNode),
 		tp(PathClaim, "claim1", 101, 0, tBase+1_000, aBot1, claimPayload("n1")),
 		tp(PathSubmission, "sub1", 102, 0, tBase+2_000, aBot1, subPayload("claim1", "n1")),
@@ -649,11 +676,8 @@ func TestQuorumNotTerminalInStream(t *testing.T) {
 	)...)
 	res = mustReplay(t, events, tNow)
 	n = nodeOf(t, res, "n1")
-	if n.MachineState != StateOpen || n.CycleOutcome != OutcomeReleased {
-		t.Fatalf("release after quorum must be decisive: %s/%s", n.MachineState, n.CycleOutcome)
-	}
-	if n.VerifiedAtBlockTs != nil {
-		t.Fatalf("released cycle must not carry verifiedAt: %v", *n.VerifiedAtBlockTs)
+	if n.MachineState != StateVerified || n.VerifiedAtBlockTs == nil || *n.VerifiedAtBlockTs != tBase+4_000 {
+		t.Fatalf("release after quorum must not unverify: %s verifiedAt=%v", n.MachineState, n.VerifiedAtBlockTs)
 	}
 }
 

@@ -50,6 +50,7 @@ func buildServeFixture(t *testing.T) *SnapshotLister {
 			`{"root":"n1","nodes":[{"id":"n1","parent":null,"title":"r","kind":"aggregate","specid":null,"params":{"k":1},"deps":[]}]}`)},
 		"spec":    []map[string]any{},
 		"release": nil,
+		"amend":   nil,
 		"claim":   {pin("claim1", P+"claim", 101, 0, t0+60, b1, `{"taskid":"task1","node":"n1"}`)},
 		"submission": {pin("sub1", P+"submission", 102, 0, t0+120, b1,
 			`{"taskid":"task1","node":"n1","claimid":"claim1","result":{"x":1},"hash":"h","contentType":"application/json"}`)},
@@ -57,6 +58,7 @@ func buildServeFixture(t *testing.T) *SnapshotLister {
 			pin("v1", P+"verify", 190001, 0, t0+180, b2, `{"targetid":"sub1","verdict":"pass","method":"r","semantic_check":"ok"}`),
 			pin("v2", P+"verify", 190002, 0, t0+240, b3, `{"targetid":"sub1","verdict":"pass","method":"r","semantic_check":"ok"}`),
 		},
+		"challenge": nil,
 	}
 	for pool, pins := range pools {
 		d := filepath.Join(dir, "pages", pool)

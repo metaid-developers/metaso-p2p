@@ -25,6 +25,9 @@ func loadFixtureDir(t *testing.T, dir string) map[string][]*Pin {
 		pool := PoolName(path)
 		raw, err := os.ReadFile(filepath.Join(dir, pool+".json"))
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue // pre-v1.2 fixture sets carry no amend/challenge pools
+			}
 			t.Fatalf("read fixture %s: %v", pool, err)
 		}
 		var rows []map[string]any

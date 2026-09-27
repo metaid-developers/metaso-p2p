@@ -1,0 +1,119 @@
+{
+ "source": "IDBots TS engine (dist-electron/main/services/metatask/engine.js)",
+ "engineAlgoVersion": "idbots-metatask-engine/1.2.1",
+ "fixtureCanonSha256": "106aa1f3bee8ebd48339ceb65f97a12e54247e1e831296a394a974c9cb22f2c4",
+ "entries": [
+  {
+   "id": "r01-open",
+   "eventSetHash": "2faf832400fe9bf58f099d002b6e99de38d223c50540db21652fd6188cf3633d",
+   "boundaryBlock": 189801,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r02-claimed",
+   "eventSetHash": "9dc04573c603e22e034d3309f13d4781bf125f7e88c6598168c2a2ba449f71fa",
+   "boundaryBlock": 189900,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r03-verified",
+   "eventSetHash": "4fb1cf46499c3325407c43f1e9108dcd0174ac39d0fb9933e3910fdca330f97f",
+   "boundaryBlock": 189921,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r04-ttl-expired",
+   "eventSetHash": "9dc04573c603e22e034d3309f13d4781bf125f7e88c6598168c2a2ba449f71fa",
+   "boundaryBlock": 189900,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r05-released-no-resurrection",
+   "eventSetHash": "b80c3a2c4bfaf184feb376eed6c7a155923e27447aa317d850281ccc558c879d",
+   "boundaryBlock": 189902,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r06-missing-semantic-check-not-counted",
+   "eventSetHash": "6190ad1f43970a29125277ffb99b790656bbf8f61bc9bc102f45fa58d327693a",
+   "boundaryBlock": 190031,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r07-hact-boundary-exempt",
+   "eventSetHash": "128c83e607662c648274668e5f69cea2e72fdfc2d118f58ad0288db25347870f",
+   "boundaryBlock": 189999,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r08-hact-boundary-gated",
+   "eventSetHash": "7033b81640935e6e4f8ed0853b1695ee97ebc6270bc79275e400feffc0786c5a",
+   "boundaryBlock": 190000,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r09-last-valid-vote-wins",
+   "eventSetHash": "db3f2fd70fe972688ab8ad71fd560553bd564e83c456e9b61cb9f3a0cd2ae263",
+   "boundaryBlock": 189931,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r10-agg-parent-blocked-hact2",
+   "eventSetHash": "ddf47d2db401b538aa6871985a8a88a5532c520ea2e7a16df7d8d158e8484667",
+   "boundaryBlock": 191622,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r11-agg-grandfathered",
+   "eventSetHash": "8244a302eda3bdc7bf7965fe8fc50936e3617508333d4c95c196d918c2f34105",
+   "boundaryBlock": 189722,
+   "taskComplete": true,
+   "settlementCanonical": "{\"boundaryBlock\":189722,\"disputed\":[],\"engineAlgoVersion\":\"idbots-metatask-engine/1.2.1\",\"eventSetHash\":\"8244a302eda3bdc7bf7965fe8fc50936e3617508333d4c95c196d918c2f34105\",\"shares\":[{\"from\":{\"reviewedBP\":0,\"submittedBP\":5200},\"metaId\":\"idq1sub\",\"shareBP\":5200},{\"from\":{\"reviewedBP\":1300,\"submittedBP\":0},\"metaId\":\"idq1rev1\",\"shareBP\":1300}],\"taskid\":\"task000000000000000000000000000000000000000000000000000003i0\",\"unpaidHistory\":[],\"weightsTableHash\":\"fd088c2e7c6cc26af8f10d7ba852bf14ab176aaeb8b70353244a7f9e45a5c7b8\"}",
+   "settlementSha256": "6a593431a8e3d122e39434562887b2b2589904246b63d77bccd3c488c01730e5"
+  },
+  {
+   "id": "r12-agg-all-green-settles",
+   "eventSetHash": "e2a7f6bed3b35d929b46404c59b9b61d487a245efee11a554dac38584b0c5a61",
+   "boundaryBlock": 191622,
+   "taskComplete": true,
+   "settlementCanonical": "{\"boundaryBlock\":191622,\"disputed\":[],\"engineAlgoVersion\":\"idbots-metatask-engine/1.2.1\",\"eventSetHash\":\"e2a7f6bed3b35d929b46404c59b9b61d487a245efee11a554dac38584b0c5a61\",\"shares\":[{\"from\":{\"reviewedBP\":0,\"submittedBP\":8000},\"metaId\":\"idq1sub\",\"shareBP\":8000},{\"from\":{\"reviewedBP\":1300,\"submittedBP\":0},\"metaId\":\"idq1rev1\",\"shareBP\":1300},{\"from\":{\"reviewedBP\":700,\"submittedBP\":0},\"metaId\":\"idq1rev2\",\"shareBP\":700}],\"taskid\":\"task000000000000000000000000000000000000000000000000000004i0\",\"unpaidHistory\":[],\"weightsTableHash\":\"fd088c2e7c6cc26af8f10d7ba852bf14ab176aaeb8b70353244a7f9e45a5c7b8\"}",
+   "settlementSha256": "928ac81c3f85f4a28502aec6c3c6c3cd05d60ba309b5f735143a689e3e7b0109"
+  },
+  {
+   "id": "r13-agg-childids-mismatch",
+   "eventSetHash": "b76b024369f0b10c99acaff6d119f979ad5a0bcbc580b6ab628fb4d76aa87049",
+   "boundaryBlock": 191622,
+   "taskComplete": false,
+   "settlementCanonical": null,
+   "settlementSha256": null
+  },
+  {
+   "id": "r14-settlement-legacy-residue-discarded",
+   "eventSetHash": "57f621676ccc74e7ec7bbbc161b5df0a51fc4a4b96e046c2fbc3d40c35719317",
+   "boundaryBlock": 191626,
+   "taskComplete": true,
+   "settlementCanonical": "{\"boundaryBlock\":191626,\"disputed\":[],\"engineAlgoVersion\":\"idbots-metatask-engine/1.2.1\",\"eventSetHash\":\"57f621676ccc74e7ec7bbbc161b5df0a51fc4a4b96e046c2fbc3d40c35719317\",\"shares\":[{\"from\":{\"reviewedBP\":0,\"submittedBP\":2666},\"metaId\":\"idq1sub\",\"shareBP\":2666},{\"from\":{\"reviewedBP\":0,\"submittedBP\":2666},\"metaId\":\"idq1sub2\",\"shareBP\":2666},{\"from\":{\"reviewedBP\":0,\"submittedBP\":2666},\"metaId\":\"idq1sub3\",\"shareBP\":2666},{\"from\":{\"reviewedBP\":1334,\"submittedBP\":0},\"metaId\":\"idq1rev1\",\"shareBP\":1334},{\"from\":{\"reviewedBP\":667,\"submittedBP\":0},\"metaId\":\"idq1rev2\",\"shareBP\":667}],\"taskid\":\"task000000000000000000000000000000000000000000000000000006i0\",\"unpaidHistory\":[],\"weightsTableHash\":\"f30cd285281f229fd80641480307ae9956cec368cdb55116643de614b948240f\"}",
+   "settlementSha256": "6ec4a22048971238055a2e35a2b1a963724988f7eb6307f5551dd3db2614e1f9"
+  }
+ ]
+}

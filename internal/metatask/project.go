@@ -48,9 +48,11 @@ type ReplayCoverage struct {
 	UnresolvedCount int               `json:"unresolvedCount"`
 }
 
-// SemanticGate echoes the frozen dual-track switch (D10).
+// SemanticGate echoes the frozen dual-track switch (D10) plus the v1.2.1
+// feature gate H_ACT2 (additive echo; 见 activation.gatedAtHAct2).
 type SemanticGate struct {
 	HAct       int64    `json:"hAct"`
+	HAct2      int64    `json:"hAct2"`
 	RulingPins []string `json:"rulingPins"`
 }
 
@@ -116,7 +118,7 @@ func BuildReplayMeta(scope *RunScope, enum Enumeration, boundary Boundary) Repla
 			VersionEnum:     "by_path",
 			UnresolvedCount: scope.UnresolvedCount,
 		},
-		SemanticGate: SemanticGate{HAct: HAct, RulingPins: append([]string{}, SemanticGateRulingPins...)},
+		SemanticGate: SemanticGate{HAct: HAct, HAct2: HAct2, RulingPins: append([]string{}, SemanticGateRulingPins...)},
 		Freshness:    Freshness{MaxLagBlocks: 5},
 	}
 	var cur *replayEvent
