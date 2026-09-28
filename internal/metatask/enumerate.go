@@ -415,7 +415,7 @@ func (l *SnapshotLister) load() error {
 	if l.loaded {
 		return nil
 	}
-	for _, path := range EventPaths {
+	for _, path := range CollectionPaths {
 		pool := PoolName(path)
 		dir := filepath.Join(l.Dir, "pages", pool)
 		entries, err := filepath.Glob(filepath.Join(dir, "*.json"))
@@ -460,6 +460,15 @@ func (l *SnapshotLister) ListPath(_ context.Context, protocolPath, cursor string
 	}
 	raw, ok := l.pages[protocolPath][cursor]
 	if !ok {
+		// Frozen material predating the roster pool carries no pages/roster/
+		// directory; serve the honest empty (complete) page for the reference
+		// pool rather than failing the whole snapshot replay.
+		if protocolPath == PathRoster && cursor == "" && len(l.pages[protocolPath]) == 0 {
+			return Page{
+				URL: "snapshot:" + protocolPath, HTTPStatus: 200, CursorIn: cursor,
+				ListPresent: true, ListNull: true, FetchedAt: time.Now().UTC(),
+			}, nil
+		}
 		return Page{}, fmt.Errorf("snapshot %s has no recorded page for cursor %q", protocolPath, cursor)
 	}
 	page, err := decodePage(raw)

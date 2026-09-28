@@ -162,9 +162,54 @@ untouched — it is a separate calibration module, not the v1.2.1 replay.
   (identity filtering applies to pass votes only — reference parity).
 - Challenge validity checks the target as the current-cycle effective
   submission (the `target_not_active_verified` reason name notwithstanding).
-- Roster same-side filtering requires the roster pin bodies via
+- ~~Roster same-side filtering requires the roster pin bodies via
   `V121Options.RosterPins` (not yet wired in the indexer's live collection;
-  no roster task exists on chain yet).
+  no roster task exists on chain yet).~~ **Wired 2026-09-29 (wave-1 parity):
+  the indexer sweeps `/protocols/metatask-roster` as the tenth pool
+  (`CollectionPaths`) and passes the decoded bodies into replay.**
+
+## Wave-1 parity fixes (IDBots pre-launch audit, 2026-09-29)
+
+Mirrored from the IDBots TS engine (already landed there) so the three
+engines stay byte-identical on settlement manifests. Regression coverage:
+`internal/metatask/v121_wave1_parity_test.go`.
+
+- **B1 ghost-claim weight poisoning (critical).** A claim/release/submission
+  pin whose node id is not in the task's effective (post-amend) tree is
+  ignored with reason `unknown_node`: no node state, no `openNodes` entry, no
+  `progress.total` inflation, no reach into the settlement weight table.
+  Unfixed, one stray claim de-validated the tree weights (`len(effectiveTree)
+  != progress.total`) and silently flipped a weighted task to the legacy
+  uniform fallback. The engine walk now runs in two passes: pass 1
+  (unfiltered) derives the amend-fold inputs — ghost events only ever touch
+  ghost-keyed state, so the fold is identical either way — and pass 2 applies
+  the membership filter and drives every projection. Legacy treeless tasks
+  (no resolved tree pin) keep implicit node state, and the ghost pins stay in
+  `eventSetHash` (they are facts of the event set; ignored ≠ dropped).
+- **B2 reviewer-accuracy identity filter.** `reviewCorrect`/`reviewTerminal`
+  (the Laplace accuracy `a(r)` feeding the reviewer pool) exclude votes where
+  the voter is the submission author or the task root author — exactly as the
+  settlement reviewer set R(n) already does. `reviewVotes` (participation
+  count, never hashed) still counts them.
+- **B3 same-side roster wiring.** The roster pool `/protocols/metatask-roster`
+  (a flat sibling path, NOT under `/protocols/metatask/*`) is swept as the
+  tenth pool; confirmed, payload-accepted, in-boundary roster bodies
+  (`{groups: string[][]}`) are passed into replay. Votes at height ≥ H_ACT2
+  from a voter sharing a roster group with the submitter or the root author
+  are ignored (`same_side_roster`); pre-H_ACT2 votes are untouched, so
+  pilot-task projections are unchanged. Replay results echo `rosterId` /
+  `rosterResolved` (additive) so a declared-but-missing roster is visible
+  rather than silently unfiltered. `SnapshotLister` serves frozen material
+  that predates the pool as an honest empty page.
+- `replayAlgoVersion` bumped to `metatask-replay-indexer/2.1.0+v1.2.1`
+  (semantic change, D10 full replay). The manifest's `engineAlgoVersion`
+  stays `idbots-metatask-engine/1.2.1` — it names the shared algorithm, not
+  the implementation, and must stay byte-identical across engines.
+
+The 16-vector conformance set and the TS golden parity harness remain green
+unchanged: no vector exercises a ghost node, an identity-conflicted terminal
+vote, or a roster pin, so the pinned eventSetHash/manifest bytes are
+identical before and after the fixes.
 
 ## Files
 

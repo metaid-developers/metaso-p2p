@@ -498,22 +498,27 @@ type V121Result struct {
 	ChallengeTTLDays int64
 	HasSplit         bool
 	RosterID         *string
-	TreePinID        string
-	SpecID           string
-	AmendHead        string
-	EffectiveTree    map[string]*V121TreeNode
-	TreeOrder        []string // effective-tree insertion order
-	NodeOrder        []string // nodeIds sorted by (len, lexicographic)
-	NodeStates       map[string]*V121NodeState
-	TaskComplete     bool
-	RootVerified     bool // same as TaskComplete (v1.2.1: root node verified)
-	Progress         V121Progress
-	Participants     []V121Participant
-	Settlement       *V121Manifest
-	EventSetHash     string
-	BoundaryBlock    int64
-	IgnoredEvents    []IgnoredEvent
-	ExpiryApplied    bool
+	// RosterResolved reports whether the declared split.rosterid was found in
+	// the swept roster pool (opts.RosterPins). The H_ACT2 same-side vote
+	// filter arms only when it resolves — an unresolved roster must be
+	// visible, never a silent no-filter pass.
+	RosterResolved bool
+	TreePinID      string
+	SpecID         string
+	AmendHead      string
+	EffectiveTree  map[string]*V121TreeNode
+	TreeOrder      []string // effective-tree insertion order
+	NodeOrder      []string // nodeIds sorted by (len, lexicographic)
+	NodeStates     map[string]*V121NodeState
+	TaskComplete   bool
+	RootVerified   bool // same as TaskComplete (v1.2.1: root node verified)
+	Progress       V121Progress
+	Participants   []V121Participant
+	Settlement     *V121Manifest
+	EventSetHash   string
+	BoundaryBlock  int64
+	IgnoredEvents  []IgnoredEvent
+	ExpiryApplied  bool
 
 	// Engine internals the renderer needs (not serialized).
 	Cycles                 []*V121Cycle // insertion (chain) order
@@ -961,251 +966,265 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 	timeline = append(timeline, actingVotes...)
 	sortChainEvents(timeline)
 
-	holders := map[string]*V121Holder{}
-	firstClaimOrder := map[string]ordKey{}
-	effectiveClaimCounts := map[string]int{}
-	cycles := []*V121Cycle{} // insertion order = chain order of first attach
-	cycleByNodeClaim := map[string]*V121Cycle{}
-	verifiedSubmissionPins := map[string]bool{}
-	passVotersByNode := map[string]map[string]string{}
-	nodeOfLiveTarget := map[string]string{}
-	claimEventsByNode := map[string][]*ChainEvent{}
-	releaseEventsByNode := map[string][]*ChainEvent{}
-	// Renderer bookkeeping (never part of a hashed output).
-	claimCounted := map[string]bool{}   // claim pin took the lock at its position
-	releaseCounted := map[string]bool{} // release matched the live holder
-	submissionCycle := map[string]*V121Cycle{}
-	nodeOutcome := map[string]string{}
-	reachedVote := map[string]bool{} // surviving ballot reached a live target in the walk
-
-	getCycle := func(node, claimID string) *V121Cycle {
-		return cycleByNodeClaim[node+" "+claimID]
+	// walkState holds everything one pass of the unified ordered walk
+	// produces. The walk runs TWICE (B1 ghost-claim parity fix):
+	//   - pass 1 is unfiltered and derives only the amend-fold inputs
+	//     (firstClaimOrder, verifiedNodeIds, activeCycleNodes). Ghost-node
+	//     entries are harmless there: the fold queries in-tree node ids only.
+	//   - pass 2 runs with the effective-tree membership filter, so a
+	//     claim/release/submission whose node id is NOT in the task's
+	//     effective (post-amend) tree is ignored with reason unknown_node: it
+	//     creates no node state, never enters openNodes, never inflates
+	//     progress.total and never reaches the settlement weight table.
+	// The fold result is identical for both passes (ghost events only ever
+	// touch ghost-keyed state), so pass 1 may feed the fold while pass 2
+	// drives every downstream projection. When the task resolves no tree pin
+	// (legacy treeless tasks) the filter is off and node state stays implicit.
+	type walkState struct {
+		holders                map[string]*V121Holder
+		firstClaimOrder        map[string]ordKey
+		effectiveClaimCounts   map[string]int
+		cycles                 []*V121Cycle // insertion order = chain order of first attach
+		cycleByNodeClaim       map[string]*V121Cycle
+		verifiedSubmissionPins map[string]bool
+		passVotersByNode       map[string]map[string]string
+		nodeOfLiveTarget       map[string]string
+		claimEventsByNode      map[string][]*ChainEvent
+		releaseEventsByNode    map[string][]*ChainEvent
+		// Renderer bookkeeping (never part of a hashed output).
+		claimCounted    map[string]bool // claim pin took the lock at its position
+		releaseCounted  map[string]bool // release matched the live holder
+		submissionCycle map[string]*V121Cycle
+		nodeOutcome     map[string]string
+		reachedVote     map[string]bool // surviving ballot reached a live target in the walk
+		ignoredEvents   []IgnoredEvent
 	}
 
-	for _, pin := range timeline {
-		switch pin.Path {
-		case "claim":
-			node := strAny(pin.Body["node"])
-			if node == "" || holders[node] != nil {
-				if node != "" {
-					claimEventsByNode[node] = append(claimEventsByNode[node], pin)
+	runWalk := func(inTree map[string]bool) *walkState {
+		w := &walkState{
+			holders:                map[string]*V121Holder{},
+			firstClaimOrder:        map[string]ordKey{},
+			effectiveClaimCounts:   map[string]int{},
+			cycleByNodeClaim:       map[string]*V121Cycle{},
+			verifiedSubmissionPins: map[string]bool{},
+			passVotersByNode:       map[string]map[string]string{},
+			nodeOfLiveTarget:       map[string]string{},
+			claimEventsByNode:      map[string][]*ChainEvent{},
+			releaseEventsByNode:    map[string][]*ChainEvent{},
+			claimCounted:           map[string]bool{},
+			releaseCounted:         map[string]bool{},
+			submissionCycle:        map[string]*V121Cycle{},
+			nodeOutcome:            map[string]string{},
+			reachedVote:            map[string]bool{},
+		}
+		ghost := func(node string) bool {
+			return inTree != nil && !inTree[node]
+		}
+		getCycle := func(node, claimID string) *V121Cycle {
+			return w.cycleByNodeClaim[node+" "+claimID]
+		}
+
+		for _, pin := range timeline {
+			switch pin.Path {
+			case "claim":
+				node := strAny(pin.Body["node"])
+				if node == "" {
+					continue
 				}
-				continue
-			}
-			holders[node] = &V121Holder{PinID: pin.PinID, Claimant: pin.Author, SinceMs: pin.TimestampMs, Height: pin.Height}
-			if _, ok := firstClaimOrder[node]; !ok {
-				firstClaimOrder[node] = ordKeyOf(pin)
-			}
-			effectiveClaimCounts[pin.Author]++
-			claimCounted[pin.PinID] = true
-			nodeOutcome[node] = "none"
-			claimEventsByNode[node] = append(claimEventsByNode[node], pin)
-		case "release":
-			node := strAny(pin.Body["node"])
-			if node == "" {
-				continue
-			}
-			releaseEventsByNode[node] = append(releaseEventsByNode[node], pin)
-			if h := holders[node]; h != nil && h.PinID == strAny(pin.Body["claimid"]) {
-				delete(holders, node)
-				delete(passVotersByNode, node)
-				releaseCounted[pin.PinID] = true
-				nodeOutcome[node] = "released"
-			}
-		case "submission":
-			node := strAny(pin.Body["node"])
-			claimID := strAny(pin.Body["claimid"])
-			if node == "" || claimID == "" {
-				continue
-			}
-			holder := holders[node]
-			if holder == nil || holder.PinID != claimID {
-				continue // not the current cycle
-			}
-			cycle := getCycle(node, claimID)
-			if cycle == nil {
-				cycle = &V121Cycle{Node: node, ClaimID: claimID, Claimant: holder.Claimant, Superseded: map[string]bool{}, Outcome: "open"}
-				cycleByNodeClaim[node+" "+claimID] = cycle
-				cycles = append(cycles, cycle)
-			}
-			record := &V121CycleSubmission{
-				PinID: pin.PinID, Author: pin.Author, AtMs: pin.TimestampMs, Height: pin.Height,
-				SupersedeID: strAny(pin.Body["supersedeid"]), Body: pin.Body,
-			}
-			if cycle.Effective == nil {
-				// v1.1 earliest-holds anchors the cycle.
-				cycle.Submissions = append(cycle.Submissions, record)
-				cycle.Effective = record
-				nodeOfLiveTarget[record.PinID] = node
-				submissionCycle[record.PinID] = cycle
-				continue
-			}
-			if record.SupersedeID == "" {
-				ignoredEvents = append(ignoredEvents, IgnoredEvent{record.PinID, "duplicate_without_supersede"})
-				continue
-			}
-			// Supersede six predicates (paths.submission.supersedeRule).
-			var target *V121CycleSubmission
-			for _, s := range cycle.Submissions {
-				if s.PinID == record.SupersedeID {
-					target = s
-					break
+				if ghost(node) {
+					w.ignoredEvents = append(w.ignoredEvents, IgnoredEvent{pin.PinID, IgnoreUnknownNode})
+					continue
 				}
-			}
-			chainOk := target != nil &&
-				target.PinID != record.PinID &&
-				target.PinID == cycle.Effective.PinID &&
-				target.Author == record.Author &&
-				record.Height >= hAct2 &&
-				target.Height >= hAct2 &&
-				!cycle.Superseded[record.SupersedeID]
-			if chainOk {
-				cycle.Superseded[record.SupersedeID] = true
-				cycle.Submissions = append(cycle.Submissions, record)
-				nodeOfLiveTarget[record.PinID] = node
-				cycle.Effective = record
-				submissionCycle[record.PinID] = cycle
-			} else {
-				ignoredEvents = append(ignoredEvents, IgnoredEvent{record.PinID, "supersede_predicate_failed"})
-			}
-		case "verify":
-			vote := lastVoteByPin[pin.PinID]
-			if vote == nil {
-				continue
-			}
-			target := strAny(vote.Body["targetid"])
-			node := nodeOfLiveTarget[target]
-			if node == "" {
-				continue // not a current-cycle effective submission
-			}
-			holder := holders[node]
-			var cycle *V121Cycle
-			if holder != nil {
-				cycle = getCycle(node, holder.PinID)
-			}
-			if cycle == nil || cycle.Effective == nil || cycle.Effective.PinID != target {
-				continue
-			}
-			// The ballot reached a live cycle-effective target at its walk
-			// position (the frozen view calls this "counted-capable"; votes
-			// that never reach — e.g. after a fail rejection — are facts only).
-			reachedVote[vote.PinID] = true
-			if strAny(vote.Body["verdict"]) == "fail" {
-				// Ruling three: reopen now; identity is NOT filtered (reference
-				// parity); a fail after provisional quorum undoes the verified
-				// state (judgment is over all votes, not a race).
-				cycle.Outcome = "fail_rejected"
-				delete(verifiedSubmissionPins, target)
-				delete(holders, node)
-				delete(passVotersByNode, node)
-				nodeOutcome[node] = "rejected"
-				continue
-			}
-			if strAny(vote.Body["verdict"]) == "pass" {
-				submitter := subAuthorByPin[target]
-				if vote.Author == submitter || vote.Author == rootAuthor {
-					continue // identity: never counts
+				if w.holders[node] != nil {
+					w.claimEventsByNode[node] = append(w.claimEventsByNode[node], pin)
+					continue
 				}
-				voters := passVotersByNode[node]
-				if voters == nil {
-					voters = map[string]string{}
-					passVotersByNode[node] = voters
+				w.holders[node] = &V121Holder{PinID: pin.PinID, Claimant: pin.Author, SinceMs: pin.TimestampMs, Height: pin.Height}
+				if _, ok := w.firstClaimOrder[node]; !ok {
+					w.firstClaimOrder[node] = ordKeyOf(pin)
 				}
-				if _, seen := voters[vote.Author]; !seen {
-					voters[vote.Author] = vote.PinID
+				w.effectiveClaimCounts[pin.Author]++
+				w.claimCounted[pin.PinID] = true
+				w.nodeOutcome[node] = "none"
+				w.claimEventsByNode[node] = append(w.claimEventsByNode[node], pin)
+			case "release":
+				node := strAny(pin.Body["node"])
+				if node == "" {
+					continue
 				}
-				if len(voters) >= quorum {
-					if cycle.QuorumAtMs == 0 {
-						cycle.QuorumAtMs = vote.TimestampMs
+				if ghost(node) {
+					w.ignoredEvents = append(w.ignoredEvents, IgnoredEvent{pin.PinID, IgnoreUnknownNode})
+					continue
+				}
+				w.releaseEventsByNode[node] = append(w.releaseEventsByNode[node], pin)
+				if h := w.holders[node]; h != nil && h.PinID == strAny(pin.Body["claimid"]) {
+					delete(w.holders, node)
+					delete(w.passVotersByNode, node)
+					w.releaseCounted[pin.PinID] = true
+					w.nodeOutcome[node] = "released"
+				}
+			case "submission":
+				node := strAny(pin.Body["node"])
+				claimID := strAny(pin.Body["claimid"])
+				if node == "" || claimID == "" {
+					continue
+				}
+				if ghost(node) {
+					w.ignoredEvents = append(w.ignoredEvents, IgnoredEvent{pin.PinID, IgnoreUnknownNode})
+					continue
+				}
+				holder := w.holders[node]
+				if holder == nil || holder.PinID != claimID {
+					continue // not the current cycle
+				}
+				cycle := getCycle(node, claimID)
+				if cycle == nil {
+					cycle = &V121Cycle{Node: node, ClaimID: claimID, Claimant: holder.Claimant, Superseded: map[string]bool{}, Outcome: "open"}
+					w.cycleByNodeClaim[node+" "+claimID] = cycle
+					w.cycles = append(w.cycles, cycle)
+				}
+				record := &V121CycleSubmission{
+					PinID: pin.PinID, Author: pin.Author, AtMs: pin.TimestampMs, Height: pin.Height,
+					SupersedeID: strAny(pin.Body["supersedeid"]), Body: pin.Body,
+				}
+				if cycle.Effective == nil {
+					// v1.1 earliest-holds anchors the cycle.
+					cycle.Submissions = append(cycle.Submissions, record)
+					cycle.Effective = record
+					w.nodeOfLiveTarget[record.PinID] = node
+					w.submissionCycle[record.PinID] = cycle
+					continue
+				}
+				if record.SupersedeID == "" {
+					w.ignoredEvents = append(w.ignoredEvents, IgnoredEvent{record.PinID, "duplicate_without_supersede"})
+					continue
+				}
+				// Supersede six predicates (paths.submission.supersedeRule).
+				var target *V121CycleSubmission
+				for _, s := range cycle.Submissions {
+					if s.PinID == record.SupersedeID {
+						target = s
+						break
 					}
-					cycle.Outcome = "verified"
-					verifiedSubmissionPins[target] = true
+				}
+				chainOk := target != nil &&
+					target.PinID != record.PinID &&
+					target.PinID == cycle.Effective.PinID &&
+					target.Author == record.Author &&
+					record.Height >= hAct2 &&
+					target.Height >= hAct2 &&
+					!cycle.Superseded[record.SupersedeID]
+				if chainOk {
+					cycle.Superseded[record.SupersedeID] = true
+					cycle.Submissions = append(cycle.Submissions, record)
+					w.nodeOfLiveTarget[record.PinID] = node
+					cycle.Effective = record
+					w.submissionCycle[record.PinID] = cycle
+				} else {
+					w.ignoredEvents = append(w.ignoredEvents, IgnoredEvent{record.PinID, "supersede_predicate_failed"})
+				}
+			case "verify":
+				vote := lastVoteByPin[pin.PinID]
+				if vote == nil {
+					continue
+				}
+				target := strAny(vote.Body["targetid"])
+				node := w.nodeOfLiveTarget[target]
+				if node == "" {
+					continue // not a current-cycle effective submission
+				}
+				holder := w.holders[node]
+				var cycle *V121Cycle
+				if holder != nil {
+					cycle = getCycle(node, holder.PinID)
+				}
+				if cycle == nil || cycle.Effective == nil || cycle.Effective.PinID != target {
+					continue
+				}
+				// The ballot reached a live cycle-effective target at its walk
+				// position (the frozen view calls this "counted-capable"; votes
+				// that never reach — e.g. after a fail rejection — are facts only).
+				w.reachedVote[vote.PinID] = true
+				if strAny(vote.Body["verdict"]) == "fail" {
+					// Ruling three: reopen now; identity is NOT filtered (reference
+					// parity); a fail after provisional quorum undoes the verified
+					// state (judgment is over all votes, not a race).
+					cycle.Outcome = "fail_rejected"
+					delete(w.verifiedSubmissionPins, target)
+					delete(w.holders, node)
+					delete(w.passVotersByNode, node)
+					w.nodeOutcome[node] = "rejected"
+					continue
+				}
+				if strAny(vote.Body["verdict"]) == "pass" {
+					submitter := subAuthorByPin[target]
+					if vote.Author == submitter || vote.Author == rootAuthor {
+						continue // identity: never counts
+					}
+					voters := w.passVotersByNode[node]
+					if voters == nil {
+						voters = map[string]string{}
+						w.passVotersByNode[node] = voters
+					}
+					if _, seen := voters[vote.Author]; !seen {
+						voters[vote.Author] = vote.PinID
+					}
+					if len(voters) >= quorum {
+						if cycle.QuorumAtMs == 0 {
+							cycle.QuorumAtMs = vote.TimestampMs
+						}
+						cycle.Outcome = "verified"
+						w.verifiedSubmissionPins[target] = true
+					}
 				}
 			}
 		}
+		return w
 	}
 
-	// A node's current cycle = its latest cycle in insertion order.
-	activeCycleByNode := map[string]*V121Cycle{}
-	for _, c := range cycles {
-		activeCycleByNode[c.Node] = c
-	}
-
-	// VerifyDisposition: the per-pin ballot verdict for the frozen §5 view —
-	// gate reasons, roster filtering, last-per-bot collapse, identity
-	// conflicts, and non-active targets, all in one place. Purely additive
-	// bookkeeping; it never feeds any hashed output.
-	verifyDisposition := map[string]*V121VoteDisposition{}
-	for target, pins := range verifyByTarget {
-		submitter := subAuthorByPin[target]
-		for _, v := range pins {
-			d := &V121VoteDisposition{}
-			verifyDisposition[v.PinID] = d
-			if reason := v121GateReason(v.Body, v.Height, hAct); reason != "" {
-				d.Reason = reason
-				continue
-			}
-			if hAct2 != math.MaxInt64 && v.Height >= hAct2 && len(rosterGroups) > 0 &&
-				(sameSide(rosterGroups, v.Author, submitter) || sameSide(rosterGroups, v.Author, rootAuthor)) {
-				d.Reason = "same_side_roster"
-				continue
-			}
-			if lastVotes[[2]string{target, v.Author}] != v {
-				d.Reason = "duplicate_vote_superseded"
-				continue
-			}
-			if !reachedVote[v.PinID] {
-				d.Reason = "target_not_active"
-				continue
-			}
-			// Surviving ballot that reached a live target: identity conflicts
-			// apply to pass votes only (reference parity — a conflicted fail
-			// still acts in the walk).
-			switch strAny(v.Body["verdict"]) {
-			case "pass":
-				if v.Author == submitter {
-					d.Reason = "voter_is_submitter"
-					continue
-				}
-				if v.Author == rootAuthor {
-					d.Reason = "voter_is_task_author"
-					continue
-				}
-				d.Counts = true
-			case "fail":
-				d.Counts = true
-			case "invalid":
-				d.Reason = "verdict_invalid"
-			default:
-				d.Reason = "unknown_verdict"
-			}
+	// applyExpiry is the expiry pass (only when a clock is provided): claim
+	// TTL and review-window expiry read the evaluation clock, never a wall
+	// clock.
+	applyExpiry := func(w *walkState) {
+		if !hasNow {
+			return
 		}
-	}
-
-	// -- expiry pass (only when a clock is provided) ---------------------------
-	if hasNow {
-		for node, holder := range holders {
-			cycle := cycleByNodeClaim[node+" "+holder.PinID]
+		for node, holder := range w.holders {
+			cycle := w.cycleByNodeClaim[node+" "+holder.PinID]
 			var effective *V121CycleSubmission
 			if cycle != nil {
 				effective = cycle.Effective
 			}
 			if effective == nil {
 				if ttlHours > 0 && now-holder.SinceMs > int64(ttlHours)*3_600_000 {
-					delete(holders, node)
-					delete(passVotersByNode, node)
-					nodeOutcome[node] = "expired_claim"
+					delete(w.holders, node)
+					delete(w.passVotersByNode, node)
+					w.nodeOutcome[node] = "expired_claim"
 				}
 			} else if windowHours > 0 {
-				good := len(passVotersByNode[node])
+				good := len(w.passVotersByNode[node])
 				if good < quorum && now-effective.AtMs > int64(windowHours)*3_600_000 {
-					delete(holders, node)
-					delete(passVotersByNode, node)
-					nodeOutcome[node] = "expired_review_window"
+					delete(w.holders, node)
+					delete(w.passVotersByNode, node)
+					w.nodeOutcome[node] = "expired_review_window"
 				}
 			}
 		}
 	}
+
+	// A node's current cycle = its latest cycle in insertion order.
+	activeCycles := func(w *walkState) map[string]*V121Cycle {
+		m := map[string]*V121Cycle{}
+		for _, c := range w.cycles {
+			m[c.Node] = c
+		}
+		return m
+	}
+
+	// Pass 1 (unfiltered) feeds the amend fold only.
+	walk1 := runWalk(nil)
+	applyExpiry(walk1)
+	activeCycleByNodeP1 := activeCycles(walk1)
 
 	// -- tree + amends ----------------------------------------------------------
 	initialNodes := map[string]*V121TreeNode{}
@@ -1250,19 +1269,9 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 			}
 		}
 	}
-	nodeIDSet := map[string]bool{}
-	for id := range initialNodes {
-		nodeIDSet[id] = true
-	}
-	for _, c := range cycles {
-		nodeIDSet[c.Node] = true
-	}
-	for node := range holders {
-		nodeIDSet[node] = true
-	}
 	verifiedNodeIds := map[string]bool{}
-	for nodeID, cycle := range activeCycleByNode {
-		if cycle.Effective != nil && verifiedSubmissionPins[cycle.Effective.PinID] {
+	for nodeID, cycle := range activeCycleByNodeP1 {
+		if cycle.Effective != nil && walk1.verifiedSubmissionPins[cycle.Effective.PinID] {
 			verifiedNodeIds[nodeID] = true
 		}
 	}
@@ -1279,15 +1288,110 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 	}
 	sortChainEvents(amends)
 	activeCycleNodes := map[string]bool{}
-	for node := range holders {
+	for node := range walk1.holders {
 		activeCycleNodes[node] = true
 	}
 	effectiveTree, treeOrder, amendIgnored, amendHead := foldAmends(
 		amends, rootAuthor, treePinID, initialNodes, initialOrder,
-		firstClaimOrder, verifiedNodeIds, activeCycleNodes, rootVerifiedVoteLevel, hAct2)
+		walk1.firstClaimOrder, verifiedNodeIds, activeCycleNodes, rootVerifiedVoteLevel, hAct2)
+
+	// Pass 2: the effective-tree membership filter (B1). Ghost events only
+	// ever touched ghost-keyed state in pass 1, so the fold above is exactly
+	// what an unfiltered single pass would have produced.
+	var inTree map[string]bool
+	if treePin != nil {
+		inTree = map[string]bool{}
+		for id := range effectiveTree {
+			inTree[id] = true
+		}
+	}
+	walk2 := runWalk(inTree)
+	applyExpiry(walk2)
+	activeCycleByNode := activeCycles(walk2)
+	holders := walk2.holders
+	cycles := walk2.cycles
+	nodeOutcome := walk2.nodeOutcome
+	claimEventsByNode := walk2.claimEventsByNode
+	releaseEventsByNode := walk2.releaseEventsByNode
+	claimCounted := walk2.claimCounted
+	releaseCounted := walk2.releaseCounted
+	submissionCycle := walk2.submissionCycle
+	firstClaimOrder := walk2.firstClaimOrder
+	effectiveClaimCounts := walk2.effectiveClaimCounts
+
+	ignoredEvents = append(ignoredEvents, walk2.ignoredEvents...)
 	ignoredEvents = append(ignoredEvents, amendIgnored...)
-	for id := range effectiveTree {
-		nodeIDSet[id] = true
+
+	// VerifyDisposition: the per-pin ballot verdict for the frozen §5 view —
+	// gate reasons, roster filtering, last-per-bot collapse, identity
+	// conflicts, and non-active targets, all in one place. Purely additive
+	// bookkeeping; it never feeds any hashed output.
+	verifyDisposition := map[string]*V121VoteDisposition{}
+	for target, pins := range verifyByTarget {
+		submitter := subAuthorByPin[target]
+		for _, v := range pins {
+			d := &V121VoteDisposition{}
+			verifyDisposition[v.PinID] = d
+			if reason := v121GateReason(v.Body, v.Height, hAct); reason != "" {
+				d.Reason = reason
+				continue
+			}
+			if hAct2 != math.MaxInt64 && v.Height >= hAct2 && len(rosterGroups) > 0 &&
+				(sameSide(rosterGroups, v.Author, submitter) || sameSide(rosterGroups, v.Author, rootAuthor)) {
+				d.Reason = "same_side_roster"
+				continue
+			}
+			if lastVotes[[2]string{target, v.Author}] != v {
+				d.Reason = "duplicate_vote_superseded"
+				continue
+			}
+			if !walk2.reachedVote[v.PinID] {
+				d.Reason = "target_not_active"
+				continue
+			}
+			// Surviving ballot that reached a live target: identity conflicts
+			// apply to pass votes only (reference parity — a conflicted fail
+			// still acts in the walk).
+			switch strAny(v.Body["verdict"]) {
+			case "pass":
+				if v.Author == submitter {
+					d.Reason = "voter_is_submitter"
+					continue
+				}
+				if v.Author == rootAuthor {
+					d.Reason = "voter_is_task_author"
+					continue
+				}
+				d.Counts = true
+			case "fail":
+				d.Counts = true
+			case "invalid":
+				d.Reason = "verdict_invalid"
+			default:
+				d.Reason = "unknown_verdict"
+			}
+		}
+	}
+
+	nodeIDSet := map[string]bool{}
+	if treePin != nil {
+		// B1: the projection covers the effective (post-amend) tree exactly —
+		// ghost events created no state in pass 2, and amend-removed nodes
+		// leave no row.
+		for id := range effectiveTree {
+			nodeIDSet[id] = true
+		}
+	} else {
+		// Legacy treeless task: nodes stay implicit from the walk.
+		for id := range initialNodes {
+			nodeIDSet[id] = true
+		}
+		for _, c := range cycles {
+			nodeIDSet[c.Node] = true
+		}
+		for node := range holders {
+			nodeIDSet[node] = true
+		}
 	}
 
 	// -- aggregation precondition (paths.aggregationPrecondition) --------------
@@ -1559,6 +1663,11 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 	}
 
 	// Review stats: last-valid votes on terminally-resolved cycles.
+	// B2 (IDBots wave-1 parity): the Laplace accuracy inputs
+	// (reviewCorrect/reviewTerminal) exclude identity-conflicted ballots —
+	// voter == submission author or voter == task root author — exactly as the
+	// settlement reviewer set R(n) already does; unfiltered, a two-fee
+	// self-vote inflated a reviewer's accuracy from 5000 to 7500.
 	for _, cycle := range cycles {
 		if cycle.Outcome != "verified" && cycle.Outcome != "fail_rejected" {
 			continue
@@ -1569,6 +1678,9 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 		for _, v := range votesByTarget[cycle.Effective.PinID] {
 			stats := bump(v.Author)
 			stats.ReviewVotes++
+			if v.Author == cycle.Effective.Author || v.Author == rootAuthor {
+				continue
+			}
 			stats.ReviewTerminal++
 			verdict := strAny(v.Body["verdict"])
 			correct := (verdict == "pass" && cycle.Outcome == "verified") ||
@@ -1859,8 +1971,10 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 		}
 	}
 	var rosterIDPtr *string
+	rosterResolved := false
 	if rosterIDStr != "" {
 		rosterIDPtr = &rosterIDStr
+		_, rosterResolved = opts.RosterPins[rosterIDStr]
 	}
 
 	ignoredByPin := map[string]string{}
@@ -1882,6 +1996,7 @@ func ReplayV121(events []*ChainEvent, opts V121Options) (*V121Result, error) {
 		ChallengeTTLDays:       challengeTTL,
 		HasSplit:               hasSplit,
 		RosterID:               rosterIDPtr,
+		RosterResolved:         rosterResolved,
 		TreePinID:              treePinID,
 		SpecID:                 specID,
 		AmendHead:              amendHead,

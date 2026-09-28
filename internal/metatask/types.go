@@ -33,11 +33,23 @@ const (
 	PathVerify     = "/protocols/metatask/verify"
 	PathAmend      = "/protocols/metatask/amend"
 	PathChallenge  = "/protocols/metatask/challenge"
+
+	// PathRoster is the roster pool — a FLAT SIBLING of the metatask tree
+	// (/protocols/metatask-roster, NOT under /protocols/metatask/*). Its pins
+	// carry roster bodies ({groups: string[][]}) referenced by
+	// policy.split.rosterid for the H_ACT2 same-side vote filter. Roster pins
+	// are reference data, not task events: they never enter the event set E
+	// and are never hashed into eventSetHash.
+	PathRoster = "/protocols/metatask-roster"
 )
 
 // EventPaths is the full set of paths the replay consumes, in the v1.2.1
 // eventSetHash order (settlement.eventSetHash.recipe).
 var EventPaths = []string{PathTask, PathTree, PathSpec, PathClaim, PathRelease, PathSubmission, PathVerify, PathAmend, PathChallenge}
+
+// CollectionPaths are the pools the indexer sweeps: the nine event paths plus
+// the roster reference pool (the tenth pool).
+var CollectionPaths = append(append([]string{}, EventPaths...), PathRoster)
 
 // PoolPaths are the three pools the aggregation reports on.
 var PoolPaths = []string{PathClaim, PathSubmission, PathVerify}
@@ -94,6 +106,8 @@ func PoolName(path string) string {
 		return "amend"
 	case PathChallenge:
 		return "challenge"
+	case PathRoster:
+		return "roster"
 	}
 	return path
 }

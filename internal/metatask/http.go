@@ -58,11 +58,13 @@ func (s *Server) Refresh(ctx context.Context) error {
 		h := NewHTTPLister(s.BaseURL)
 		lister, payloads = h, h
 	}
-	events, enum, err := EnumerateAll(ctx, lister, EventPaths, s.Size)
+	// CollectionPaths adds the roster reference pool (the tenth pool) to the
+	// nine event paths; roster bodies arm the H_ACT2 same-side vote filter.
+	events, enum, err := EnumerateAll(ctx, lister, CollectionPaths, s.Size)
 	if err != nil {
 		return err
 	}
-	for _, path := range EventPaths {
+	for _, path := range CollectionPaths {
 		LoadPayloads(ctx, events[path], payloads)
 	}
 	boundary := DeriveBoundary(events, 0)

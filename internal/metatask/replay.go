@@ -19,6 +19,14 @@ import (
 //     precondition, settlement and eventSetHash are all v1.2.1 semantics —
 //     the pre-upgrade freeze calibration (the 448-field comparison against
 //     the on-chain skill engine read path) is realigned here per v1.2.1;
+//   - wave-1 parity fixes (IDBots pre-launch audit, 2026-09-29): B1 ignores
+//     claim/release/submission pins whose node id is outside the effective
+//     (post-amend) tree (unknown_node — no node state, no openNodes entry,
+//     no progress.total inflation, no settlement weight-table poisoning);
+//     B2 excludes identity-conflicted ballots (voter == submission author or
+//     == task root author) from the Laplace reviewer-accuracy inputs; B3 arms
+//     the same-side roster filter from the swept /protocols/metatask-roster
+//     pool (the tenth pool; reference data, never hashed into eventSetHash);
 //   - mempool pins (genesisHeight < 0) never enter E; payload §〇 rejection
 //     stays a collection-boundary concern (admitEvents);
 //   - expiry (claim TTL / review window / challenge TTL) reads the boundary
@@ -36,8 +44,10 @@ const (
 
 	// ReplayAlgoVersion identifies the algorithm this engine implements. Any
 	// semantic change bumps it and forces a full replay (D10). v2.0.0 = the
-	// v1.2.1 registration-body semantics (supersedes the freeze draft).
-	ReplayAlgoVersion = "metatask-replay-indexer/2.0.0+v1.2.1"
+	// v1.2.1 registration-body semantics (supersedes the freeze draft);
+	// v2.1.0 = the IDBots wave-1 parity fixes (B1 ghost-pin unknown_node
+	// filter, B2 reviewer-accuracy identity filter, B3 roster pool wiring).
+	ReplayAlgoVersion = "metatask-replay-indexer/2.1.0+v1.2.1"
 	// ProtocolVersion / ProtocolPinID anchor the protocol the semantics come
 	// from (v1.2.1 registration body).
 	ProtocolVersion = ProtocolVersionV121
@@ -90,6 +100,9 @@ const (
 	IgnoreDuplicateWithoutSupersede = "duplicate_without_supersede"
 	IgnoreSupersedePredicateFailed  = "supersede_predicate_failed"
 	IgnoreSameSideRoster            = "same_side_roster"
+	// IgnoreUnknownNode marks a claim/release/submission whose node id is not
+	// in the task's effective (post-amend) tree (B1 ghost-pin filter).
+	IgnoreUnknownNode = "unknown_node"
 )
 
 // Boundary is B of F(E,B) (freeze §2): block height and that block's timestamp.
@@ -256,6 +269,11 @@ type ReplayResult struct {
 	DisputedNodes []string       `json:"disputedNodes"`
 	AmendHead     string         `json:"amendHead,omitempty"`
 	HAct2Height   int64          `json:"hAct2"`
+	// RosterID / RosterResolved echo the split.rosterid reference and whether
+	// the roster body was found in the swept roster pool (the H_ACT2 same-side
+	// vote filter is armed only when it resolves). Additive (D7).
+	RosterID       string `json:"rosterId,omitempty"`
+	RosterResolved bool   `json:"rosterResolved"`
 }
 
 // admitEvents applies the collection boundary: dedup by pinId, mempool
@@ -361,7 +379,25 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 		res.EventCount += len(admitted[path])
 	}
 
-	v, err := ReplayV121(chainEventsFrom(admitted), V121Options{RootPinID: root, NowMs: boundary.BlockTs * 1000})
+	// The roster reference pool (PathRoster — a flat sibling path, NOT under
+	// /protocols/metatask/*) feeds the H_ACT2 same-side vote filter. Roster
+	// pins are reference data, not events of E: the same collection boundary
+	// applies (confirmed, payload-accepted, to-block), but they never enter
+	// eventSetHash, the event accounting, or the boundary derivation.
+	rosterPins := map[string]map[string]any{}
+	for _, p := range events[PathRoster] {
+		if p.GenesisHeight < 0 {
+			continue
+		}
+		if boundary.Height > 0 && p.GenesisHeight > boundary.Height {
+			continue
+		}
+		if v := resolvePayload(p); v.Accepted() {
+			rosterPins[p.ID] = v.Payload
+		}
+	}
+
+	v, err := ReplayV121(chainEventsFrom(admitted), V121Options{RootPinID: root, NowMs: boundary.BlockTs * 1000, RosterPins: rosterPins})
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +423,10 @@ func Replay(events map[string][]*Pin, root string, boundary Boundary) (*ReplayRe
 	res.EventSetHash = v.EventSetHash
 	res.BoundaryBlock = v.BoundaryBlock
 	res.AmendHead = v.AmendHead
+	if v.RosterID != nil {
+		res.RosterID = *v.RosterID
+	}
+	res.RosterResolved = v.RosterResolved
 	res.IgnoredEvents = v.IgnoredEvents
 	for _, node := range v.NodeOrder {
 		if v.DisputedNodes[node] {

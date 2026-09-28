@@ -1,6 +1,9 @@
 // Command metaso-p2p-metatask-indexer runs the metatask replay indexer over
-// the nine protocol paths (v1.2.1: task/tree/spec/claim/release/submission/
-// verify/amend/challenge) and emits the frozen projections:
+// the nine protocol event paths (v1.2.1: task/tree/spec/claim/release/
+// submission/verify/amend/challenge) plus the roster reference pool
+// (/protocols/metatask-roster, the tenth pool — it arms the H_ACT2 same-side
+// vote filter and never enters eventSetHash), and emits the frozen
+// projections:
 //
 //	go run ./cmd/metaso-p2p-metatask-indexer --manapi https://manapi.metaid.io --out data/metatask-projections
 //	go run ./cmd/metaso-p2p-metatask-indexer --snapshot <frozen-dir> --out data/metatask-projections
@@ -81,11 +84,11 @@ func main() {
 		lister, payloads = http, http
 	}
 
-	events, enum, err := metatask.EnumerateAll(ctx, lister, metatask.EventPaths, *size)
+	events, enum, err := metatask.EnumerateAll(ctx, lister, metatask.CollectionPaths, *size)
 	if err != nil {
 		exitJSON(1, map[string]any{"error": err.Error(), "enumeration": enum})
 	}
-	for _, path := range metatask.EventPaths {
+	for _, path := range metatask.CollectionPaths {
 		metatask.LoadPayloads(ctx, events[path], payloads)
 	}
 	if !enum.Complete && !*allowIncomplete {
