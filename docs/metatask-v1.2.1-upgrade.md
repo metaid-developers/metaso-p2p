@@ -238,3 +238,39 @@ No protocol registration, vector-set pin or announcement was published from
 this repo — the registry body and its announcements belong to the publisher.
 This upgrade only brings the write-side indexer to the pre-announced
 algorithm ("写入端先行" precondition of `activation.processRequirements`).
+
+## v1.2.2 rulings (registration-author, approved 2026-09-29 — recorded for the future H_ACT3 implementation; NOT implemented here)
+
+Wave-1 proceeds under v1.2.1 with the B-parity fixes (commit `6d7cdda`). The
+following rulings land only with the future v1.2.1→v1.2.2 registration update
+and its H_ACT3 announcement; this engine stays on v1.2.1 semantics until then:
+
+1. **Amend fold time-anchor** — ADOPT the point-in-time reading: an amend
+   published before root verification counts, later ones are ignored; the
+   fold must also enforce the no-orphaned-children invariant. Effective from
+   H_ACT3; no retroactive changes.
+2. **Fail-vote identity gate** — ADOPT: §10.4 identity rules (voter ≠
+   submission author AND ≠ task root author) apply to fail votes from H_ACT3.
+   Historical tasks (incl. pilot #01's fail-then-pass) are never rewritten.
+3. **§12 item 6 (submitter ≠ task root author)** — enforce READER-side from
+   H_ACT2 (the published text already says so), closing the hole writer-side
+   refusal cannot cover: existing on-chain self-submits.
+4. **Mempool** — settlement manifests are produced only once every scoped
+   event is confirmed (no height<0 pins in scope); the live walk keeps
+   mempool events for display. (This engine currently excludes mempool pins
+   from E entirely and counts them in `excludedMempool`; the display-side
+   mempool walk is a v1.2.2 delta.)
+5. **Settlement restriction** — manifests only for tasks published at/after
+   H_ACT2; pilot #01's legacy uniform manifest is a historical artifact.
+6. **engineAlgoVersion** — pinned per protocol version in the registration
+   text with an implementation-neutral value (`metatask-engine/1.2.2` for
+   v1.2.2); for v1.2.1 the de-facto pinned `idbots-metatask-engine/1.2.1`
+   stays (this engine emits exactly that).
+7. **Ghost-submission vote trace** — accepted into the v1.2.2 discussion
+   list: verify pins targeting ignored ghost submissions currently leave no
+   vote-level trace (they remain in EventCount/eventSetHash); extending
+   `unresolved` semantics is a v1.2.2 drafting-thread topic.
+
+Noted display-field divergence (no action, no hash/manifest impact): this
+engine's `reviewVotes` stays terminal-only while the TS engine counts every
+identity-valid vote for UI participation display.
