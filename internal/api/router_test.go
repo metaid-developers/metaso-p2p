@@ -17,6 +17,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/skillservice"
@@ -53,6 +54,7 @@ type fullRouterFixture struct {
 	skillAgg         *skillservice.Aggregator
 	publishedAgg     *publishedcontent.Aggregator
 	botSearchAgg     *botsearch.Aggregator
+	preferenceAgg    *preference.Aggregator
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
@@ -95,6 +97,16 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	if err := reg.Register(publishedAgg); err != nil {
 		t.Fatalf("register publishedcontent: %v", err)
 	}
+	// preference mirrors cmd/metaso-p2p/main.go: the metaapp resolver wires
+	// BEFORE Register (Init re-evaluates stored exclusions), and the lookup
+	// wires after a successful registration. cmd/metaso-p2p/main_test.go
+	// guards that the production main.go keeps this wiring.
+	preferenceAgg := &preference.Aggregator{}
+	preferenceAgg.SetMetaAppResolver(preference.NewMetaAppResolverAdapter(publishedAgg))
+	if err := reg.Register(preferenceAgg); err != nil {
+		t.Fatalf("register preference: %v", err)
+	}
+	publishedAgg.SetPreferenceLookup(preferenceAgg)
 	botHomepageAgg := &bothomepage.Aggregator{}
 	if err := reg.Register(botHomepageAgg); err != nil {
 		t.Fatalf("register bothomepage: %v", err)
@@ -131,6 +143,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 		skillAgg:         skillAgg,
 		publishedAgg:     publishedAgg,
 		botSearchAgg:     botSearchAgg,
+		preferenceAgg:    preferenceAgg,
 	}
 }
 
@@ -1740,5 +1753,107 @@ func TestRouter_UserInfoMetaFileCompat(t *testing.T) {
 		if int(code) != 40400 {
 			t.Errorf("%s: expected code=40400, got %v", p, body["code"])
 		}
+	}
+}
+
+// TestFullRouterPreferenceWiring guards the acceptance-review blocker: the
+// full-router fixture must mount /api/preference/comparisons (not 404),
+// block/mempool feedback pins must flow into the aggregator through the
+// registry dispatch, and /api/metaapp/list?sort=preference must read the
+// wired score source — never the nil-degraded all-unjudged fallback.
+func TestFullRouterPreferenceWiring(t *testing.T) {
+	fixture := setupFullRouterFixture(t)
+
+	// Route mounted on the real router.
+	w, body := get(t, fixture.router, "/api/preference/comparisons?chainName=mvc&category=motion-video&basis=open")
+	if w.Code == 404 {
+		t.Fatal("GET /api/preference/comparisons must be mounted, got 404")
+	}
+	if body["code"] != float64(0) {
+		t.Fatalf("comparisons default view: %v", body)
+	}
+
+	// Two motion-video apps through the registry-dispatched block pins.
+	shaA := strings.Repeat("aa", 32)
+	shaB := strings.Repeat("bb", 32)
+	metaAppPin := func(pinID, videoSha string, ts int64) *aggregator.PinInscription {
+		payload := `{"title":"Router MV ` + pinID + `","tags":["motion-video"],"runtime":"browser","prompt":"p","metadata":{"series":"motion-video","videoFile":"metafile://` + pinID + `-video:i0","videoSha256":"` + videoSha + `","durationSec":10,"fps":24,"resolution":"1920x1080","engine":"e","style":"s","sourceIncluded":true}}`
+		return &aggregator.PinInscription{
+			Id: pinID, Path: "/protocols/metaapp", Operation: "create",
+			ChainName: "mvc", ContentType: "application/json", ContentBody: []byte(payload),
+			GlobalMetaId: "gid-router-author", MetaId: "gid-router-author", Address: "gid-router-author",
+			Timestamp: ts,
+		}
+	}
+	for _, p := range []*aggregator.PinInscription{
+		metaAppPin("router-mv-a:i0", shaA, 1000),
+		metaAppPin("router-mv-b:i0", shaB, 1100),
+	} {
+		if _, err := fixture.publishedAgg.HandleBlockPin(p); err != nil {
+			t.Fatalf("metaapp block pin %s: %v", p.Id, err)
+		}
+	}
+
+	// A mempool feedback pin stays score-neutral; the confirmed one scores.
+	batch := `{"category":["motion-video"],"kind":"comparison-batch","client":{"artifact":"metaapp://arena-root:i0","mode":"arena"},"items":[` +
+		`{"a":{"chainName":"mvc","app":"metaapp://router-mv-a:i0","version":"metaapp://router-mv-a:i0","video":"metafile://router-mv-a:i0-video:i0","videoSha256":"` + shaA + `"},` +
+		`"b":{"chainName":"mvc","app":"metaapp://router-mv-b:i0","version":"metaapp://router-mv-b:i0","video":"metafile://router-mv-b:i0-video:i0","videoSha256":"` + shaB + `"},` +
+		`"pick":"a"}]}`
+	mempoolPin := &aggregator.PinInscription{
+		Id: "router-fb-mem:i0", Path: "/protocols/preference/feedback", Operation: "create",
+		ChainName: "mvc", ContentType: "application/json", ContentBody: []byte(batch),
+		GlobalMetaId: "gid-router-judge-2", MetaId: "gid-router-judge-2", Address: "gid-router-judge-2",
+		Timestamp: 1200,
+	}
+	if _, err := fixture.preferenceAgg.HandleMempoolPin(mempoolPin); err != nil {
+		t.Fatalf("mempool feedback pin: %v", err)
+	}
+	confirmedPin := &aggregator.PinInscription{
+		Id: "router-fb-1:i0", Path: "/protocols/preference/feedback", Operation: "create",
+		ChainName: "mvc", ContentType: "application/json", ContentBody: []byte(batch),
+		GlobalMetaId: "gid-router-judge-1", MetaId: "gid-router-judge-1", Address: "gid-router-judge-1",
+		Timestamp: 1250, GenesisHeight: 42,
+	}
+	if _, err := fixture.preferenceAgg.HandleBlockPin(confirmedPin); err != nil {
+		t.Fatalf("confirmed feedback pin: %v", err)
+	}
+
+	// Evidence API serves the confirmed comparison; the mempool one only
+	// with includeMempool=1.
+	_, body = get(t, fixture.router, "/api/preference/comparisons?chainName=mvc&category=motion-video&basis=open")
+	items := body["data"].(map[string]interface{})["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("confirmed evidence through the router: %v", body["data"])
+	}
+	_, body = get(t, fixture.router, "/api/preference/comparisons?chainName=mvc&category=motion-video&basis=open&includeMempool=1")
+	items = body["data"].(map[string]interface{})["items"].([]interface{})
+	if len(items) != 2 {
+		t.Fatalf("includeMempool evidence through the router: %v", body["data"])
+	}
+
+	// sort=preference reads the wired aggregator: A won its single judged
+	// comparison (score (1+1)/3), B lost ((0+1)/3), and the summaries must
+	// not be the nil-degraded unjudged block.
+	_, body = get(t, fixture.router, "/api/metaapp/list?chainName=mvc&tag=motion-video&sort=preference&basis=open&order=desc")
+	data := body["data"].(map[string]interface{})
+	listItems := data["items"].([]interface{})
+	if len(listItems) != 2 {
+		t.Fatalf("preference list through the router: %v", body["data"])
+	}
+	first := listItems[0].(map[string]interface{})
+	if first["pinId"] != "router-mv-a:i0" {
+		t.Fatalf("winner must rank first: %v", first["pinId"])
+	}
+	pref := first["preference"].(map[string]interface{})
+	open := pref["open"].(map[string]interface{})
+	if open["state"] == "unjudged" || open["comparisons"] != float64(1) {
+		t.Fatalf("list must read real aggregated evidence, not the nil-degraded block: %v", open)
+	}
+	if score := open["score"].(float64); score < 0.66 || score > 0.67 {
+		t.Fatalf("A score: %v", open["score"])
+	}
+	validated := pref["validated"].(map[string]interface{})
+	if validated["score"] != nil || validated["state"] != "unavailable" {
+		t.Fatalf("validated block must be exactly unavailable: %v", validated)
 	}
 }

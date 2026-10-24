@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +168,28 @@ func TestRunSocialBackfillIfEnabledPropagatesError(t *testing.T) {
 
 	if err := runSocialBackfillIfEnabled(fake, cfg); err != context.DeadlineExceeded {
 		t.Fatalf("runSocialBackfillIfEnabled err = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
+// TestMainWiresPreferenceAggregator guards the acceptance-review blocker: the
+// production main.go must register the preference aggregator and complete
+// both cross-aggregator wirings. The full-router fixture in
+// internal/api/router_test.go mirrors this wiring for behaviour; this source
+// guard catches "fixture wired, main.go forgot" drift between the two.
+func TestMainWiresPreferenceAggregator(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(raw)
+	for _, required := range []string{
+		`"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"`,
+		`preferenceCandidate.SetMetaAppResolver(preference.NewMetaAppResolverAdapter(`,
+		`aggRegistry.Register(preferenceCandidate)`,
+		`SetPreferenceLookup(preferenceCandidate)`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("cmd/metaso-p2p/main.go lost the preference wiring: missing %q", required)
+		}
 	}
 }
