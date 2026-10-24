@@ -128,7 +128,9 @@ first. Items carry `feedbackPinId`, `chainName`, `basis`, `isMempool`,
 `confirmedAt` (null while pending), `observedAt`, exact `a`/`b`
 ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
 `client`; `subject`+subject-relative `outcome` when filtered;
-`excluded`/`exclusionReason` only in the includeExcluded view.
+`excluded`/`exclusionReason` only in the includeExcluded view;
+`manifestUnverified: true` marks comparisons involving a historical
+(non-current) package version whose manifest is not retained.
 
 ## 6. Backfill and replay (R6)
 
@@ -136,23 +138,47 @@ ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
   `/protocols/preference/feedback` oldest-first through the read model
   (idempotent; per-chain fetched/applied/skipped/errors report). MetaTask
   indexer untouched; projections stay chain-rebuildable.
+- A single pin replay failure is counted, skipped and retried on the next
+  run (full idempotent rescan, no watermark to strand); the command exits
+  non-zero with the failure list so operators see it.
+- After each run, stored exclusions are re-evaluated against the current
+  metaapp index (self-heal for feedback that arrived before its app) and
+  the score snapshot rebuilds once for the whole batch (dirty-flag lazy
+  rebuild — N confirmed pins cost one rebuild, not N).
+- The same self-heal re-evaluation runs at service startup.
+
+### Operational constraints
+
+- **Service wiring:** `cmd/metaso-p2p/main.go` registers the preference
+  aggregator after publishedcontent and wires both directions
+  (`SetMetaAppResolver` before `Init`, `SetPreferenceLookup` after a
+  successful register). `sort=preference` fails with a 50000 error if the
+  score source is missing — it never silently degrades to unjudged items.
+  `cmd/metaso-p2p/main_test.go` and the full-router fixture in
+  `internal/api/router_test.go` guard this wiring.
+- **Exclusive Pebble access:** the backfill command opens the same data
+  directory, so it must run while the main service is stopped (maintenance
+  window), same as the existing qa/metaweb backfill commands.
+- **Ordering:** when bootstrapping, run the metaapp (publishedcontent /
+  metaweb) backfill first — ArtifactRef validation resolves against the
+  indexed metaapp records. Out-of-order runs self-heal at the next
+  preference backfill or service restart.
+
 - Fixture coverage: both real Motion Video manifests (Ukiyo-e #001 without
   extension/audio fields, Silent Film #002 with `.mp4`/audio fields), all
   §8 conformance vectors, mempool deferral, conflict exclusion, version
   boundaries, cross-chain isolation, validated-unavailable, cursor
-  stability, replay determinism.
+  stability, replay determinism, exclusion self-heal, creator-conflict and
+  lazy-rebuild regression guards.
 
 ## 7. Deviations / interpretations (for coordination review)
 
-1. `client.artifact` is validated syntactically (`metaapp://<pin>`); whether
-   the client root resolves in the metaapp index is not enforced, avoiding
-   bootstrap-order false negatives. Hosts remain responsible for the
-   "published client" rule.
-2. ArtifactRef-vs-manifest mismatch excludes the item (kept for diagnostics)
-   rather than invalidating the whole pin; schema violations remain
-   whole-pin atomic per §4.2.
-3. Historical version refs (version ≠ current folded pin) cannot be checked
-   against a manifest MetaSo does not retain; their fields are recorded as
-   stated so evidence stays queryable across video changes (§3 rule 7).
-4. Comparisons require both sides on one chain equal to the feedback pin's
-   chain (D9); cross-chain pairs are excluded as `chain-mismatch`.
+| # | Topic | MetaSo behaviour | Status for coordination |
+|---|---|---|---|
+| 1 | `client.artifact` | syntactic `metaapp://<pin>` check only; MetaSo does not promise the client root is published/indexed | Accepted by review; needs recording in the shared contract |
+| 2 | ArtifactRef/manifest inconsistency | schema errors stay whole-pin atomic; artifact inconsistencies (app-not-found, version-outside-app, artifact-mismatch, chain-mismatch) exclude the item, unrelated pairs stay eligible. Switch point: `artifactInvalidatesBatch` in `internal/aggregator/preference/process.go` flips to whole-pin invalidation if coordination rules otherwise | **Needs a contract decision** — amendment requested |
+| 3 | Historical version refs | recorded as stated, surfaced with `manifestUnverified: true`; never presented as manifest-verified | Implemented per review suggestion B; amendment requested |
+| 4 | Missing current-manifest video declarations | treated as `artifact-mismatch` (not comparable ≠ implicit pass) | Implemented per review item C |
+| 5 | Author conflict | checks folded publisher AND retained creator identity; intermediate historical modifiers are approximated by the folded publisher (per-version publisher history not retained) | Implemented per review item D; approximation declared |
+| 6 | Pair chain scoping | a/b must share the feedback pin's chain; cross-chain pairs excluded as `chain-mismatch` | Accepted by review |
+| 7 | Validated basis | fixed `40000 preference_validated_basis_unavailable` pre-R7 | Accepted by review |
