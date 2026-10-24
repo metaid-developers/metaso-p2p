@@ -1,6 +1,7 @@
 package preference
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +29,11 @@ type Aggregator struct {
 	// openScores holds the warm open-preference snapshot, rebuilt from the
 	// record store at Init and after every confirmed write (score.go).
 	openScores atomic.Value // map[string]OpenSummary, immutable once stored
+	// openScoresDirty defers snapshot rebuilds to the next score read, so a
+	// replay/backfill burst of N confirmed pins pays one rebuild, not N.
+	openScoresDirty   atomic.Bool
+	rebuildMu         sync.Mutex // serialises snapshot rebuilds
+	openScoreRebuilds int        // guarded by rebuildMu; test hook
 }
 
 func (a *Aggregator) Name() string { return Namespace }
@@ -38,7 +44,14 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	}
 	a.store = store
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 16)
-	a.rebuildOpenScores()
+	// Self-heal resolutions recorded before their target apps were indexed
+	// (mempool ordering, backfill order), then warm the snapshot once. The
+	// resolver must therefore be wired before Init; production main.go does.
+	if err := a.reevaluateResolutions(); err != nil {
+		log.Printf("WARNING: preference resolution re-evaluation failed: %v", err)
+	}
+	a.markOpenScoresDirty()
+	a.ensureFreshOpenScores()
 	return nil
 }
 

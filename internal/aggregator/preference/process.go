@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cockroachdb/pebble"
+
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
@@ -25,7 +27,16 @@ func openFeedbackKey(chainName, feedbackPinId string) []byte {
 
 func (a *Aggregator) loadFeedbackRecord(chainName, feedbackPinId string) (*FeedbackRecord, error) {
 	raw, err := a.store.Get(Namespace, openFeedbackKey(chainName, feedbackPinId))
-	if err != nil || raw == nil {
+	if err != nil {
+		// Absence is normal (first delivery); any other storage error must
+		// propagate — swallowing it would let a later mempool echo demote a
+		// confirmed record through the anti-demotion guard.
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("loadFeedbackRecord %s/%s: %w", chainName, feedbackPinId, err)
+	}
+	if raw == nil {
 		return nil, nil
 	}
 	var rec FeedbackRecord
@@ -74,10 +85,12 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription, isMempool bool) 
 	if err := a.saveFeedbackRecord(rec); err != nil {
 		return err
 	}
-	// Only confirmed feedback changes open scoring state; the pending
-	// record is stored for the includeMempool diagnostics view.
+	// Only confirmed feedback changes open scoring state; the pending record
+	// is stored for the includeMempool diagnostics view. The score snapshot
+	// rebuilds lazily (dirty flag) so replay/backfill bursts do not pay an
+	// O(records) rebuild per pin.
 	if !rec.IsMempool {
-		a.rebuildOpenScores()
+		a.markOpenScoresDirty()
 	}
 	return nil
 }
@@ -120,44 +133,70 @@ func (a *Aggregator) buildFeedbackRecord(pin *aggregator.PinInscription, chainNa
 	rec.Client = client
 	rec.IsTest = isTestBatch(categories)
 	for i := range items {
-		a.resolveComparisonExclusion(&items[i], chainName, rec.SignerGlobalMetaId, rec.SignerMetaId, rec.SignerAddress)
+		reason := a.resolveComparisonExclusion(&items[i], chainName, rec.SignerGlobalMetaId, rec.SignerMetaId, rec.SignerAddress)
+		// artifactInvalidatesBatch selects the §4.2 interpretation for
+		// ArtifactRef/manifest inconsistencies. false keeps per-item
+		// exclusion with unrelated valid pairs eligible (vector 9 spirit;
+		// historical evidence stays queryable per §3 rule 7). Flipping it
+		// to true implements the literal whole-pin invalidation reading.
+		// Author conflicts never invalidate the batch (vector 9). Pending
+		// coordination ratification — see the spec §7.
+		if artifactInvalidatesBatch && reason != "" && reason != ExclusionAuthorConflict {
+			rec.Status = StatusMalformed
+			rec.InvalidReason = fmt.Sprintf("item %d: artifact reference %s", i, reason)
+			rec.Items = nil
+			return rec
+		}
 	}
 	rec.Items = items
 	return rec
 }
 
+// artifactInvalidatesBatch documents the switch point between the two
+// §4.2 readings for artifact inconsistencies (see buildFeedbackRecord).
+const artifactInvalidatesBatch = false
+
 // resolveComparisonExclusion marks one comparison excluded when its refs do
 // not resolve against the indexed MetaApp manifests or the signer published
-// one of the compared app versions.
-func (a *Aggregator) resolveComparisonExclusion(item *FeedbackComparison, chainName, signerGlobalMetaId, signerMetaId, signerAddress string) {
+// or created one of the compared apps. It returns the exclusion reason (""
+// when the item is scoring-eligible).
+func (a *Aggregator) resolveComparisonExclusion(item *FeedbackComparison, chainName, signerGlobalMetaId, signerMetaId, signerAddress string) string {
 	for _, side := range []struct {
 		ref *ArtifactRef
 	}{
 		{&item.A}, {&item.B},
 	} {
-		if reason := a.resolveArtifactRef(side.ref, chainName, signerGlobalMetaId, signerMetaId, signerAddress); reason != "" {
+		reason, verified := a.resolveArtifactRef(side.ref, chainName, signerGlobalMetaId, signerMetaId, signerAddress)
+		if reason != "" {
 			item.Excluded = true
 			item.ExclusionReason = reason
-			return
+			return reason
+		}
+		if !verified {
+			item.ManifestUnverified = true
 		}
 	}
+	return ""
 }
 
-// resolveArtifactRef validates one ArtifactRef side and returns "" when it
-// resolves cleanly, otherwise the exclusion reason.
-func (a *Aggregator) resolveArtifactRef(ref *ArtifactRef, pinChainName, signerGlobalMetaId, signerMetaId, signerAddress string) string {
+// resolveArtifactRef validates one ArtifactRef side. It returns the
+// exclusion reason ("" when clean) and whether the side's video/hash was
+// actually checked against a retained manifest claim: current-version refs
+// are checked; historical versions' manifests are not retained, so their
+// fields are recorded as stated and marked unverified (contract §3 rule 7).
+func (a *Aggregator) resolveArtifactRef(ref *ArtifactRef, pinChainName, signerGlobalMetaId, signerMetaId, signerAddress string) (reason string, manifestVerified bool) {
 	if !strings.EqualFold(ref.ChainName, pinChainName) {
-		return ExclusionChainMismatch
+		return ExclusionChainMismatch, false
 	}
 	resolver := a.metaAppResolver
 	if resolver == nil {
-		return ""
+		return "", false
 	}
 
 	rootPinId := metaAppPinId(ref.App)
 	root, ok := resolver.ResolveMetaAppSnapshot(ref.ChainName, rootPinId)
 	if !ok {
-		return ExclusionAppNotFound
+		return ExclusionAppNotFound, false
 	}
 	// The version must belong to the same app's modify chain on the same
 	// chain: it either is the root, or resolves through the same chain to
@@ -166,39 +205,49 @@ func (a *Aggregator) resolveArtifactRef(ref *ArtifactRef, pinChainName, signerGl
 	if versionPinId != root.RootPinId {
 		versionSnapshot, ok := resolver.ResolveMetaAppSnapshot(ref.ChainName, versionPinId)
 		if !ok || versionSnapshot.RootPinId != root.RootPinId {
-			return ExclusionVersionOutsideApp
+			return ExclusionVersionOutsideApp, false
 		}
 	}
 
-	// Current-version refs must agree with the folded manifest claim.
-	// Historical versions' manifests are not retained, so their fields are
-	// recorded as stated (contract §3 rule 7: historical evidence stays
-	// queryable when a new video starts a fresh aggregate).
-	if versionPinId == root.CurrentPinId && len(root.ManifestPayload) > 0 {
+	// Current-version refs must agree with the folded manifest claim, and a
+	// current manifest without videoFile/videoSha256 declarations is not
+	// comparable — that is a mismatch, never an implicit pass.
+	if versionPinId == root.CurrentPinId {
+		if len(root.ManifestPayload) == 0 {
+			return ExclusionArtifactMismatch, false
+		}
 		manifestVideo, manifestSha := manifestVideoClaim(root.ManifestPayload)
-		if manifestSha != "" {
-			if normalizeMetaFileURI(ref.Video) != normalizeMetaFileURI(manifestVideo) ||
-				ref.VideoSha256 != manifestSha {
-				return ExclusionArtifactMismatch
-			}
+		if manifestVideo == "" || manifestSha == "" ||
+			normalizeMetaFileURI(ref.Video) != normalizeMetaFileURI(manifestVideo) ||
+			ref.VideoSha256 != manifestSha {
+			return ExclusionArtifactMismatch, false
 		}
+		manifestVerified = true
 	}
 
-	if publisherIsSigner(root, signerGlobalMetaId, signerMetaId, signerAddress) {
-		return ExclusionAuthorConflict
+	if snapshotIdentityIsSigner(root, signerGlobalMetaId, signerMetaId, signerAddress) {
+		return ExclusionAuthorConflict, manifestVerified
 	}
-	return ""
+	return "", manifestVerified
 }
 
-func publisherIsSigner(snapshot *publishedcontent.MetaAppSnapshot, signerGlobalMetaId, signerMetaId, signerAddress string) bool {
+// snapshotIdentityIsSigner matches the signer against the app's author
+// identities: the folded publisher (latest modifier) AND the creator of the
+// original create pin, so a creator cannot bypass the conflict rule after a
+// third-party modify. Intermediate historical modifiers are approximated by
+// the folded publisher; per-version publisher history is not retained.
+func snapshotIdentityIsSigner(snapshot *publishedcontent.MetaAppSnapshot, signerGlobalMetaId, signerMetaId, signerAddress string) bool {
 	signerIds := []string{signerGlobalMetaId, signerMetaId, signerAddress}
-	publisherIds := []string{snapshot.PublisherGlobalMetaId, snapshot.PublisherMetaId, snapshot.PublisherAddress}
+	authorIds := []string{
+		snapshot.PublisherGlobalMetaId, snapshot.PublisherMetaId, snapshot.PublisherAddress,
+		snapshot.CreatorGlobalMetaId, snapshot.CreatorMetaId, snapshot.CreatorAddress,
+	}
 	for _, signer := range signerIds {
 		if signer == "" {
 			continue
 		}
-		for _, publisher := range publisherIds {
-			if publisher != "" && strings.EqualFold(signer, publisher) {
+		for _, author := range authorIds {
+			if author != "" && strings.EqualFold(signer, author) {
 				return true
 			}
 		}
@@ -294,3 +343,60 @@ func protocolPathFromPinPath(path string) string {
 
 // ErrStoreNotInitialised guards read paths used before Init.
 var ErrStoreNotInitialised = errors.New("preference aggregator is not initialised")
+
+// reevaluateResolutions re-runs artifact resolution and author-conflict
+// checks over the stored valid batches, so exclusions recorded before an app
+// was indexed (mempool ordering, backfill order) or against a since-updated
+// manifest/publisher fold self-heal at startup and after every backfill.
+// Idempotent: only records whose exclusions actually changed are rewritten,
+// and the score snapshot is marked dirty once. Without a wired resolver it
+// is a no-op (production always wires one; see cmd/metaso-p2p/main.go).
+func (a *Aggregator) reevaluateResolutions() error {
+	if a == nil || a.store == nil || a.metaAppResolver == nil {
+		return nil
+	}
+	changed := make([]*FeedbackRecord, 0)
+	err := a.store.ScanPrefix(Namespace, []byte(keyOpenFeedback), func(_, value []byte) error {
+		var rec FeedbackRecord
+		if err := json.Unmarshal(value, &rec); err != nil {
+			return nil
+		}
+		if rec.Status != StatusValid || !rec.Supported() {
+			return nil
+		}
+		recordChanged := false
+		for i := range rec.Items {
+			before := rec.Items[i]
+			rec.Items[i].Excluded = false
+			rec.Items[i].ExclusionReason = ""
+			rec.Items[i].ManifestUnverified = false
+			a.resolveComparisonExclusion(&rec.Items[i], rec.ChainName, rec.SignerGlobalMetaId, rec.SignerMetaId, rec.SignerAddress)
+			if comparisonResolutionChanged(before, rec.Items[i]) {
+				recordChanged = true
+			}
+		}
+		if recordChanged {
+			changed = append(changed, &rec)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reevaluate resolutions: %w", err)
+	}
+	for _, rec := range changed {
+		if err := a.saveFeedbackRecord(rec); err != nil {
+			return fmt.Errorf("reevaluate resolutions: save %s/%s: %w", rec.ChainName, rec.FeedbackPinId, err)
+		}
+	}
+	if len(changed) > 0 {
+		a.markOpenScoresDirty()
+	}
+	return nil
+}
+
+// comparisonResolutionChanged compares only the fields re-evaluation owns.
+func comparisonResolutionChanged(before, after FeedbackComparison) bool {
+	return before.Excluded != after.Excluded ||
+		before.ExclusionReason != after.ExclusionReason ||
+		before.ManifestUnverified != after.ManifestUnverified
+}

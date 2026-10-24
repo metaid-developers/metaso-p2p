@@ -101,13 +101,19 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 		stats.chain(PathPreferenceFeedback, pin.ChainName).Fetched++
 	}
 	// Oldest-first replay so latest-per-signer/pair converges to the same
-	// state as live confirmation order (MANAPI lists newest-first).
+	// state as live confirmation order (MANAPI lists newest-first). A single
+	// pin failure is counted and skipped — the run is a full idempotent
+	// rescan, so the failed pin is simply retried on the next run instead of
+	// aborting the whole replay; the error summary at the end keeps the
+	// failure honest.
+	failed := make([]string, 0)
 	for i := len(pins) - 1; i >= 0; i-- {
 		pin := pins[i]
 		chainStats := stats.chain(PathPreferenceFeedback, pin.ChainName)
 		if err := a.processPin(pin, false); err != nil {
 			chainStats.Errors++
-			return err
+			failed = append(failed, fmt.Sprintf("%s: %v", pin.Id, err))
+			continue
 		}
 		if wasReplayed(pin) {
 			chainStats.Applied++
@@ -115,7 +121,16 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 			chainStats.Skipped++
 		}
 	}
-	a.rebuildOpenScores()
+	// Resolution exclusions recorded during this run (apps backfilled after
+	// their feedback) self-heal here, and the score snapshot rebuilds once —
+	// not per pin.
+	if err := a.reevaluateResolutions(); err != nil {
+		return err
+	}
+	a.ensureFreshOpenScores()
+	if len(failed) > 0 {
+		return fmt.Errorf("preference backfill: %d pin(s) failed and were skipped (re-run retries them): %s", len(failed), strings.Join(failed, "; "))
+	}
 	return nil
 }
 

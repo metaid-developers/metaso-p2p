@@ -138,6 +138,11 @@ func (a *Aggregator) listMetaAppsByPreference(params MetaAppListParams) (*MetaAp
 	}
 
 	ascending := params.Order == "asc"
+	if a.preferenceLookup == nil {
+		// Fail before filtering so callers never mistake an unwired score
+		// source for "no evidence yet".
+		return nil, errPreferenceLookupUnavailable
+	}
 	type prefItem struct {
 		match   scoredItem
 		summary MetaAppPreferenceOpen
@@ -153,7 +158,11 @@ func (a *Aggregator) listMetaAppsByPreference(params MetaAppListParams) (*MetaAp
 				continue
 			}
 		}
-		summary := a.metaAppPreferenceBlock(match.item.ChainName, videoSha256).Open
+		block, err := a.metaAppPreferenceBlock(match.item.ChainName, videoSha256)
+		if err != nil {
+			return nil, err
+		}
+		summary := block.Open
 		if params.MinJudges > 0 && summary.Judges < params.MinJudges {
 			continue
 		}

@@ -77,6 +77,13 @@ type FeedbackComparison struct {
 	// queryable in the includeExcluded diagnostics view.
 	Excluded        bool   `json:"excluded,omitempty"`
 	ExclusionReason string `json:"exclusionReason,omitempty"`
+
+	// ManifestUnverified marks comparisons whose ArtifactRef version is not
+	// the current folded package: MetaSo retains only the folded manifest,
+	// so historical-version video/hash fields are recorded as stated and
+	// were never checked against a manifest claim. Honest evidence labelling
+	// required by the acceptance review (deviation B).
+	ManifestUnverified bool `json:"manifestUnverified,omitempty"`
 }
 
 // Exclusion reasons recorded on excluded comparisons.
@@ -140,6 +147,11 @@ type ComparisonEvidence struct {
 	// Present only in the includeExcluded diagnostics view.
 	Excluded        bool   `json:"excluded,omitempty"`
 	ExclusionReason string `json:"exclusionReason,omitempty"`
+
+	// True when the comparison involves a historical (non-current) package
+	// version whose manifest is not retained, so its video/hash fields are
+	// recorded as stated rather than manifest-checked.
+	ManifestUnverified bool `json:"manifestUnverified,omitempty"`
 }
 
 // OpenSummary is the open-evidence score summary of one (chainName,

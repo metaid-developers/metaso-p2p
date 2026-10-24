@@ -121,6 +121,11 @@ func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath 
 	if updated.PublisherAddress == "" {
 		updated.PublisherAddress = previous.PublisherAddress
 	}
+	// The creator identity always belongs to the original create pin, never
+	// to the modifier; inherit it across every modify/revoke fold.
+	updated.CreatorGlobalMetaId = firstNonEmpty(updated.CreatorGlobalMetaId, previous.CreatorGlobalMetaId)
+	updated.CreatorMetaId = firstNonEmpty(updated.CreatorMetaId, previous.CreatorMetaId)
+	updated.CreatorAddress = firstNonEmpty(updated.CreatorAddress, previous.CreatorAddress)
 	if !updated.PayloadExposed {
 		updated.PayloadText = previous.PayloadText
 		updated.PayloadJSON = previous.PayloadJSON
@@ -203,6 +208,12 @@ func newRecordFromPin(pin *aggregator.PinInscription, protocolPath, sourcePinId 
 		PublisherMetaId:       firstNonEmpty(pin.MetaId, pin.CreateMetaId),
 		PublisherAddress:      firstNonEmpty(pin.Address, pin.CreateAddress),
 
+		// On the create path (sourcePinId == pin.Id) the pin author is both
+		// publisher and creator; processModify inherits these across folds.
+		CreatorGlobalMetaId: creatorGlobalMetaId(pin, sourcePinId),
+		CreatorMetaId:       creatorMetaId(pin, sourcePinId),
+		CreatorAddress:      creatorAddress(pin, sourcePinId),
+
 		Operation: normaliseOperation(pin.Operation),
 		Hidden:    false,
 		IsMempool: isMempool,
@@ -244,6 +255,30 @@ func canonicalPublisherGlobalMetaId(pin *aggregator.PinInscription) string {
 		return encoded
 	}
 	return globalMetaId
+}
+
+// creator* helpers stamp the creator identity only when the pin IS the
+// create pin (its id equals the chain root); modify pins leave the fields
+// empty so processModify inherits the original creator.
+func creatorGlobalMetaId(pin *aggregator.PinInscription, sourcePinId string) string {
+	if pin == nil || sourcePinId != pin.Id {
+		return ""
+	}
+	return canonicalPublisherGlobalMetaId(pin)
+}
+
+func creatorMetaId(pin *aggregator.PinInscription, sourcePinId string) string {
+	if pin == nil || sourcePinId != pin.Id {
+		return ""
+	}
+	return firstNonEmpty(pin.MetaId, pin.CreateMetaId)
+}
+
+func creatorAddress(pin *aggregator.PinInscription, sourcePinId string) string {
+	if pin == nil || sourcePinId != pin.Id {
+		return ""
+	}
+	return firstNonEmpty(pin.Address, pin.CreateAddress)
 }
 
 type payloadResult struct {

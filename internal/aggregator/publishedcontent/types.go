@@ -30,6 +30,16 @@ type Record struct {
 	PublisherMetaId       string `json:"publisherMetaId"`
 	PublisherAddress      string `json:"publisherAddress"`
 
+	// Creator* preserve the identity of the original create pin across
+	// modify folds (the folded publisher tracks the latest modifier). The
+	// preference aggregator uses them so an app creator cannot bypass the
+	// author-conflict rule by judging their own work after someone else
+	// modified the package. Absent on records stored before this field
+	// existed; a replay/backfill of the create pin repopulates them.
+	CreatorGlobalMetaId string `json:"creatorGlobalMetaId,omitempty"`
+	CreatorMetaId       string `json:"creatorMetaId,omitempty"`
+	CreatorAddress      string `json:"creatorAddress,omitempty"`
+
 	Operation string `json:"operation"`
 	Hidden    bool   `json:"hidden"`
 	IsMempool bool   `json:"isMempool,omitempty"`

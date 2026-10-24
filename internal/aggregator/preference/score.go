@@ -56,9 +56,45 @@ type pairKey struct {
 	high      string
 }
 
+// markOpenScoresDirty flags the snapshot for rebuild. Confirmed writes and
+// resolution re-evaluations call this instead of rebuilding inline, so a
+// replay/backfill burst of N pins costs one rebuild (on the next read)
+// instead of N.
+func (a *Aggregator) markOpenScoresDirty() {
+	a.openScoresDirty.Store(true)
+}
+
+// ensureFreshOpenScores rebuilds the snapshot at most once per dirty flag,
+// guarded so concurrent readers trigger exactly one rebuild.
+func (a *Aggregator) ensureFreshOpenScores() {
+	if a == nil || a.store == nil {
+		return
+	}
+	if !a.openScoresDirty.Load() {
+		return
+	}
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
+	if !a.openScoresDirty.Load() {
+		return
+	}
+	a.rebuildOpenScores()
+	a.openScoresDirty.Store(false)
+}
+
+// openScoreRebuildCount reports how many full snapshot rebuilds ran (test
+// hook for the O(N²) regression guard).
+func (a *Aggregator) openScoreRebuildCount() int {
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
+	return a.openScoreRebuilds
+}
+
 // rebuildOpenScores recomputes the warm open-preference snapshot from the
 // stored confirmed feedback records. Deterministic: the same confirmed chain
 // input always yields the same summaries (acceptance G4 / §8 vector 10).
+// Callers go through ensureFreshOpenScores; direct calls (Init warm-up) must
+// clear the dirty flag themselves.
 func (a *Aggregator) rebuildOpenScores() {
 	if a == nil || a.store == nil {
 		return
@@ -149,6 +185,7 @@ func (a *Aggregator) rebuildOpenScores() {
 		snapshot[openScoreSnapshotKey(key.chainName, key.videoSha256)] = summary
 	}
 	a.openScores.Store(snapshot)
+	a.openScoreRebuilds++
 }
 
 func latestComparisonFromItem(rec *FeedbackRecord, item *FeedbackComparison, order comparisonOrder, itemIndex int) latestComparison {
@@ -197,6 +234,7 @@ func (a *Aggregator) openScoreSnapshot() map[string]OpenSummary {
 // OpenSummaryFor returns the open summary of one (chainName, videoSha256)
 // identity; unjudged identities get the exact zero-evidence summary.
 func (a *Aggregator) OpenSummaryFor(chainName, videoSha256 string) OpenSummary {
+	a.ensureFreshOpenScores()
 	if snapshot := a.openScoreSnapshot(); snapshot != nil {
 		if summary, ok := snapshot[openScoreSnapshotKey(chainName, videoSha256)]; ok {
 			return summary

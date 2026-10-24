@@ -227,6 +227,9 @@ func comparisonEvidenceFromRecord(rec FeedbackRecord, item FeedbackComparison) C
 	}
 	client := rec.Client
 	evidence.Client = &client
+	if item.ManifestUnverified {
+		evidence.ManifestUnverified = true
+	}
 	if item.Excluded {
 		evidence.Excluded = true
 		evidence.ExclusionReason = item.ExclusionReason

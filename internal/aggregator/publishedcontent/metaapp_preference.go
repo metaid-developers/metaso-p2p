@@ -74,18 +74,21 @@ type PreferenceLookup interface {
 	OpenPreferenceSummary(chainName, videoSha256 string) MetaAppPreferenceOpen
 }
 
-// SetPreferenceLookup wires the open-preference score source (nil-safe: the
-// preference listing degrades to unjudged summaries without it).
+// SetPreferenceLookup wires the open-preference score source. Without it the
+// preference listing fails explicitly (errPreferenceLookupUnavailable) — it
+// never silently degrades items to unjudged summaries.
 func (a *Aggregator) SetPreferenceLookup(lookup PreferenceLookup) {
 	a.preferenceLookup = lookup
 }
 
-func (a *Aggregator) metaAppPreferenceBlock(chainName, videoSha256 string) MetaAppPreferenceBlock {
-	open := UnjudgedMetaAppPreferenceOpen()
-	if a.preferenceLookup != nil && videoSha256 != "" {
-		open = a.preferenceLookup.OpenPreferenceSummary(strings.ToLower(strings.TrimSpace(chainName)), strings.TrimSpace(videoSha256))
+var errPreferenceLookupUnavailable = metaAppParamErr("preference summaries unavailable")
+
+func (a *Aggregator) metaAppPreferenceBlock(chainName, videoSha256 string) (MetaAppPreferenceBlock, error) {
+	if a.preferenceLookup == nil {
+		return MetaAppPreferenceBlock{}, errPreferenceLookupUnavailable
 	}
-	return MetaAppPreferenceBlock{Open: open, Validated: UnavailableMetaAppPreferenceValidated()}
+	open := a.preferenceLookup.OpenPreferenceSummary(strings.ToLower(strings.TrimSpace(chainName)), strings.TrimSpace(videoSha256))
+	return MetaAppPreferenceBlock{Open: open, Validated: UnavailableMetaAppPreferenceValidated()}, nil
 }
 
 // MetaAppSnapshot is the resolved view of a MetaApp version chain consumed
@@ -99,7 +102,13 @@ type MetaAppSnapshot struct {
 	PublisherGlobalMetaId string
 	PublisherMetaId       string
 	PublisherAddress      string
-	ManifestPayload       map[string]any
+	// Creator* carry the original create-pin identity (empty on records
+	// stored before the field existed). Author-conflict checks must test
+	// both identities: the folded publisher tracks the latest modifier.
+	CreatorGlobalMetaId string
+	CreatorMetaId       string
+	CreatorAddress      string
+	ManifestPayload     map[string]any
 }
 
 // ResolveMetaAppSnapshot resolves any pin id of a MetaApp version chain
@@ -121,6 +130,9 @@ func (a *Aggregator) ResolveMetaAppSnapshot(chainName, anyPinId string) (*MetaAp
 		PublisherGlobalMetaId: rec.PublisherGlobalMetaId,
 		PublisherMetaId:       rec.PublisherMetaId,
 		PublisherAddress:      rec.PublisherAddress,
+		CreatorGlobalMetaId:   rec.CreatorGlobalMetaId,
+		CreatorMetaId:         rec.CreatorMetaId,
+		CreatorAddress:        rec.CreatorAddress,
 		ManifestPayload:       rec.PayloadJSON,
 	}, true
 }
