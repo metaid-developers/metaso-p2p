@@ -20,6 +20,9 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	indexMu       sync.Mutex
 	profileLookup MetaAppProfileLookup
+	// preferenceLookup supplies open-preference summaries to the
+	// sort=preference listing; nil degrades to unjudged summaries.
+	preferenceLookup PreferenceLookup
 
 	// registryMu serializes read-modify-write cycles on the by_protocol_path
 	// registry index (pin handling and the Init rebuild).

@@ -42,6 +42,14 @@ type MetaAppItem struct {
 
 	CreatedAt int64 `json:"createdAt"`
 	UpdatedAt int64 `json:"updatedAt"`
+
+	// MotionVideo is the additive Motion Video playback projection (metaso
+	// requirement R1); nil for non-Motion-Video apps.
+	MotionVideo *MetaAppMotionVideo `json:"motionVideo,omitempty"`
+
+	// Preference carries both evidence summaries; attached only to items of
+	// a preference-sorted listing (metaso requirement R4).
+	Preference *MetaAppPreferenceBlock `json:"preference,omitempty"`
 }
 
 // MetaAppDetail extends the list item with the raw payload for clients that
@@ -62,6 +70,15 @@ type MetaAppListParams struct {
 	IncludeDisabled bool
 	Size            int
 	Cursor          string
+
+	// Preference listing extension (metaso requirement R4). Sort empty keeps
+	// the existing feed/keyword order; Sort "preference" switches to the
+	// open-preference ordering.
+	Sort      string
+	Order     string // desc (default) | asc
+	Basis     string // open (default) | validated (unavailable before R7)
+	MinJudges int
+	Learning  string // declared | incomplete
 }
 
 type MetaAppListResult struct {
@@ -108,6 +125,8 @@ func metaAppItemFromRecord(rec *Record) MetaAppItem {
 
 		CreatedAt: rec.CreatedAt,
 		UpdatedAt: rec.UpdatedAt,
+
+		MotionVideo: metaAppMotionVideoFromPayload(payload, tags),
 	}
 }
 

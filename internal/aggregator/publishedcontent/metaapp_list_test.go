@@ -149,7 +149,7 @@ func TestMetaAppListFilters(t *testing.T) {
 	assertLen(MetaAppListParams{Since: 3001}, 0)
 	assertLen(MetaAppListParams{Publisher: "gid-alice"}, 1)
 	assertLen(MetaAppListParams{Publisher: "addr-alice"}, 1) // EqualFold on address
-	assertLen(MetaAppListParams{Runtime: "browser"}, 1)     // contains match on browser/android
+	assertLen(MetaAppListParams{Runtime: "browser"}, 1)      // contains match on browser/android
 	assertLen(MetaAppListParams{Runtime: "ios"}, 1)
 	assertLen(MetaAppListParams{ChainName: "opcat"}, 1)
 	assertLen(MetaAppListParams{ChainName: "mvc"}, 2)
