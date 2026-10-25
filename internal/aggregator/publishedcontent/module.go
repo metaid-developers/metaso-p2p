@@ -65,6 +65,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if err := a.rebuildProtocolRegistry(); err != nil {
 		return err
 	}
+	// Backfill creator identity on legacy metaapp records (records stored
+	// before the Creator* fields existed). Non-fatal: create-pin replays and
+	// the next startup retry the migration.
+	if err := a.migrateLegacyCreatorFields(); err != nil {
+		log.Printf("WARNING: publishedcontent legacy creator migration failed: %v", err)
+	}
 	// Warm the search-document snapshot from the record store. A scan failure
 	// is non-fatal: every subsequent record write re-folds its document.
 	if err := a.rebuildSearchDocuments(); err != nil {

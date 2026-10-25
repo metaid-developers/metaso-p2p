@@ -3,6 +3,7 @@ package publishedcontent
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -77,9 +78,86 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription, protocolPath 
 			mergeConfirmedReplayWithPendingCurrent(existing, rec, pin.Id)
 			return a.saveRecord(rec, existing)
 		}
+		// Creator migration: records stored before the Creator* fields
+		// existed get their creator backfilled from the replayed create pin
+		// — the authoritative original author, which a folded record can
+		// never recover on its own once a third party modified the app.
+		// MetaApp-scoped: the creator identity is only consumed by the
+		// preference author-conflict check.
+		if !isMempool && protocolPath == PathMetaApp && existing.lacksCreatorIdentity() {
+			migrated := *existing
+			migrated.CreatorGlobalMetaId = rec.CreatorGlobalMetaId
+			migrated.CreatorMetaId = rec.CreatorMetaId
+			migrated.CreatorAddress = rec.CreatorAddress
+			return a.saveRecord(&migrated, existing)
+		}
 		return nil
 	}
 	return a.saveRecord(rec, nil)
+}
+
+// lacksCreatorIdentity reports whether a record predates the Creator* fields
+// (all three absent). A partially populated record counts as populated.
+func (r *Record) lacksCreatorIdentity() bool {
+	return r.CreatorGlobalMetaId == "" && r.CreatorMetaId == "" && r.CreatorAddress == ""
+}
+
+// migrateLegacyCreatorFields backfills creator identity on legacy metaapp
+// records at startup. For create-only records (current == root) the folded
+// publisher IS the original author, so creator := publisher is exact.
+// Legacy records that were already modified by a third party cannot be
+// recovered here — their creator is repopulated when the create pin replays
+// through processCreate (metaapp backfill re-run); until then the
+// author-conflict check degrades to the folded-publisher approximation.
+// Non-fatal: a scan failure leaves the records untouched and the next
+// startup retries.
+func (a *Aggregator) migrateLegacyCreatorFields() error {
+	if a.store == nil {
+		return nil
+	}
+	migrated := 0
+	err := a.store.ScanPrefix(Namespace, []byte(keyRecord), func(key, value []byte) error {
+		_, protocolPath, _, ok := parseRecordKey(key)
+		if !ok || protocolPath != PathMetaApp {
+			return nil
+		}
+		var rec Record
+		if err := json.Unmarshal(value, &rec); err != nil || !rec.lacksCreatorIdentity() {
+			return nil // corrupt or already carries creator identity
+		}
+		if rec.CurrentPinId != "" && rec.CurrentPinId != rec.SourcePinId {
+			return nil // modified legacy record: needs the create-pin replay
+		}
+		rec.CreatorGlobalMetaId = rec.PublisherGlobalMetaId
+		rec.CreatorMetaId = rec.PublisherMetaId
+		rec.CreatorAddress = rec.PublisherAddress
+		raw, err := json.Marshal(rec)
+		if err != nil {
+			return nil
+		}
+		if err := a.store.Set(Namespace, key, raw); err != nil {
+			return err
+		}
+		migrated++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if migrated > 0 {
+		log.Printf("publishedcontent: migrated creator identity onto %d legacy create-only metaapp record(s)", migrated)
+	}
+	return nil
+}
+
+// parseRecordKey splits a `record:<chain>:<path>:<pin>` storage key.
+func parseRecordKey(key []byte) (chainName, protocolPath, sourcePinId string, ok bool) {
+	rest := strings.TrimPrefix(string(key), keyRecord)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
 }
 
 func (a *Aggregator) processModify(pin *aggregator.PinInscription, protocolPath string, isMempool bool) error {

@@ -34,8 +34,14 @@ type Record struct {
 	// modify folds (the folded publisher tracks the latest modifier). The
 	// preference aggregator uses them so an app creator cannot bypass the
 	// author-conflict rule by judging their own work after someone else
-	// modified the package. Absent on records stored before this field
-	// existed; a replay/backfill of the create pin repopulates them.
+	// modified the package.
+	//
+	// Legacy records (stored before this field existed) are migrated two
+	// ways: create-only records get creator := folded publisher at startup
+	// (exact, the publisher IS the author); modified legacy records are
+	// repopulated only when the original create pin replays through
+	// processCreate (metaapp backfill re-run) — until then the
+	// author-conflict check degrades to the folded-publisher approximation.
 	CreatorGlobalMetaId string `json:"creatorGlobalMetaId,omitempty"`
 	CreatorMetaId       string `json:"creatorMetaId,omitempty"`
 	CreatorAddress      string `json:"creatorAddress,omitempty"`
