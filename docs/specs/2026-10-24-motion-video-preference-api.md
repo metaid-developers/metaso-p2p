@@ -140,7 +140,10 @@ ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
   indexer untouched; projections stay chain-rebuildable.
 - A single pin replay failure is counted, skipped and retried on the next
   run (full idempotent rescan, no watermark to strand); the command exits
-  non-zero with the failure list so operators see it.
+  non-zero with the failure list so operators see it, and the per-chain
+  report still prints on the error path (counters accumulated before the
+  failure are the recovery evidence). A re-evaluation failure is merged
+  with, never replaces, the failed-pin list.
 - After each run, stored exclusions are re-evaluated against the current
   metaapp index (self-heal for feedback that arrived before its app) and
   the score snapshot rebuilds once for the whole batch (dirty-flag lazy
@@ -154,8 +157,9 @@ ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
   (`SetMetaAppResolver` before `Init`, `SetPreferenceLookup` after a
   successful register). `sort=preference` fails with a 50000 error if the
   score source is missing — it never silently degrades to unjudged items.
-  `cmd/metaso-p2p/main_test.go` and the full-router fixture in
-  `internal/api/router_test.go` guard this wiring.
+  `cmd/metaso-p2p/main_test.go`, the full-router fixture in
+  `internal/api/router_test.go` and the registry-dispatch test in the
+  preference package guard this wiring.
 - **Exclusive Pebble access:** the backfill command opens the same data
   directory, so it must run while the main service is stopped (maintenance
   window), same as the existing qa/metaweb backfill commands.
@@ -163,6 +167,14 @@ ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
   metaweb) backfill first — ArtifactRef validation resolves against the
   indexed metaapp records. Out-of-order runs self-heal at the next
   preference backfill or service restart.
+- **Legacy creator migration:** records stored before the creator identity
+  existed are migrated automatically — create-only records at startup
+  (creator := folded publisher, exact), modified legacy records when the
+  metaapp backfill re-runs (create pins replay and restore the true
+  creator). Deployments upgrading an existing data dir should re-run the
+  metaapp backfill once to complete the migration for modified apps;
+  until then their author-conflict detection uses the folded-publisher
+  approximation.
 
 - Fixture coverage: both real Motion Video manifests (Ukiyo-e #001 without
   extension/audio fields, Silent Film #002 with `.mp4`/audio fields), all
@@ -171,14 +183,18 @@ ArtifactRefs, `pick`, optional `reason`/`dims`, `signerGlobalMetaId`,
   stability, replay determinism, exclusion self-heal, creator-conflict and
   lazy-rebuild regression guards.
 
-## 7. Deviations / interpretations (for coordination review)
+## 7. Contract rulings and remaining interpretations
 
-| # | Topic | MetaSo behaviour | Status for coordination |
+Rulings A/B/D below were accepted by the coordination review (pre-merge
+feedback, 2026-10-25) and are binding v1 semantics; the shared contract
+package should adopt the same wording.
+
+| # | Topic | MetaSo behaviour (v1 semantics) | Ruling |
 |---|---|---|---|
-| 1 | `client.artifact` | syntactic `metaapp://<pin>` check only; MetaSo does not promise the client root is published/indexed | Accepted by review; needs recording in the shared contract |
-| 2 | ArtifactRef/manifest inconsistency | schema errors stay whole-pin atomic; artifact inconsistencies (app-not-found, version-outside-app, artifact-mismatch, chain-mismatch) exclude the item, unrelated pairs stay eligible. Switch point: `artifactInvalidatesBatch` in `internal/aggregator/preference/process.go` flips to whole-pin invalidation if coordination rules otherwise | **Needs a contract decision** — amendment requested |
-| 3 | Historical version refs | recorded as stated, surfaced with `manifestUnverified: true`; never presented as manifest-verified | Implemented per review suggestion B; amendment requested |
-| 4 | Missing current-manifest video declarations | treated as `artifact-mismatch` (not comparable ≠ implicit pass) | Implemented per review item C |
-| 5 | Author conflict | checks folded publisher AND retained creator identity; intermediate historical modifiers are approximated by the folded publisher (per-version publisher history not retained) | Implemented per review item D; approximation declared |
-| 6 | Pair chain scoping | a/b must share the feedback pin's chain; cross-chain pairs excluded as `chain-mismatch` | Accepted by review |
+| 1 | `client.artifact` | syntactic `metaapp://<pin>` check only; MetaSo does not promise the client root is published/indexed; hosts own the "published client" rule | Accepted; record in the shared contract |
+| 2 | Batch atomicity (ruling A) | Schema/structural errors invalidate the whole feedback pin. ArtifactRef resolution or manifest-validation failures exclude only the affected item with a recorded reason; unrelated valid comparisons stay eligible. Author conflicts are likewise per-item exclusions. Implemented by `artifactInvalidatesBatch = false` in `internal/aggregator/preference/process.go` (compile-time semantics, not a runtime switch) | **Ruled: per-item exclusion** |
+| 3 | Historical version refs (ruling B) | recorded as open evidence with `manifestUnverified: true`; never counted as manifest-verified; the label is a source-state annotation and never changes an exclusion result; bots must still fetch and validate the actual source package before learning use | **Ruled: accepted** |
+| 4 | Missing current-manifest video declarations | treated as `artifact-mismatch` (not comparable ≠ implicit pass) | Implemented (review item C) |
+| 5 | Author conflict (ruling D) | checks folded publisher AND retained creator identity; intermediate historical modifiers remain approximated by the folded publisher (per-version publisher history not retained). Legacy records are migrated: create-only records get `creator := publisher` at startup; modified legacy records regain their creator when the create pin replays (metaapp backfill re-run) — until then their conflict detection uses the folded-publisher approximation | **Ruled: accepted with the legacy migration above** |
+| 6 | Pair chain scoping | a/b must share the feedback pin's chain; cross-chain pairs are excluded as `chain-mismatch` | Accepted by review |
 | 7 | Validated basis | fixed `40000 preference_validated_basis_unavailable` pre-R7 | Accepted by review |
