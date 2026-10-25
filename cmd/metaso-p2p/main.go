@@ -17,6 +17,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/qa"
@@ -189,6 +190,28 @@ func main() {
 		qaCandidate.SetProfileNamer(metaweb.NewUserInfoProfileNamer(userinfoAgg))
 		if err := aggRegistry.Register(qaCandidate); err != nil {
 			log.Printf("WARNING: qa aggregator init failed: %v", err)
+		}
+		// preference is the open comparison-feedback read model over
+		// /protocols/preference/feedback, serving
+		// GET /api/preference/comparisons and the open-preference summaries
+		// behind /api/metaapp/list?sort=preference. The metaapp resolver
+		// must be wired before Register: Init re-evaluates stored artifact
+		// exclusions against the (already initialised) publishedcontent
+		// store. Both wirings are guarded by a main-level source test; see
+		// cmd/metaso-p2p/main_test.go.
+		var preferenceCandidate *preference.Aggregator
+		if publishedAgg != nil {
+			preferenceCandidate = &preference.Aggregator{}
+			preferenceCandidate.SetMetaAppResolver(preference.NewMetaAppResolverAdapter(publishedAgg))
+			if err := aggRegistry.Register(preferenceCandidate); err != nil {
+				preferenceCandidate = nil
+				log.Printf("WARNING: preference aggregator init failed: %v", err)
+			}
+		} else {
+			log.Printf("WARNING: preference aggregator skipped: publishedcontent aggregator unavailable")
+		}
+		if preferenceCandidate != nil {
+			publishedCandidate.SetPreferenceLookup(preferenceCandidate)
 		}
 		// Best-effort fresh-feed engagement joins wire after qa exists; nil
 		// aggregators degrade to zero counters, never to errors.

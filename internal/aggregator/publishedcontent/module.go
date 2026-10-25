@@ -20,6 +20,9 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	indexMu       sync.Mutex
 	profileLookup MetaAppProfileLookup
+	// preferenceLookup supplies open-preference summaries to the
+	// sort=preference listing; nil degrades to unjudged summaries.
+	preferenceLookup PreferenceLookup
 
 	// registryMu serializes read-modify-write cycles on the by_protocol_path
 	// registry index (pin handling and the Init rebuild).
@@ -61,6 +64,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	// store (self-healing at every start, per the registry requirement §3.2).
 	if err := a.rebuildProtocolRegistry(); err != nil {
 		return err
+	}
+	// Backfill creator identity on legacy metaapp records (records stored
+	// before the Creator* fields existed). Non-fatal: create-pin replays and
+	// the next startup retry the migration.
+	if err := a.migrateLegacyCreatorFields(); err != nil {
+		log.Printf("WARNING: publishedcontent legacy creator migration failed: %v", err)
 	}
 	// Warm the search-document snapshot from the record store. A scan failure
 	// is non-fatal: every subsequent record write re-folds its document.

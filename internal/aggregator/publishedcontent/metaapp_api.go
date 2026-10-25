@@ -100,6 +100,10 @@ func parseMetaAppListParams(c *gin.Context) (MetaAppListParams, error) {
 	if err != nil {
 		return MetaAppListParams{}, err
 	}
+	preference, err := parseMetaAppPreferenceParams(c)
+	if err != nil {
+		return MetaAppListParams{}, err
+	}
 	return MetaAppListParams{
 		Keyword:         c.Query("keyword"),
 		Tag:             c.Query("tag"),
@@ -111,7 +115,79 @@ func parseMetaAppListParams(c *gin.Context) (MetaAppListParams, error) {
 		IncludeDisabled: includeDisabled,
 		Size:            size,
 		Cursor:          c.Query("cursor"),
+
+		Sort:      preference.sort,
+		Order:     preference.order,
+		Basis:     preference.basis,
+		MinJudges: preference.minJudges,
+		Learning:  preference.learning,
 	}, nil
+}
+
+type metaAppPreferenceParams struct {
+	sort      string
+	order     string
+	basis     string
+	minJudges int
+	learning  string
+}
+
+// parseMetaAppPreferenceParams validates the additive preference-listing
+// parameters (metaso requirement R4). Existing calls without them keep their
+// current behavior. basis=validated is reported honestly as unavailable with
+// the stable message preference_validated_basis_unavailable (pre-R7).
+func parseMetaAppPreferenceParams(c *gin.Context) (metaAppPreferenceParams, error) {
+	params := metaAppPreferenceParams{order: "desc", basis: PreferenceBasisOpen}
+
+	switch sortParam := strings.TrimSpace(c.Query("sort")); sortParam {
+	case "":
+	case "preference":
+		params.sort = "preference"
+	default:
+		return params, errInvalidMetaAppSort
+	}
+
+	switch order := strings.TrimSpace(c.Query("order")); order {
+	case "":
+	case "desc":
+		params.order = "desc"
+	case "asc":
+		params.order = "asc"
+	default:
+		return params, errInvalidMetaAppOrder
+	}
+
+	switch basis := strings.TrimSpace(c.Query("basis")); basis {
+	case "":
+	case PreferenceBasisOpen:
+		params.basis = PreferenceBasisOpen
+	case PreferenceBasisValidated:
+		return params, errPreferenceValidatedBasisUnavailable
+	default:
+		return params, errInvalidMetaAppBasis
+	}
+
+	minJudgesRaw := strings.TrimSpace(c.Query("minJudges"))
+	if minJudgesRaw != "" {
+		n, err := strconv.Atoi(minJudgesRaw)
+		if err != nil || n < 0 {
+			return params, errInvalidMetaAppMinJudges
+		}
+		params.minJudges = n
+	}
+
+	switch learning := strings.TrimSpace(c.Query("learning")); learning {
+	case "":
+	case LearningStatusDeclared, LearningStatusIncomplete:
+		params.learning = learning
+	default:
+		return params, errInvalidMetaAppLearning
+	}
+
+	if params.sort == "preference" && strings.TrimSpace(c.Query("chainName")) == "" {
+		return params, errMetaAppPreferenceChainRequired
+	}
+	return params, nil
 }
 
 func parseMetaAppSize(raw string) (int, error) {
@@ -148,9 +224,18 @@ func parseMetaAppIncludeDisabled(raw string) (bool, error) {
 }
 
 var (
-	errInvalidMetaAppSize            = metaAppParamErr("invalid size")
-	errInvalidMetaAppTimestamp       = metaAppParamErr("invalid since/until")
-	errInvalidMetaAppIncludeDisabled = metaAppParamErr("invalid includeDisabled")
+	errInvalidMetaAppSize             = metaAppParamErr("invalid size")
+	errInvalidMetaAppTimestamp        = metaAppParamErr("invalid since/until")
+	errInvalidMetaAppIncludeDisabled  = metaAppParamErr("invalid includeDisabled")
+	errInvalidMetaAppSort             = metaAppParamErr("invalid sort")
+	errInvalidMetaAppOrder            = metaAppParamErr("invalid order")
+	errInvalidMetaAppBasis            = metaAppParamErr("invalid basis")
+	errInvalidMetaAppMinJudges        = metaAppParamErr("invalid minJudges")
+	errInvalidMetaAppLearning         = metaAppParamErr("invalid learning")
+	errMetaAppPreferenceChainRequired = metaAppParamErr("sort=preference requires chainName")
+	// errPreferenceValidatedBasisUnavailable carries the stable pre-R7
+	// message contract consumed by IDBots (metaso requirement R4).
+	errPreferenceValidatedBasisUnavailable = metaAppParamErr("preference_validated_basis_unavailable")
 )
 
 type metaAppParamErr string
