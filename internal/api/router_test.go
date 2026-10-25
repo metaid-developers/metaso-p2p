@@ -1758,9 +1758,12 @@ func TestRouter_UserInfoMetaFileCompat(t *testing.T) {
 
 // TestFullRouterPreferenceWiring guards the acceptance-review blocker: the
 // full-router fixture must mount /api/preference/comparisons (not 404),
-// block/mempool feedback pins must flow into the aggregator through the
-// registry dispatch, and /api/metaapp/list?sort=preference must read the
-// wired score source — never the nil-degraded all-unjudged fallback.
+// feedback pins fed to the aggregator produce evidence through the mounted
+// routes, and /api/metaapp/list?sort=preference must read the wired score
+// source — never the nil-degraded all-unjudged fallback. Pins enter via
+// direct handler calls here; the registry dispatch chain itself is covered
+// by TestRegistryDispatchFeedsPreferenceAggregator in the preference
+// package.
 func TestFullRouterPreferenceWiring(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
 

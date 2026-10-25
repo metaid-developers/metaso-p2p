@@ -106,11 +106,15 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	// rescan, so the failed pin is simply retried on the next run instead of
 	// aborting the whole replay; the error summary at the end keeps the
 	// failure honest.
+	applyPin := a.backfillApplyPin
+	if applyPin == nil {
+		applyPin = func(pin *aggregator.PinInscription) error { return a.processPin(pin, false) }
+	}
 	failed := make([]string, 0)
 	for i := len(pins) - 1; i >= 0; i-- {
 		pin := pins[i]
 		chainStats := stats.chain(PathPreferenceFeedback, pin.ChainName)
-		if err := a.processPin(pin, false); err != nil {
+		if err := applyPin(pin); err != nil {
 			chainStats.Errors++
 			failed = append(failed, fmt.Sprintf("%s: %v", pin.Id, err))
 			continue
@@ -124,14 +128,20 @@ func (a *Aggregator) Backfill(opts BackfillOptions) error {
 	// Resolution exclusions recorded during this run (apps backfilled after
 	// their feedback) self-heal here, and the score snapshot rebuilds once —
 	// not per pin.
+	var finalErr error
 	if err := a.reevaluateResolutions(); err != nil {
-		return err
+		finalErr = fmt.Errorf("preference backfill: resolution re-evaluation failed: %w", err)
 	}
 	a.ensureFreshOpenScores()
 	if len(failed) > 0 {
-		return fmt.Errorf("preference backfill: %d pin(s) failed and were skipped (re-run retries them): %s", len(failed), strings.Join(failed, "; "))
+		pinErr := fmt.Errorf("preference backfill: %d pin(s) failed and were skipped (re-run retries them): %s", len(failed), strings.Join(failed, "; "))
+		if finalErr != nil {
+			finalErr = fmt.Errorf("%v; additionally %v", finalErr, pinErr)
+		} else {
+			finalErr = pinErr
+		}
 	}
-	return nil
+	return finalErr
 }
 
 // wasReplayed reports whether the pin belongs to the consumed slice of the

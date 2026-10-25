@@ -134,13 +134,16 @@ func (a *Aggregator) buildFeedbackRecord(pin *aggregator.PinInscription, chainNa
 	rec.IsTest = isTestBatch(categories)
 	for i := range items {
 		reason := a.resolveComparisonExclusion(&items[i], chainName, rec.SignerGlobalMetaId, rec.SignerMetaId, rec.SignerAddress)
-		// artifactInvalidatesBatch selects the §4.2 interpretation for
-		// ArtifactRef/manifest inconsistencies. false keeps per-item
-		// exclusion with unrelated valid pairs eligible (vector 9 spirit;
-		// historical evidence stays queryable per §3 rule 7). Flipping it
-		// to true implements the literal whole-pin invalidation reading.
-		// Author conflicts never invalidate the batch (vector 9). Pending
-		// coordination ratification — see the spec §7.
+		// Contract ruling A (accepted by coordination review, v1
+		// amendment): schema/structural errors invalidate the whole feedback
+		// pin; ArtifactRef resolution or manifest-validation failures
+		// exclude only the affected item with a recorded reason, keeping
+		// unrelated valid comparisons in the batch eligible; author
+		// conflicts are likewise per-item exclusions. This distinguishes a
+		// malformed payload from one unresolvable candidate reference.
+		// artifactInvalidatesBatch=false implements that ruling; the whole
+		// alternative is kept as a one-line switch for a future contract
+		// change, not a runtime option.
 		if artifactInvalidatesBatch && reason != "" && reason != ExclusionAuthorConflict {
 			rec.Status = StatusMalformed
 			rec.InvalidReason = fmt.Sprintf("item %d: artifact reference %s", i, reason)
@@ -152,8 +155,9 @@ func (a *Aggregator) buildFeedbackRecord(pin *aggregator.PinInscription, chainNa
 	return rec
 }
 
-// artifactInvalidatesBatch documents the switch point between the two
-// §4.2 readings for artifact inconsistencies (see buildFeedbackRecord).
+// artifactInvalidatesBatch implements contract ruling A (see
+// buildFeedbackRecord): false = per-item exclusion for artifact
+// inconsistencies. Not a runtime switch.
 const artifactInvalidatesBatch = false
 
 // resolveComparisonExclusion marks one comparison excluded when its refs do

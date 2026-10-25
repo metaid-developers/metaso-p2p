@@ -26,6 +26,11 @@ type Aggregator struct {
 
 	metaAppResolver MetaAppResolver
 
+	// backfillApplyPin substitutes the per-pin replay call inside Backfill.
+	// Tests use it to inject isolated pin failures; nil (production) replays
+	// through processPin(confirmed).
+	backfillApplyPin func(*aggregator.PinInscription) error
+
 	// openScores holds the warm open-preference snapshot, rebuilt from the
 	// record store at Init and after every confirmed write (score.go).
 	openScores atomic.Value // map[string]OpenSummary, immutable once stored

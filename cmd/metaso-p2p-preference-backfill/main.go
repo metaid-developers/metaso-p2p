@@ -88,16 +88,19 @@ func run(args []string) error {
 
 	client := publishedcontent.NewBackfillClient(opts.MANAPIBaseURL, nil)
 	stats := &preference.BackfillStats{}
-	if err := prefAgg.Backfill(preference.BackfillOptions{
+	err = prefAgg.Backfill(preference.BackfillOptions{
 		Context:  ctx,
 		Client:   client,
 		Since:    opts.Since,
 		PageSize: opts.PageSize,
 		Stats:    stats,
-	}); err != nil {
+	})
+	// Always print the per-chain report, including on failure: counters
+	// accumulated before the error are the operator's recovery evidence.
+	printReport(stats)
+	if err != nil {
 		return err
 	}
-	printReport(stats)
 	log.Printf("preference backfill done")
 	return nil
 }
