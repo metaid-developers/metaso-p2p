@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 )
 
 func fixtureEvents() []Event {
@@ -684,5 +686,149 @@ func TestPinsEndpointCursorContract(t *testing.T) {
 	data, _ := empty["data"].(map[string]any)
 	if data == nil || data["items"] == nil {
 		t.Fatalf("pre-sync pins must render envelope with items: [], got %s", rec.Body.String())
+	}
+}
+
+// fakeSyncManapi serves one constitution genesis pin (contentBody inline, so
+// no per-pin envelope fallback is needed) and a caller-mutable rev front list,
+// mirroring manapi's newest-first pins_by_path shape.
+func fakeSyncManapi(t *testing.T) (*httptest.Server, *[]map[string]any, *sync.Mutex) {
+	t.Helper()
+	founders := []string{"idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5", "idq14hmv23j5fnlx4ccnmvlyldjd38xjsechzwg9xz"}
+	const hexAB = "abababababababababababababababababababababababababababababababab"
+	genesisPayload := map[string]any{
+		"v": 1.0, "revision": 0.0, "prevConstitution": nil, "proposalPin": nil,
+		"founders": founders, "params": paramsToAny(defaultsForTest()),
+		"algoVersions": map[string]any{"adoption": "adoption-algo-v1", "reputation": "reputation-algo-v1", "arbiterDraw": "arbiter-draw-v1"},
+	}
+	revFront := &[]map[string]any{}
+	mu := &sync.Mutex{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/pin/path/list", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		mu.Lock()
+		defer mu.Unlock()
+		var list []any
+		switch path {
+		case PathConstitution:
+			list = []any{map[string]any{"id": "gpin", "genesisHeight": 10, "txIndex": 0, "globalMetaId": founders[0], "contentBody": mustB64(genesisPayload)}}
+		case PathRev:
+			for _, pin := range *revFront {
+				list = append(list, pin)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 1, "data": map[string]any{"list": list, "nextCursor": "", "total": len(list)}})
+	})
+	return httptest.NewServer(mux), revFront, mu
+}
+
+// TestHealthzReportsSyncFreshness locks the always-green-healthz fix: /healthz
+// must expose lastSyncAt plus the last attempt's outcome (events/applied/
+// skipped/error), both before any attempt, after success, and after failure —
+// so "process up" and "view current" stop being the same signal.
+func TestHealthzReportsSyncFreshness(t *testing.T) {
+	fake, _, _ := fakeSyncManapi(t)
+	defer fake.Close()
+	l := NewL2(fake.URL)
+
+	healthz := func() map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		l.ServeMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("healthz must decode: %v (%s)", err, rec.Body.String())
+		}
+		return body
+	}
+
+	// Pre-sync: freshness fields present and honestly empty.
+	if body := healthz(); body["ok"] != true || body["lastSyncAt"] != "" || body["events"] != float64(0) {
+		t.Fatalf("pre-sync healthz: %v", body)
+	}
+
+	// After a successful sweep: timestamp set, outcome summarized.
+	if _, err := l.SyncOnce(context.Background()); err != nil {
+		t.Fatalf("SyncOnce: %v", err)
+	}
+	body := healthz()
+	lastSyncAt, _ := body["lastSyncAt"].(string)
+	if lastSyncAt == "" {
+		t.Fatalf("lastSyncAt empty after sync: %v", body)
+	}
+	if _, err := time.Parse(time.RFC3339, lastSyncAt); err != nil {
+		t.Fatalf("lastSyncAt not RFC3339: %q", lastSyncAt)
+	}
+	if body["events"] == float64(0) {
+		t.Fatalf("events still 0 after sync: %v", body)
+	}
+	lastSync, _ := body["lastSync"].(map[string]any)
+	if lastSync == nil || lastSync["applied"] == float64(0) || lastSync["skipped"] != float64(0) || lastSync["error"] != "" {
+		t.Fatalf("lastSync summary wrong: %v", body)
+	}
+
+	// After a failed sweep (dead upstream): error surfaced, timestamp still fresh.
+	dead := NewL2("http://manapi.invalid")
+	if _, err := dead.SyncOnce(context.Background()); err == nil {
+		t.Fatal("SyncOnce against dead upstream must fail")
+	}
+	rec := httptest.NewRecorder()
+	dead.ServeMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	var deadBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &deadBody); err != nil {
+		t.Fatalf("healthz must decode: %v", err)
+	}
+	deadLast, _ := deadBody["lastSync"].(map[string]any)
+	if deadLast == nil || deadLast["error"] == "" {
+		t.Fatalf("failed sweep must surface lastSync.error: %v", deadBody)
+	}
+	if deadBody["lastSyncAt"] == "" {
+		t.Fatalf("failed sweep must still stamp lastSyncAt: %v", deadBody)
+	}
+}
+
+// TestRunSyncLoopSelfDrives locks the architecture fix itself: with the loop
+// running and NO external /sync call, a pin confirmed after startup shows up
+// in the served view within a couple of loop periods.
+func TestRunSyncLoopSelfDrives(t *testing.T) {
+	fake, revFront, mu := fakeSyncManapi(t)
+	defer fake.Close()
+	const hexCD = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	l := NewL2(fake.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.RunSyncLoop(ctx, 15*time.Millisecond)
+
+	// First round runs immediately at startup: wait for the genesis to land.
+	deadline := time.Now().Add(3 * time.Second)
+	for l.SyncStatus().Events == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("loop never completed its first round")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// A new rev pin confirms on-chain AFTER startup.
+	mu.Lock()
+	*revFront = append(*revFront, map[string]any{
+		"id": "rpin", "genesisHeight": 11, "txIndex": 0,
+		"globalMetaId": "idq1d5m392ahkhp79wsy9ur79e3vhak7tg729dwdr5",
+		"contentBody": mustB64(map[string]any{
+			"v": 1.0, "type": "create", "lang": "zh", "slug": "metaid", "title": "MetaID",
+			"content": "loop body", "contentHash": hexCD,
+		}),
+	})
+	mu.Unlock()
+
+	// The loop alone must apply it — the test never calls SyncOnce.
+	for l.View().Entries["zh:metaid"] == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("loop did not pick up the new pin: status=%+v view=%v", l.SyncStatus(), l.View().Entries)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if st := l.SyncStatus(); st.LastSyncError != "" {
+		t.Fatalf("unexpected last sync error: %+v", st)
 	}
 }

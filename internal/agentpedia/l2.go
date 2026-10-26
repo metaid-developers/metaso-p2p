@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -31,6 +32,13 @@ type L2 struct {
 	manapi          string
 	client          *http.Client
 	lastSyncSkipped []map[string]any // pins whose payload could not be recovered (reported, never replayed)
+	// Outcome of the most recent sync attempt, whatever triggered it (internal
+	// loop or external GET /sync). Written under mu inside SyncOnce, read via
+	// SyncStatus by /healthz and the loop log line — the
+	// "healthz green while the view froze" blind-spot fix.
+	lastSyncAt      time.Time
+	lastSyncApplied int
+	lastSyncError   string
 }
 
 type pinMeta struct {
@@ -136,6 +144,8 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 	defer l.mu.Unlock()
 	applied := 0
 	var skipped []map[string]any
+	l.lastSyncAt = time.Now()
+	l.lastSyncError = ""
 	for _, path := range syncPaths {
 		// manapi pins_by_path pages NEWEST-FIRST: page one (empty cursor)
 		// carries the freshest pins and nextCursor walks toward the oldest.
@@ -154,6 +164,8 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 			}
 			page, err := l.fetchPage(ctx, path, cursor)
 			if err != nil {
+				l.lastSyncError = err.Error()
+				l.lastSyncApplied = applied
 				return l.snapshotCursorsLocked(), err
 			}
 			if len(page.Data.List) == 0 {
@@ -209,7 +221,62 @@ func (l *L2) SyncOnce(ctx context.Context) (map[string]string, error) {
 		l.rebuildLocked()
 	}
 	l.lastSyncSkipped = skipped
+	l.lastSyncApplied = applied
 	return l.snapshotCursorsLocked(), nil
+}
+
+// SyncStatus is the read-side snapshot of the most recent sync attempt,
+// regardless of trigger (internal loop or external GET /api/agentpedia/sync).
+// It backs /healthz freshness: "process up" and "view current" are no longer
+// the same signal.
+type SyncStatus struct {
+	LastSyncAt      time.Time `json:"lastSyncAt"`      // zero until the first attempt
+	Events          int       `json:"events"`          // pooled replay-stream size
+	LastSyncApplied int       `json:"lastSyncApplied"` // events the last attempt applied
+	LastSyncSkipped int       `json:"lastSyncSkipped"` // pins the last attempt skipped (payload unrecoverable)
+	LastSyncError   string    `json:"lastSyncError"`   // non-empty when the last attempt failed
+}
+
+// SyncStatus returns the snapshot above (lock-guarded).
+func (l *L2) SyncStatus() SyncStatus {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return SyncStatus{
+		LastSyncAt:      l.lastSyncAt,
+		Events:          len(l.events),
+		LastSyncApplied: l.lastSyncApplied,
+		LastSyncSkipped: len(l.lastSyncSkipped),
+		LastSyncError:   l.lastSyncError,
+	}
+}
+
+// RunSyncLoop self-drives SyncOnce: one sweep immediately at startup, then one
+// per interval, every round logged. It exists because the view otherwise only
+// advances on an external GET /api/agentpedia/sync — in production that call
+// stopped arriving and the view silently froze for days while healthz stayed
+// green. Cancel ctx to stop the loop.
+func (l *L2) RunSyncLoop(ctx context.Context, interval time.Duration) {
+	syncRound := func() {
+		began := time.Now()
+		if _, err := l.SyncOnce(ctx); err != nil {
+			log.Printf("agentpedia sync error: %v", err)
+			return
+		}
+		st := l.SyncStatus()
+		log.Printf("agentpedia sync ok: applied=%d events=%d skipped=%d took=%s",
+			st.LastSyncApplied, st.Events, st.LastSyncSkipped, time.Since(began).Round(time.Millisecond))
+	}
+	syncRound()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			syncRound()
+		}
+	}
 }
 
 // decodePayload turns a pin contentBody (base64 JSON, occasionally raw JSON)
@@ -503,7 +570,21 @@ func (l *L2) ServeMux() *http.ServeMux {
 	mux.HandleFunc("/api/agentpedia/pins", l.handlePins)
 	mux.HandleFunc("/api/agentpedia/sync", l.handleSync)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		st := l.SyncStatus()
+		lastSyncAt := ""
+		if !st.LastSyncAt.IsZero() {
+			lastSyncAt = st.LastSyncAt.UTC().Format(time.RFC3339)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":         true,
+			"lastSyncAt": lastSyncAt, // "" until the first sync attempt; alert when now-lastSyncAt exceeds a few intervals
+			"events":     st.Events,
+			"lastSync": map[string]any{
+				"applied": st.LastSyncApplied,
+				"skipped": st.LastSyncSkipped,
+				"error":   st.LastSyncError,
+			},
+		})
 	})
 	return mux
 }
