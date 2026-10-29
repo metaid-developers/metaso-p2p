@@ -25,6 +25,7 @@ type Aggregator struct {
 	homepageMaterializedLock sync.Map
 	readModelReady           atomic.Bool
 	blockIngestor            BlockPinIngestor
+	chatBlockFilter          ChatBlockFilter
 }
 
 const (
