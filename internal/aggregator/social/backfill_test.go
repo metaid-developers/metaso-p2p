@@ -2,6 +2,7 @@ package social
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,14 +15,23 @@ func TestBackfillReplaysWithinLookbackOldestFirst(t *testing.T) {
 
 	agg.SetProfileLookup(&fakeTargetLookup{
 		byGlobalMetaId: map[string]*TargetRef{
-			"idq-source": {MetaId: "meta-source", GlobalMetaId: "idq-source", Address: "1Source", Name: "Source", NameId: "name-source:i0", AvatarId: "avatar-source:i0"},
-			"idq-target": {MetaId: "meta-target", GlobalMetaId: "idq-target", Address: "1Target", Name: "Target", NameId: "name-target:i0", AvatarId: "avatar-target:i0"},
+			testGidSource: {MetaId: testMetaSource, GlobalMetaId: testGidSource, Address: testAddrSource, Name: "Source", NameId: "name-source:i0", AvatarId: "avatar-source:i0"},
+			testGidTarget: {MetaId: testMetaTarget, GlobalMetaId: testGidTarget, Address: testAddrTarget, Name: "Target", NameId: "name-target:i0", AvatarId: "avatar-target:i0"},
 		},
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":1,"message":"ok","data":{"list":[{"id":"revoke-1:i0","path":"/follow@follow-1:i0","operation":"revoke","originalId":"follow-1:i0","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719705720},{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"","contentSummary":"\"idq-target\"","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719705600},{"id":"follow-old:i0","path":"/follow","operation":"create","contentBody":"idq-target","contentSummary":"idq-target","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719700000}],"nextCursor":"","cursor":""}}`))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":1,"message":"ok","data":{"list":[`+
+			`{"id":"revoke-1:i0","path":"/follow@follow-1:i0","operation":"revoke","originalId":"follow-1:i0","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719705720},`+
+			`{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"","contentSummary":"\"%s\"","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719705600},`+
+			`{"id":"follow-old:i0","path":"/follow","operation":"create","contentBody":"%s","contentSummary":"%s","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719700000}`+
+			`],"nextCursor":"","cursor":""}}`,
+			testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource,
+			testGidTarget,
+			testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource,
+			testGidTarget, testGidTarget,
+			testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource)))
 	}))
 	defer server.Close()
 
@@ -36,9 +46,11 @@ func TestBackfillReplaysWithinLookbackOldestFirst(t *testing.T) {
 		t.Fatalf("Backfill: %v", err)
 	}
 
+	// The replay is oldest-first, so the follow-1 create is materialized
+	// before the revoke removes it again: the final state must be empty.
 	rel, err := agg.Relationship(RelationshipParams{
-		SourceGlobalMetaId: "idq-source",
-		TargetGlobalMetaId: "idq-target",
+		SourceGlobalMetaId: testGidSource,
+		TargetGlobalMetaId: testGidTarget,
 	})
 	if err != nil {
 		t.Fatalf("Relationship: %v", err)
@@ -50,7 +62,7 @@ func TestBackfillReplaysWithinLookbackOldestFirst(t *testing.T) {
 		t.Fatalf("source metadata = %+v, want cleared after revoke", rel.Source)
 	}
 
-	following, err := agg.ListFollowing(ListParams{GlobalMetaId: "idq-source", Size: 10, View: ViewProfile})
+	following, err := agg.ListFollowing(ListParams{GlobalMetaId: testGidSource, Size: 10, View: ViewProfile})
 	if err != nil {
 		t.Fatalf("ListFollowing: %v", err)
 	}
@@ -65,8 +77,8 @@ func TestBackfillRejectsRepeatedCursor(t *testing.T) {
 
 	agg.SetProfileLookup(&fakeTargetLookup{
 		byGlobalMetaId: map[string]*TargetRef{
-			"idq-source": newTargetRef("meta-source", "idq-source", "1Source"),
-			"idq-target": newTargetRef("meta-target", "idq-target", "1Target"),
+			testGidSource: newTargetRef(testMetaSource, testGidSource, testAddrSource),
+			testGidTarget: newTargetRef(testMetaTarget, testGidTarget, testAddrTarget),
 		},
 	})
 
@@ -75,10 +87,14 @@ func TestBackfillRejectsRepeatedCursor(t *testing.T) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
 		if calls == 1 {
-			_, _ = w.Write([]byte(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"idq-target","contentSummary":"idq-target","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719705600}],"nextCursor":"cursor-1","cursor":"cursor-1"}}`))
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"%s","contentSummary":"%s","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719705600}],"nextCursor":"cursor-1","cursor":"cursor-1"}}`,
+				testGidTarget, testGidTarget,
+				testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource)))
 			return
 		}
-		_, _ = w.Write([]byte(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-2:i0","path":"/follow","operation":"create","contentBody":"idq-target","contentSummary":"idq-target","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719705500}],"nextCursor":"cursor-1","cursor":"cursor-1"}}`))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-2:i0","path":"/follow","operation":"create","contentBody":"%s","contentSummary":"%s","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719705500}],"nextCursor":"cursor-1","cursor":"cursor-1"}}`,
+			testGidTarget, testGidTarget,
+			testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource)))
 	}))
 	defer server.Close()
 
@@ -99,8 +115,8 @@ func TestBackfillDefaultsToFollowPathAndUsesContentSummaryFallback(t *testing.T)
 
 	agg.SetProfileLookup(&fakeTargetLookup{
 		byGlobalMetaId: map[string]*TargetRef{
-			"idq-source": {MetaId: "meta-source", GlobalMetaId: "idq-source", Address: "1Source", Name: "Source", NameId: "name-source:i0", AvatarId: "avatar-source:i0"},
-			"idq-target": {MetaId: "meta-target", GlobalMetaId: "idq-target", Address: "1Target", Name: "Target", NameId: "name-target:i0", AvatarId: "avatar-target:i0"},
+			testGidSource: {MetaId: testMetaSource, GlobalMetaId: testGidSource, Address: testAddrSource, Name: "Source", NameId: "name-source:i0", AvatarId: "avatar-source:i0"},
+			testGidTarget: {MetaId: testMetaTarget, GlobalMetaId: testGidTarget, Address: testAddrTarget, Name: "Target", NameId: "name-target:i0", AvatarId: "avatar-target:i0"},
 		},
 	})
 
@@ -108,7 +124,9 @@ func TestBackfillDefaultsToFollowPathAndUsesContentSummaryFallback(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Query().Get("path")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"","contentSummary":"\"idq-target\"","globalMetaId":"idq-source","metaId":"meta-source","address":"1Source","createMetaId":"meta-source","createAddress":"1Source","chainName":"mvc","timestamp":1719705600}],"nextCursor":"","cursor":""}}`))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":1,"message":"ok","data":{"list":[{"id":"follow-1:i0","path":"/follow","operation":"create","contentBody":"","contentSummary":"\"%s\"","globalMetaId":"%s","metaId":"%s","address":"%s","createMetaId":"%s","createAddress":"%s","chainName":"mvc","timestamp":1719705600}],"nextCursor":"","cursor":""}}`,
+			testGidTarget,
+			testGidSource, testMetaSource, testAddrSource, testMetaSource, testAddrSource)))
 	}))
 	defer server.Close()
 
@@ -125,10 +143,10 @@ func TestBackfillDefaultsToFollowPathAndUsesContentSummaryFallback(t *testing.T)
 		t.Fatalf("requested path = %q, want /follow", gotPath)
 	}
 
-	following, err := agg.ListFollowing(ListParams{GlobalMetaId: "idq-source", Size: 10, View: ViewProfile})
+	following, err := agg.ListFollowing(ListParams{GlobalMetaId: testGidSource, Size: 10, View: ViewProfile})
 	if err != nil {
 		t.Fatalf("ListFollowing: %v", err)
 	}
-	assertListOrder(t, following.List, []string{"idq-target"})
+	assertListOrder(t, following.List, []string{testGidTarget})
 	assertProfileItem(t, following.List[0], "Target", "name-target:i0", "avatar-target:i0", "", "", 1719705600, "follow-1:i0")
 }

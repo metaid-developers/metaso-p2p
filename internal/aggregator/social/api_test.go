@@ -12,11 +12,11 @@ import (
 func TestFollowingCompactResponseShape(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
 
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(create): %v", err)
 	}
 
-	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following")
+	status, body := callSocial(t, router, "/api/social/globalmetaid/"+testGidSource+"/following")
 	if status != http.StatusOK {
 		t.Fatalf("HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -38,7 +38,7 @@ func TestFollowingCompactResponseShape(t *testing.T) {
 	}
 
 	item := mustObjectFromList(t, list, 0)
-	if item["globalMetaId"] != "idq-target" {
+	if item["globalMetaId"] != testGidTarget {
 		t.Fatalf("globalMetaId = %v, want idq-target; item=%v", item["globalMetaId"], item)
 	}
 	if item["name"] != "Target" {
@@ -60,11 +60,11 @@ func TestFollowingCompactResponseShape(t *testing.T) {
 func TestFollowingProfileResponseShape(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
 
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(create): %v", err)
 	}
 
-	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following?view=profile&size=20")
+	status, body := callSocial(t, router, "/api/social/globalmetaid/"+testGidSource+"/following?view=profile&size=20")
 	if status != http.StatusOK {
 		t.Fatalf("HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -79,7 +79,7 @@ func TestFollowingProfileResponseShape(t *testing.T) {
 	}
 
 	item := mustObjectFromList(t, list, 0)
-	if item["globalMetaId"] != "idq-target" {
+	if item["globalMetaId"] != testGidTarget {
 		t.Fatalf("globalMetaId = %v, want idq-target; item=%v", item["globalMetaId"], item)
 	}
 	if item["bio"] != "target bio" {
@@ -104,14 +104,14 @@ func TestFollowingProfileResponseShape(t *testing.T) {
 func TestRelationshipBidirectionalResponseShape(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
 
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(source->target): %v", err)
 	}
-	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", "idq-target", "meta-target", "1Target", "idq-source", 1002)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", testGidTarget, testMetaTarget, testAddrTarget, testGidSource, 1002)); err != nil {
 		t.Fatalf("HandleBlockPin(target->source): %v", err)
 	}
 
-	status, body := callSocial(t, router, "/api/social/relationship?sourceGlobalMetaId=idq-source&targetGlobalMetaId=idq-target")
+	status, body := callSocial(t, router, "/api/social/relationship?sourceGlobalMetaId="+testGidSource+"&targetGlobalMetaId="+testGidTarget)
 	if status != http.StatusOK {
 		t.Fatalf("HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -123,7 +123,7 @@ func TestRelationshipBidirectionalResponseShape(t *testing.T) {
 	source := mustObject(t, data, "source")
 	target := mustObject(t, data, "target")
 
-	if source["globalMetaId"] != "idq-source" {
+	if source["globalMetaId"] != testGidSource {
 		t.Fatalf("source.globalMetaId = %v, want idq-source; source=%v", source["globalMetaId"], source)
 	}
 	if source["followsTarget"] != true {
@@ -135,7 +135,7 @@ func TestRelationshipBidirectionalResponseShape(t *testing.T) {
 	if got := mustInt64Value(t, source, "followedAt"); got != 1001 {
 		t.Fatalf("source.followedAt = %d, want 1001; source=%v", got, source)
 	}
-	if target["globalMetaId"] != "idq-target" {
+	if target["globalMetaId"] != testGidTarget {
 		t.Fatalf("target.globalMetaId = %v, want idq-target; target=%v", target["globalMetaId"], target)
 	}
 	if target["followsSource"] != true {
@@ -155,7 +155,7 @@ func TestRelationshipBidirectionalResponseShape(t *testing.T) {
 func TestRelationshipNoRelationStillReturnsFalseBooleans(t *testing.T) {
 	router, _ := newSocialHandlerFixture(t)
 
-	status, body := callSocial(t, router, "/api/social/relationship?sourceGlobalMetaId=idq-a&targetGlobalMetaId=idq-b")
+	status, body := callSocial(t, router, "/api/social/relationship?sourceGlobalMetaId="+testGidA+"&targetGlobalMetaId="+testGidB)
 	if status != http.StatusOK {
 		t.Fatalf("HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -166,7 +166,7 @@ func TestRelationshipNoRelationStillReturnsFalseBooleans(t *testing.T) {
 	data := mustObject(t, body, "data")
 	source := mustObject(t, data, "source")
 	target := mustObject(t, data, "target")
-	if source["globalMetaId"] != "idq-a" {
+	if source["globalMetaId"] != testGidA {
 		t.Fatalf("source.globalMetaId = %v, want idq-a; source=%v", source["globalMetaId"], source)
 	}
 	if source["followsTarget"] != false {
@@ -178,7 +178,7 @@ func TestRelationshipNoRelationStillReturnsFalseBooleans(t *testing.T) {
 	if got := mustInt64Value(t, source, "followedAt"); got != 0 {
 		t.Fatalf("source.followedAt = %d, want 0; source=%v", got, source)
 	}
-	if target["globalMetaId"] != "idq-b" {
+	if target["globalMetaId"] != testGidB {
 		t.Fatalf("target.globalMetaId = %v, want idq-b; target=%v", target["globalMetaId"], target)
 	}
 	if target["followsSource"] != false {
@@ -197,15 +197,15 @@ func TestRelationshipNoRelationStillReturnsFalseBooleans(t *testing.T) {
 
 func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(create): %v", err)
 	}
 	agg.SetProfileLookup(&fakeTargetLookup{
 		byGlobalMetaId: map[string]*TargetRef{
-			"idq-source": {
-				MetaId:       "meta-source",
-				GlobalMetaId: "idq-source",
-				Address:      "1Source",
+			testGidSource: {
+				MetaId:       testMetaSource,
+				GlobalMetaId: testGidSource,
+				Address:      testAddrSource,
 				Name:         "Source",
 				NameId:       "name-source:i0",
 				AvatarId:     "avatar-source:i0",
@@ -215,7 +215,7 @@ func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
 		},
 	})
 
-	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following")
+	status, body := callSocial(t, router, "/api/social/globalmetaid/"+testGidSource+"/following")
 	if status != http.StatusOK {
 		t.Fatalf("compact HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -224,7 +224,7 @@ func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
 		t.Fatalf("compact list length = %d, want 1; body=%v", len(compactList), body)
 	}
 	compactItem := mustObjectFromList(t, compactList, 0)
-	if compactItem["globalMetaId"] != "idq-target" {
+	if compactItem["globalMetaId"] != testGidTarget {
 		t.Fatalf("compact globalMetaId = %v, want idq-target; item=%v", compactItem["globalMetaId"], compactItem)
 	}
 	for _, key := range []string{"name", "nameId", "avatarId"} {
@@ -233,7 +233,7 @@ func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
 		}
 	}
 
-	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-source/following?view=profile")
+	status, body = callSocial(t, router, "/api/social/globalmetaid/"+testGidSource+"/following?view=profile")
 	if status != http.StatusOK {
 		t.Fatalf("profile HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -242,7 +242,7 @@ func TestFollowingResponsesKeepStableKeysWhenPeerProfileMissing(t *testing.T) {
 		t.Fatalf("profile list length = %d, want 1; body=%v", len(profileList), body)
 	}
 	profileItem := mustObjectFromList(t, profileList, 0)
-	if profileItem["globalMetaId"] != "idq-target" {
+	if profileItem["globalMetaId"] != testGidTarget {
 		t.Fatalf("profile globalMetaId = %v, want idq-target; item=%v", profileItem["globalMetaId"], profileItem)
 	}
 	for _, key := range []string{"name", "nameId", "avatarId", "bio", "bioId"} {
@@ -262,9 +262,9 @@ func TestSocialHandlersReturnNotFoundForUnknownGlobalMetaId(t *testing.T) {
 	router, _ := newSocialHandlerFixture(t)
 
 	for _, path := range []string{
-		"/api/social/globalmetaid/idq-missing/following",
-		"/api/social/globalmetaid/idq-missing/followers",
-		"/api/social/relationship?sourceGlobalMetaId=idq-missing&targetGlobalMetaId=idq-target",
+		"/api/social/globalmetaid/" + testGidMissing + "/following",
+		"/api/social/globalmetaid/" + testGidMissing + "/followers",
+		"/api/social/relationship?sourceGlobalMetaId=" + testGidMissing + "&targetGlobalMetaId=" + testGidTarget,
 	} {
 		status, body := callSocial(t, router, path)
 		if status != http.StatusOK {
@@ -283,12 +283,12 @@ func TestSocialHandlersRejectInvalidParams(t *testing.T) {
 	router, _ := newSocialHandlerFixture(t)
 
 	for _, path := range []string{
-		"/api/social/globalmetaid/idq-source/following?size=0",
-		"/api/social/globalmetaid/idq-source/following?size=101",
-		"/api/social/globalmetaid/idq-source/following?view=full",
-		"/api/social/globalmetaid/idq-source/followers?cursor=not-base64",
-		"/api/social/relationship?targetGlobalMetaId=idq-target",
-		"/api/social/relationship?sourceGlobalMetaId=idq-source",
+		"/api/social/globalmetaid/" + testGidSource + "/following?size=0",
+		"/api/social/globalmetaid/" + testGidSource + "/following?size=101",
+		"/api/social/globalmetaid/" + testGidSource + "/following?view=full",
+		"/api/social/globalmetaid/" + testGidSource + "/followers?cursor=not-base64",
+		"/api/social/relationship?targetGlobalMetaId=" + testGidTarget,
+		"/api/social/relationship?sourceGlobalMetaId=" + testGidSource,
 	} {
 		status, body := callSocial(t, router, path)
 		if status != http.StatusOK {
@@ -306,17 +306,17 @@ func TestSocialHandlersRejectInvalidParams(t *testing.T) {
 func TestSocialHandlersRejectWrongListCursor(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
 
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(source->target): %v", err)
 	}
-	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", "idq-source", "meta-source", "1Source", "idq-a", 1002)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", testGidSource, testMetaSource, testAddrSource, testGidA, 1002)); err != nil {
 		t.Fatalf("HandleBlockPin(source->a): %v", err)
 	}
-	if _, err := agg.HandleBlockPin(followPin("follow-3:i0", "idq-b", "meta-b", "1B", "idq-target", 1003)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-3:i0", testGidB, testMetaB, testAddrB, testGidTarget, 1003)); err != nil {
 		t.Fatalf("HandleBlockPin(b->target): %v", err)
 	}
 
-	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-source/following?size=1")
+	status, body := callSocial(t, router, "/api/social/globalmetaid/"+testGidSource+"/following?size=1")
 	if status != http.StatusOK {
 		t.Fatalf("following page1 HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -326,7 +326,7 @@ func TestSocialHandlersRejectWrongListCursor(t *testing.T) {
 		t.Fatalf("following page1 nextCursor = %v, want non-empty string; data=%v", data["nextCursor"], data)
 	}
 
-	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?cursor="+cursor)
+	status, body = callSocial(t, router, "/api/social/globalmetaid/"+testGidTarget+"/followers?cursor="+cursor)
 	if status != http.StatusOK {
 		t.Fatalf("followers with wrong-list cursor HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -341,14 +341,14 @@ func TestSocialHandlersRejectWrongListCursor(t *testing.T) {
 func TestSocialHandlersRejectStaleCursor(t *testing.T) {
 	router, agg := newSocialHandlerFixture(t)
 
-	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", "idq-source", "meta-source", "1Source", "idq-target", 1001)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-1:i0", testGidSource, testMetaSource, testAddrSource, testGidTarget, 1001)); err != nil {
 		t.Fatalf("HandleBlockPin(source->target): %v", err)
 	}
-	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", "idq-a", "meta-a", "1A", "idq-target", 1002)); err != nil {
+	if _, err := agg.HandleBlockPin(followPin("follow-2:i0", testGidA, testMetaA, testAddrA, testGidTarget, 1002)); err != nil {
 		t.Fatalf("HandleBlockPin(a->target): %v", err)
 	}
 
-	status, body := callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?size=1")
+	status, body := callSocial(t, router, "/api/social/globalmetaid/"+testGidTarget+"/followers?size=1")
 	if status != http.StatusOK {
 		t.Fatalf("followers page1 HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -362,7 +362,7 @@ func TestSocialHandlersRejectStaleCursor(t *testing.T) {
 		t.Fatalf("HandleBlockPin(revoke): %v", err)
 	}
 
-	status, body = callSocial(t, router, "/api/social/globalmetaid/idq-target/followers?cursor="+cursor)
+	status, body = callSocial(t, router, "/api/social/globalmetaid/"+testGidTarget+"/followers?cursor="+cursor)
 	if status != http.StatusOK {
 		t.Fatalf("followers with stale cursor HTTP status = %d, want 200; body=%v", status, body)
 	}
@@ -384,58 +384,58 @@ func newSocialHandlerFixture(t *testing.T) (*gin.Engine, *Aggregator) {
 
 	agg.SetProfileLookup(&fakeTargetLookup{
 		byGlobalMetaId: map[string]*TargetRef{
-			"idq-source": {
-				MetaId:       "meta-source",
-				GlobalMetaId: "idq-source",
-				Address:      "1Source",
+			testGidSource: {
+				MetaId:       testMetaSource,
+				GlobalMetaId: testGidSource,
+				Address:      testAddrSource,
 				Name:         "Source",
 				NameId:       "name-source:i0",
 				AvatarId:     "avatar-source:i0",
 				Bio:          "source bio",
 				BioId:        "bio-source:i0",
 			},
-			"idq-target": {
-				MetaId:       "meta-target",
-				GlobalMetaId: "idq-target",
-				Address:      "1Target",
+			testGidTarget: {
+				MetaId:       testMetaTarget,
+				GlobalMetaId: testGidTarget,
+				Address:      testAddrTarget,
 				Name:         "Target",
 				NameId:       "name-target:i0",
 				AvatarId:     "avatar-target:i0",
 				Bio:          "target bio",
 				BioId:        "bio-target:i0",
 			},
-			"idq-a": {
-				MetaId:       "meta-a",
-				GlobalMetaId: "idq-a",
-				Address:      "1A",
+			testGidA: {
+				MetaId:       testMetaA,
+				GlobalMetaId: testGidA,
+				Address:      testAddrA,
 				Name:         "A",
 				NameId:       "name-a:i0",
 				AvatarId:     "avatar-a:i0",
 			},
-			"idq-b": {
-				MetaId:       "meta-b",
-				GlobalMetaId: "idq-b",
-				Address:      "1B",
+			testGidB: {
+				MetaId:       testMetaB,
+				GlobalMetaId: testGidB,
+				Address:      testAddrB,
 				Name:         "B",
 				NameId:       "name-b:i0",
 				AvatarId:     "avatar-b:i0",
 			},
 		},
 		byMetaId: map[string]*TargetRef{
-			"meta-source": {
-				MetaId:       "meta-source",
-				GlobalMetaId: "idq-source",
-				Address:      "1Source",
+			testMetaSource: {
+				MetaId:       testMetaSource,
+				GlobalMetaId: testGidSource,
+				Address:      testAddrSource,
 				Name:         "Source",
 				NameId:       "name-source:i0",
 				AvatarId:     "avatar-source:i0",
 				Bio:          "source bio",
 				BioId:        "bio-source:i0",
 			},
-			"meta-target": {
-				MetaId:       "meta-target",
-				GlobalMetaId: "idq-target",
-				Address:      "1Target",
+			testMetaTarget: {
+				MetaId:       testMetaTarget,
+				GlobalMetaId: testGidTarget,
+				Address:      testAddrTarget,
 				Name:         "Target",
 				NameId:       "name-target:i0",
 				AvatarId:     "avatar-target:i0",
@@ -444,20 +444,20 @@ func newSocialHandlerFixture(t *testing.T) (*gin.Engine, *Aggregator) {
 			},
 		},
 		byAddress: map[string]*TargetRef{
-			"1Source": {
-				MetaId:       "meta-source",
-				GlobalMetaId: "idq-source",
-				Address:      "1Source",
+			testAddrSource: {
+				MetaId:       testMetaSource,
+				GlobalMetaId: testGidSource,
+				Address:      testAddrSource,
 				Name:         "Source",
 				NameId:       "name-source:i0",
 				AvatarId:     "avatar-source:i0",
 				Bio:          "source bio",
 				BioId:        "bio-source:i0",
 			},
-			"1Target": {
-				MetaId:       "meta-target",
-				GlobalMetaId: "idq-target",
-				Address:      "1Target",
+			testAddrTarget: {
+				MetaId:       testMetaTarget,
+				GlobalMetaId: testGidTarget,
+				Address:      testAddrTarget,
 				Name:         "Target",
 				NameId:       "name-target:i0",
 				AvatarId:     "avatar-target:i0",

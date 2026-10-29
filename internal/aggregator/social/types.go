@@ -2,7 +2,6 @@ package social
 
 import (
 	"errors"
-	"strings"
 )
 
 // TargetRef is the canonical follow-target identity shape used internally by
@@ -85,6 +84,18 @@ const (
 	maxListSize     = 100
 )
 
+// clampListSize applies the shared list-size rule of the §4 pagination
+// contract: unset → default, out-of-range → capped.
+func clampListSize(size int) int {
+	if size <= 0 {
+		return defaultListSize
+	}
+	if size > maxListSize {
+		return maxListSize
+	}
+	return size
+}
+
 type ProfileLookup interface {
 	LookupByMetaId(metaId string) (*TargetRef, error)
 	LookupByGlobalMetaId(globalMetaId string) (*TargetRef, error)
@@ -93,38 +104,4 @@ type ProfileLookup interface {
 
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
-}
-
-func (a *Aggregator) lookupTargetRef(ref string) (*TargetRef, error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" || a == nil || a.profileLookup == nil {
-		return nil, nil
-	}
-
-	for _, lookup := range []func(string) (*TargetRef, error){
-		a.profileLookup.LookupByGlobalMetaId,
-		a.profileLookup.LookupByMetaId,
-		a.profileLookup.LookupByAddress,
-	} {
-		target, err := lookup(ref)
-		if err != nil {
-			return nil, err
-		}
-		if target != nil {
-			return target, nil
-		}
-	}
-
-	return nil, nil
-}
-
-func canonicalGlobalMetaIdRef(ref string) (string, bool) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return "", false
-	}
-	if strings.HasPrefix(strings.ToLower(ref), "idq") {
-		return ref, true
-	}
-	return "", false
 }

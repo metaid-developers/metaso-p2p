@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -30,6 +31,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/presence"
 	"github.com/metaid-developers/metaso-p2p/internal/socket"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 // setupFullRouter mirrors cmd/metaso-p2p/main.go's aggregator wiring so the
@@ -1075,27 +1077,31 @@ func TestRouterBotHomepageV3ExposesOutgoingChats(t *testing.T) {
 
 func TestRouterSocialFollowEndpoints(t *testing.T) {
 	fixture := setupFullRouterFixture(t)
-	seedBotProfile(t, fixture, "idq-source")
-	seedBotProfile(t, fixture, "idq-target")
+	// Real-format identities: the follow ingest path normalizes strictly
+	// (spec 2026-10-29 §2.3) and rejects placeholder-style ids.
+	gidSource := routerTestGlobalMetaId(t, "source")
+	gidTarget := routerTestGlobalMetaId(t, "target")
+	seedBotProfile(t, fixture, gidSource)
+	seedBotProfile(t, fixture, gidTarget)
 
 	if _, err := fixture.socialAgg.HandleBlockPin(&aggregator.PinInscription{
 		Id:            "follow-1:i0",
 		Path:          "/follow",
 		Operation:     "create",
-		ContentBody:   []byte("idq-target"),
+		ContentBody:   []byte(gidTarget),
 		ChainName:     "mvc",
-		GlobalMetaId:  "idq-source",
-		MetaId:        "meta-idq-source",
-		CreateMetaId:  "meta-idq-source",
-		Address:       "addr-idq-source",
-		CreateAddress: "addr-idq-source",
+		GlobalMetaId:  gidSource,
+		MetaId:        "meta-" + gidSource,
+		CreateMetaId:  "meta-" + gidSource,
+		Address:       "addr-" + gidSource,
+		CreateAddress: "addr-" + gidSource,
 		Timestamp:     1710000301,
 		Number:        301,
 	}); err != nil {
 		t.Fatalf("seed social follow: %v", err)
 	}
 
-	w, body := get(t, fixture.router, "/api/social/globalmetaid/idq-source/following?view=profile&size=20")
+	w, body := get(t, fixture.router, "/api/social/globalmetaid/"+gidSource+"/following?view=profile&size=20")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
@@ -1114,12 +1120,24 @@ func TestRouterSocialFollowEndpoints(t *testing.T) {
 	if !ok {
 		t.Fatalf("list[0] = %T %#v, want object", list[0], list[0])
 	}
-	if item["globalMetaId"] != "idq-target" {
-		t.Fatalf("globalMetaId = %#v, want idq-target", item["globalMetaId"])
+	if item["globalMetaId"] != gidTarget {
+		t.Fatalf("globalMetaId = %#v, want %s", item["globalMetaId"], gidTarget)
 	}
 	if item["followPinId"] != "follow-1:i0" {
 		t.Fatalf("followPinId = %#v, want follow-1:i0", item["followPinId"])
 	}
+}
+
+// routerTestGlobalMetaId derives a checksum-valid IDAddress for router tests;
+// placeholder identifier strings are not usable with the social normalizer.
+func routerTestGlobalMetaId(t *testing.T, label string) string {
+	t.Helper()
+	digest := sha256.Sum256([]byte("metaso-p2p-router-test:" + label))
+	globalMetaId, err := idaddress.EncodeIDAddress(idaddress.VersionP2PKH, digest[:20])
+	if err != nil {
+		t.Fatalf("encode test IDAddress: %v", err)
+	}
+	return globalMetaId
 }
 
 func routerSectionByID(t *testing.T, sections []interface{}, wantID string) map[string]interface{} {
