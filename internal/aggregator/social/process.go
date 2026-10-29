@@ -2,6 +2,7 @@ package social
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,24 +34,18 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription) error {
 
 func (a *Aggregator) processCreate(pin *aggregator.PinInscription) error {
 	followerGlobalMetaId, err := a.resolveFollowerGlobalMetaId(pin)
-	if err != nil || followerGlobalMetaId == "" {
-		return err
-	}
-	targetRef := decodeTargetRef(pin)
-	target, err := a.lookupTargetRef(targetRef)
 	if err != nil {
 		return err
 	}
-	targetGlobalMetaId := ""
-	if target != nil {
-		targetGlobalMetaId = strings.TrimSpace(target.GlobalMetaId)
+	targetRef := decodeTargetRef(pin)
+	targetGlobalMetaId, ok, err := a.normalizeIdentity(targetRef)
+	if err != nil {
+		return err
 	}
-	if targetGlobalMetaId == "" {
-		if fallback, ok := canonicalGlobalMetaIdRef(targetRef); ok {
-			targetGlobalMetaId = fallback
-		} else {
-			return nil
-		}
+	if followerGlobalMetaId == "" || !ok {
+		// §2.5: an unresolved reference creates no edge, but the pin-level
+		// index records it so backfill replay can re-normalize later.
+		return a.recordUnresolvedPin(pin, followerGlobalMetaId, targetRef)
 	}
 	return a.saveActiveEdge(&FollowEdge{
 		FollowerGlobalMetaId: followerGlobalMetaId,
@@ -58,6 +53,39 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription) error {
 		FollowPinId:          strings.TrimSpace(pin.Id),
 		FollowedAt:           pin.Timestamp,
 	})
+}
+
+// unresolvedPinRecord is the edge:pin trail entry written when a follow pin's
+// target (or follower) reference did not resolve through normalization
+// (spec 2026-10-29 §2.5). It keeps the pin auditable and re-normalizable by
+// replay without materializing an edge.
+type unresolvedPinRecord struct {
+	Unresolved   bool   `json:"unresolved"`
+	Follower     string `json:"follower,omitempty"`
+	RawFollower  string `json:"rawFollower,omitempty"`
+	RawTargetRef string `json:"rawTargetRef,omitempty"`
+	Timestamp    int64  `json:"timestamp"`
+}
+
+func (a *Aggregator) recordUnresolvedPin(pin *aggregator.PinInscription, followerGlobalMetaId, targetRef string) error {
+	if a == nil || a.store == nil || pin == nil {
+		return nil
+	}
+	pinId := strings.TrimSpace(pin.Id)
+	if pinId == "" {
+		return nil
+	}
+	raw, err := json.Marshal(unresolvedPinRecord{
+		Unresolved:   true,
+		Follower:     followerGlobalMetaId,
+		RawFollower:  firstNonEmpty(pin.MetaId, pin.CreateMetaId, pin.Address, pin.CreateAddress),
+		RawTargetRef: targetRef,
+		Timestamp:    pin.Timestamp,
+	})
+	if err != nil {
+		return err
+	}
+	return a.store.Set(namespace, pinToPairKey(pinId), raw)
 }
 
 func (a *Aggregator) processRevoke(pin *aggregator.PinInscription) error {
@@ -116,7 +144,11 @@ func (a *Aggregator) ListFollowing(params ListParams) (*ListResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.listEdges(followingIndexPrefix(subject.GlobalMetaId), params, func(key []byte) (string, bool) {
+	excluded, err := a.blockedPeerSet(subject.GlobalMetaId)
+	if err != nil {
+		return nil, err
+	}
+	return a.listEdges(followingIndexPrefix(subject.GlobalMetaId), params, excluded, func(key []byte) (string, bool) {
 		keyText := string(key)
 		idx := strings.LastIndex(keyText, ":")
 		if idx < 0 || idx+1 >= len(keyText) {
@@ -139,7 +171,11 @@ func (a *Aggregator) ListFollowers(params ListParams) (*ListResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.listEdges(followerIndexPrefix(subject.GlobalMetaId), params, func(key []byte) (string, bool) {
+	excluded, err := a.blockedPeerSet(subject.GlobalMetaId)
+	if err != nil {
+		return nil, err
+	}
+	return a.listEdges(followerIndexPrefix(subject.GlobalMetaId), params, excluded, func(key []byte) (string, bool) {
 		keyText := string(key)
 		idx := strings.LastIndex(keyText, ":")
 		if idx < 0 || idx+1 >= len(keyText) {
@@ -151,19 +187,13 @@ func (a *Aggregator) ListFollowers(params ListParams) (*ListResult, error) {
 	})
 }
 
-func (a *Aggregator) listEdges(prefix []byte, params ListParams, parsePeer func([]byte) (string, bool), loadEdge func(string) (*FollowEdge, error)) (*ListResult, error) {
+func (a *Aggregator) listEdges(prefix []byte, params ListParams, excludedPeers map[string]struct{}, parsePeer func([]byte) (string, bool), loadEdge func(string) (*FollowEdge, error)) (*ListResult, error) {
 	view, err := normaliseListView(params.View)
 	if err != nil {
 		return nil, err
 	}
 
-	size := params.Size
-	if size <= 0 {
-		size = defaultListSize
-	}
-	if size > maxListSize {
-		size = maxListSize
-	}
+	size := clampListSize(params.Size)
 	cursorKey, err := decodeCursor(params.Cursor)
 	if err != nil {
 		return nil, err
@@ -188,6 +218,10 @@ func (a *Aggregator) listEdges(prefix []byte, params ListParams, parsePeer func(
 		}
 		peerGlobalMetaId, ok := parsePeer(key)
 		if !ok || peerGlobalMetaId == "" {
+			return nil
+		}
+		// §4.5 unified filter: blocked pairs never appear in list reads.
+		if _, excluded := excludedPeers[peerGlobalMetaId]; excluded {
 			return nil
 		}
 
@@ -290,11 +324,11 @@ func (a *Aggregator) resolveFollowerGlobalMetaId(pin *aggregator.PinInscription)
 		return globalMetaId, nil
 	}
 	ref := firstNonEmpty(pin.MetaId, pin.CreateMetaId, pin.Address, pin.CreateAddress)
-	target, err := a.lookupTargetRef(ref)
-	if err != nil || target == nil {
+	canonical, ok, err := a.normalizeIdentity(ref)
+	if err != nil || !ok {
 		return "", err
 	}
-	return strings.TrimSpace(target.GlobalMetaId), nil
+	return canonical, nil
 }
 
 func resolveTargetPinId(pin *aggregator.PinInscription) string {

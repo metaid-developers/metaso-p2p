@@ -15,6 +15,7 @@ type Aggregator struct {
 	cache         *cache.Cache[[]byte]
 	notifyCh      chan *aggregator.NotifyEvent
 	profileLookup ProfileLookup
+	blockLister   BlockLister
 }
 
 const (
@@ -29,6 +30,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.store = store
 	a.cache = cacheProvider.Namespace(namespace, cacheMaxEntries, cacheTTL)
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 256)
+	a.SetBlockLister(nil)
 	return nil
 }
 

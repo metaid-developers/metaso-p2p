@@ -60,11 +60,45 @@ type relationshipResponse struct {
 	Mutual bool                       `json:"mutual"`
 }
 
+type friendCompactItemResponse struct {
+	GlobalMetaId string `json:"globalMetaId"`
+	Name         string `json:"name"`
+	NameId       string `json:"nameId"`
+	AvatarId     string `json:"avatarId"`
+}
+
+type friendProfileItemResponse struct {
+	GlobalMetaId string `json:"globalMetaId"`
+	Name         string `json:"name"`
+	NameId       string `json:"nameId"`
+	AvatarId     string `json:"avatarId"`
+	Bio          string `json:"bio"`
+	BioId        string `json:"bioId"`
+	FollowedAt   int64  `json:"followedAt"`
+	FollowPinId  string `json:"followPinId"`
+	FriendSince  int64  `json:"friendSince"`
+}
+
+type friendCompactListResponse struct {
+	List       []friendCompactItemResponse `json:"list"`
+	NextCursor string                      `json:"nextCursor"`
+	Size       int                         `json:"size"`
+}
+
+type friendProfileListResponse struct {
+	List       []friendProfileItemResponse `json:"list"`
+	NextCursor string                      `json:"nextCursor"`
+	Size       int                         `json:"size"`
+}
+
 func registerRoutes(a *Aggregator, router *gin.RouterGroup) {
 	social := router.Group("/social")
 	social.GET("/globalmetaid/:globalMetaId/following", a.handleFollowing)
 	social.GET("/globalmetaid/:globalMetaId/followers", a.handleFollowers)
+	social.GET("/globalmetaid/:globalMetaId/friends", a.handleFriends)
+	social.GET("/globalmetaid/:globalMetaId/counts", a.handleCounts)
 	social.GET("/relationship", a.handleRelationship)
+	social.POST("/relationships/batch", a.handleBatchRelationships)
 }
 
 func (a *Aggregator) handleFollowing(c *gin.Context) {
@@ -95,6 +129,57 @@ func (a *Aggregator) handleFollowers(c *gin.Context) {
 		return
 	}
 	api.RespSuccess(c, buildListResponse(result, params.View))
+}
+
+func (a *Aggregator) handleFriends(c *gin.Context) {
+	params, err := parseListParams(c)
+	if err != nil {
+		respondSocialError(c, err)
+		return
+	}
+
+	result, err := a.ListFriends(params)
+	if err != nil {
+		respondSocialError(c, err)
+		return
+	}
+	api.RespSuccess(c, buildFriendListResponse(result, params.View))
+}
+
+func (a *Aggregator) handleCounts(c *gin.Context) {
+	subject := strings.TrimSpace(c.Param("globalMetaId"))
+	if subject == "" {
+		respondSocialError(c, ErrInvalidParameter)
+		return
+	}
+
+	result, err := a.Counts(subject)
+	if err != nil {
+		respondSocialError(c, err)
+		return
+	}
+	api.RespSuccess(c, result)
+}
+
+func (a *Aggregator) handleBatchRelationships(c *gin.Context) {
+	var request struct {
+		SourceGlobalMetaId string   `json:"sourceGlobalMetaId"`
+		Targets            []string `json:"targets"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondSocialError(c, ErrInvalidParameter)
+		return
+	}
+
+	result, err := a.BatchRelationships(BatchRelationshipParams{
+		SourceGlobalMetaId: request.SourceGlobalMetaId,
+		Targets:            request.Targets,
+	})
+	if err != nil {
+		respondSocialError(c, err)
+		return
+	}
+	api.RespSuccess(c, result)
 }
 
 func (a *Aggregator) handleRelationship(c *gin.Context) {
@@ -164,6 +249,49 @@ func parseListSize(raw string) (int, error) {
 		return 0, ErrInvalidParameter
 	}
 	return size, nil
+}
+
+func buildFriendListResponse(result *FriendListResult, view string) any {
+	if result == nil {
+		result = &FriendListResult{Size: defaultListSize}
+	}
+
+	if view == ViewProfile {
+		list := make([]friendProfileItemResponse, 0, len(result.List))
+		for _, item := range result.List {
+			list = append(list, friendProfileItemResponse{
+				GlobalMetaId: item.GlobalMetaId,
+				Name:         item.Name,
+				NameId:       item.NameId,
+				AvatarId:     item.AvatarId,
+				Bio:          item.Bio,
+				BioId:        item.BioId,
+				FollowedAt:   item.FollowedAt,
+				FollowPinId:  item.FollowPinId,
+				FriendSince:  item.FriendSince,
+			})
+		}
+		return friendProfileListResponse{
+			List:       list,
+			NextCursor: result.NextCursor,
+			Size:       result.Size,
+		}
+	}
+
+	list := make([]friendCompactItemResponse, 0, len(result.List))
+	for _, item := range result.List {
+		list = append(list, friendCompactItemResponse{
+			GlobalMetaId: item.GlobalMetaId,
+			Name:         item.Name,
+			NameId:       item.NameId,
+			AvatarId:     item.AvatarId,
+		})
+	}
+	return friendCompactListResponse{
+		List:       list,
+		NextCursor: result.NextCursor,
+		Size:       result.Size,
+	}
 }
 
 func buildListResponse(result *ListResult, view string) any {
