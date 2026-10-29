@@ -24,6 +24,7 @@ type Aggregator struct {
 	privateMessageLocks      sync.Map
 	homepageMaterializedLock sync.Map
 	readModelReady           atomic.Bool
+	blockIngestor            BlockPinIngestor
 }
 
 const (

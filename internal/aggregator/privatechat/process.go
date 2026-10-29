@@ -48,8 +48,17 @@ func (a *Aggregator) dispatchPin(pin *aggregator.PinInscription) (*aggregator.No
 	case strings.HasSuffix(pathLower, "simplemsg"):
 		return a.handlePrivateChat(pin)
 
-	// Private chat block/unblock
+	// Private chat block/unblock — compatibility spelling
+	// (/private/block/simpleprivateblock). Matched before the canonical
+	// suffix so both dispatch correctly (spec §1.4).
 	case strings.HasSuffix(pathLower, "simpleprivateblock"):
+		return a.handlePrivateBlock(pin)
+
+	// Block/unblock — canonical registered protocol /protocols/simpleblock.
+	// "simpleprivateblock" does not end with "simpleblock", and group-block
+	// paths (simplegroupblock etc.) end with "groupblock", so this case is
+	// exclusive to the canonical protocol (spec §1.4/§5.2).
+	case strings.HasSuffix(pathLower, "simpleblock"):
 		return a.handlePrivateBlock(pin)
 
 	default:
@@ -145,25 +154,44 @@ func (a *Aggregator) handlePrivateChat(pin *aggregator.PinInscription) (*aggrega
 	return notifyEvent, nil
 }
 
-// handlePrivateBlock processes a /private/block/simpleprivateblock pin.
+// handlePrivateBlock processes block pins on both ingested paths
+// (/private/block/simpleprivateblock compatibility and the canonical
+// /protocols/simpleblock, spec §1.4). Payload parsing and validation stay
+// here; the read-model fold is delegated to the block aggregator (the
+// authority for chain-level block state, spec §4.6). Mempool pins are not
+// materialized (confirmed-only, spec OQ-2) — the block aggregator's own
+// registry dispatch ignores them too.
 func (a *Aggregator) handlePrivateBlock(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	if pin == nil {
+		return nil, nil
+	}
+
 	var spb SimplePrivateBlock
 	if err := json.Unmarshal(pin.ContentBody, &spb); err != nil {
-		log.Printf("[privatechat] failed to parse simpleprivateblock: %v", err)
+		log.Printf("[privatechat] failed to parse block pin %s: %v", pin.Id, err)
+		return nil, nil
+	}
+	if strings.TrimSpace(spb.To) == "" {
+		log.Printf("[privatechat] block pin %s has empty to, ignored", pin.Id)
 		return nil, nil
 	}
 
-	toMetaId := spb.To
-	if toMetaId == "" {
+	if a.blockIngestor == nil {
+		// Legacy behavior kept as fallback: parse and log only.
+		blockState := int64(1)
+		if state, ok := spb.BlockState.(float64); ok {
+			blockState = int64(state)
+		}
+		log.Printf("[privatechat] block observed (no block ingestor wired): to=%s blockState=%d pinId=%s", spb.To, blockState, pin.Id)
 		return nil, nil
 	}
-
-	blockState := int64(1)
-	if state, ok := spb.BlockState.(float64); ok {
-		blockState = int64(state)
+	if pin.GenesisHeight <= 0 {
+		log.Printf("[privatechat] block pin %s not confirmed yet, skipped (confirmed-only)", pin.Id)
+		return nil, nil
 	}
-
-	log.Printf("[privatechat] block processed: to=%s blockState=%d", toMetaId, blockState)
+	if err := a.blockIngestor.IngestBlockPin(pin); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
