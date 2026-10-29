@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/block"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
@@ -71,11 +72,16 @@ func main() {
 	var socialContentAgg *socialcontent.Aggregator
 	var groupChatAgg *groupchat.Aggregator
 	var botSearchAgg *botsearch.Aggregator
+	var blockAgg *block.Aggregator
+	var notifyAgg *notify.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
-		if err := aggRegistry.Register(&notify.Aggregator{}); err != nil {
+		notifyCandidate := &notify.Aggregator{}
+		if err := aggRegistry.Register(notifyCandidate); err != nil {
 			log.Printf("WARNING: notify aggregator init failed: %v", err)
+		} else {
+			notifyAgg = notifyCandidate
 		}
 		userinfoAgg = &userinfo.Aggregator{}
 		if err := aggRegistry.Register(userinfoAgg); err != nil {
@@ -107,6 +113,22 @@ func main() {
 		privatechatAgg := &privatechat.Aggregator{}
 		if err := aggRegistry.Register(privatechatAgg); err != nil {
 			log.Printf("WARNING: privatechat aggregator init failed: %v", err)
+		}
+		// Simpleblock aggregation (spec §1.4/§4.4-4.6): folds both block
+		// paths into the bidirectional read model, serves
+		// /api/social/globalmetaid/:id/blocks, mirrors confirmed pins into
+		// the notify session cache, and forwards compatibility-path pins
+		// arriving via privatechat.
+		blockCandidate := &block.Aggregator{}
+		if err := aggRegistry.Register(blockCandidate); err != nil {
+			log.Printf("WARNING: block aggregator init failed: %v", err)
+		} else {
+			blockAgg = blockCandidate
+			blockAgg.SetProfileLookup(block.NewUserInfoLookupAdapter(userinfoAgg))
+			if notifyAgg != nil {
+				blockAgg.SetChatBlockBridge(notifyAgg)
+			}
+			privatechatAgg.SetBlockPinIngestor(blockAgg)
 		}
 		skillserviceAgg := &skillservice.Aggregator{}
 		// Wire skillservice -> userinfo before Init so startup index
@@ -261,6 +283,13 @@ func main() {
 				log.Printf("WARNING: social follow backfill requested but aggregator is unavailable")
 			} else if err := runSocialBackfillIfEnabled(socialAgg, cfg.SocialBackfill); err != nil {
 				log.Printf("WARNING: social follow backfill failed: %v", err)
+			}
+		}
+		if cfg.BlockBackfill.Enabled {
+			if blockAgg == nil {
+				log.Printf("WARNING: block backfill requested but aggregator is unavailable")
+			} else if err := runBlockBackfillIfEnabled(blockAgg, cfg.BlockBackfill); err != nil {
+				log.Printf("WARNING: block backfill failed: %v", err)
 			}
 		}
 		if cfg.SocialContentBackfill.Enabled {

@@ -24,6 +24,7 @@ type Config struct {
 	SocialBackfill        SocialBackfillConfig        `json:"socialBackfill"`
 	SocialContentBackfill SocialContentBackfillConfig `json:"socialContentBackfill"`
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
+	BlockBackfill        BlockBackfillConfig        `json:"blockBackfill"`
 	RateLimit             RateLimitConfig             `json:"rateLimit"`
 	ProtocolRegistry      ProtocolRegistryConfig      `json:"protocolRegistry"`
 }
@@ -103,6 +104,14 @@ type SocialBackfillConfig struct {
 }
 
 type SocialContentBackfillConfig struct {
+	Enabled       bool          `json:"enabled"`
+	Lookback      time.Duration `json:"lookback"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
+}
+
+type BlockBackfillConfig struct {
 	Enabled       bool          `json:"enabled"`
 	Lookback      time.Duration `json:"lookback"`
 	Timeout       time.Duration `json:"timeout"`
@@ -342,6 +351,13 @@ func Default() Config {
 			PageSize:      100,
 			MANAPIBaseURL: "https://manapi.metaid.io",
 		},
+		BlockBackfill: BlockBackfillConfig{
+			Enabled:       false,
+			Lookback:      1440 * time.Hour,
+			Timeout:       2 * time.Minute,
+			PageSize:      100,
+			MANAPIBaseURL: "https://manapi.metaid.io",
+		},
 		RateLimit: RateLimitConfig{
 			Enabled:           false,
 			RequestsPerSecond: 5,
@@ -478,6 +494,12 @@ func Load() (Config, error) {
 	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_LOOKBACK", &cfg.BotHomepageV2Backfill.Lookback)
 	applyDurationEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_TIMEOUT", &cfg.BotHomepageV2Backfill.Timeout)
 	applyIntEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_PAGE_SIZE", &cfg.BotHomepageV2Backfill.PageSize)
+	applyBoolEnv("METASO_P2P_BLOCK_BACKFILL_ENABLED", &cfg.BlockBackfill.Enabled)
+	applyDurationEnv("METASO_P2P_BLOCK_BACKFILL_LOOKBACK", &cfg.BlockBackfill.Lookback)
+	applyDurationEnv("METASO_P2P_BLOCK_BACKFILL_TIMEOUT", &cfg.BlockBackfill.Timeout)
+	applyIntEnv("METASO_P2P_BLOCK_BACKFILL_PAGE_SIZE", &cfg.BlockBackfill.PageSize)
+	applyStringEnv("METASO_P2P_BLOCK_BACKFILL_MANAPI_BASE_URL", &cfg.BlockBackfill.MANAPIBaseURL)
+
 	applyStringEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL", &cfg.BotHomepageV2Backfill.MANAPIBaseURL)
 
 	if err := cfg.Validate(); err != nil {
