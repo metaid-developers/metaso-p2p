@@ -328,6 +328,13 @@ func (a *Aggregator) savePrivateMessageUnlocked(msg *PrivateMessage, previousKey
 // The cursor is a base64-encoded offset. When beforeTimestamp is positive,
 // only messages older than that timestamp are considered.
 func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr string, size int64, beforeTimestamp int64) (*PrivateChatListResult, error) {
+	// Unified chat filter (spec 2026-10-29 §4.6): a blocked pair reads as
+	// an empty conversation.
+	if blocked, err := a.peerBlockedAliases(myMetaId, otherMetaId, make(identityProfileCache)); err != nil {
+		return nil, err
+	} else if blocked {
+		return emptyPrivateChatListResult(), nil
+	}
 	if a.readModelReady.Load() {
 		return a.getPrivateChatListByReadModel(myMetaId, otherMetaId, cursorStr, size, beforeTimestamp)
 	}
@@ -391,6 +398,13 @@ func (a *Aggregator) GetPrivateChatList(myMetaId, otherMetaId string, cursorStr 
 
 // GetPrivateChatListByIndex returns messages by their continuous conversation index.
 func (a *Aggregator) GetPrivateChatListByIndex(myMetaId, otherMetaId string, startIndex int64, size int64) (*PrivateChatListResult, error) {
+	// Unified chat filter (spec 2026-10-29 §4.6): a blocked pair reads as
+	// an empty conversation.
+	if blocked, err := a.peerBlockedAliases(myMetaId, otherMetaId, make(identityProfileCache)); err != nil {
+		return nil, err
+	} else if blocked {
+		return emptyPrivateChatListResult(), nil
+	}
 	if a.readModelReady.Load() {
 		return a.getPrivateChatListByIndexReadModel(myMetaId, otherMetaId, startIndex, size)
 	}
@@ -740,7 +754,11 @@ func unlockSyncMutexes(locks []*sync.Mutex) {
 // Scans all pchat keys to find unique conversation partners of the given metaId.
 func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, error) {
 	if a.readModelReady.Load() {
-		return a.getPrivateChatHomesByReadModel(metaid)
+		homes, err := a.getPrivateChatHomesByReadModel(metaid)
+		if err != nil {
+			return nil, err
+		}
+		return a.dropBlockedHomes(metaid, homes)
 	}
 	// Scan the global pchat prefix to find all conversations involving this user.
 	partnerMap := make(map[string]*PrivateMessage)
@@ -788,13 +806,17 @@ func (a *Aggregator) GetPrivateChatHomes(metaid string) ([]*PrivateChatHome, err
 		homes = []*PrivateChatHome{}
 	}
 
-	return homes, nil
+	return a.dropBlockedHomes(metaid, homes)
 }
 
 // GetPrivateGroupPaths returns the list of paths where the given metaId has private chat messages.
 func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]*PrivateGroupPath, error) {
 	if a.readModelReady.Load() {
-		return a.getPrivateGroupPathsByReadModel(metaid)
+		paths, err := a.getPrivateGroupPathsByReadModel(metaid)
+		if err != nil {
+			return nil, err
+		}
+		return a.dropBlockedPaths(metaid, paths)
 	}
 	pathMap := make(map[string]*PrivateGroupPath)
 
@@ -828,7 +850,7 @@ func (a *Aggregator) GetPrivateGroupPaths(metaid string) ([]*PrivateGroupPath, e
 		paths = []*PrivateGroupPath{}
 	}
 
-	return paths, nil
+	return a.dropBlockedPaths(metaid, paths)
 }
 
 // GetPrivateMessage retrieves a single private message by its Pebble key.

@@ -616,6 +616,14 @@ func (a *Aggregator) getPrivateChatListByIndexReadModel(myMetaID, otherMetaID st
 // for the HTTP hot path. It avoids decoding and then re-encoding large nested
 // userInfo objects while preserving the exact JSON response shape.
 func (a *Aggregator) getPrivateChatListByIndexRawJSON(myMetaID, otherMetaID string, startIndex, size int64) ([]byte, error) {
+	// Unified chat filter (spec 2026-10-29 §4.6): a blocked pair reads as
+	// an empty conversation, same shape this builder emits for zero
+	// messages.
+	if blocked, err := a.peerBlockedAliases(myMetaID, otherMetaID, make(identityProfileCache)); err != nil {
+		return nil, err
+	} else if blocked {
+		return []byte(`{"total":0,"list":[],"nextCursor":"","nextTimestamp":0}`), nil
+	}
 	profiles := make(identityProfileCache)
 	conversation := a.conversationForQuery(myMetaID, otherMetaID, profiles)
 	meta, err := a.loadConversationMeta(conversation)

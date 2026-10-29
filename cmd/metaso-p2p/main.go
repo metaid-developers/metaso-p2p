@@ -130,6 +130,22 @@ func main() {
 			}
 			privatechatAgg.SetBlockPinIngestor(blockAgg)
 		}
+		// Unified filter wiring (spec 2026-10-29 §4.5/§4.6): the social
+		// list/counts read paths filter through the real block aggregation,
+		// and the privatechat surfaces consult the notify session model
+		// merged with the chain state (union semantics). Without the block
+		// aggregator the social filter stays on its no-op default and the
+		// chat merge runs off-chain-only.
+		if socialAgg != nil && blockAgg != nil {
+			socialAgg.SetBlockLister(social.NewBlockLister(blockAgg))
+		}
+		if notifyAgg != nil {
+			var chainSource notify.ChainBlockSource
+			if blockAgg != nil {
+				chainSource = blockAgg
+			}
+			privatechatAgg.SetChatBlockFilter(notify.NewChatBlockFilter(notifyAgg, chainSource))
+		}
 		skillserviceAgg := &skillservice.Aggregator{}
 		// Wire skillservice -> userinfo before Init so startup index
 		// reconciliation can resolve canonical provider identities.
