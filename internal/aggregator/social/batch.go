@@ -103,12 +103,13 @@ func (a *Aggregator) BatchRelationships(params BatchRelationshipParams) (*BatchR
 			}
 		}
 
-		// Effective edges (§4.4b): unconfirmed /follow pins already count.
-		forwardEdge, err := a.loadEffectiveEdge(sourceId, canonical)
+		// Effective edges (§4.4b/§4.4c): unconfirmed /follow pins already
+		// count, and legacy mixed-form stored rows resolve to one pair.
+		forwardEdge, err := a.effectiveEdgeAcrossForms(sourceId, canonical)
 		if err != nil {
 			return nil, err
 		}
-		reverseEdge, err := a.loadEffectiveEdge(canonical, sourceId)
+		reverseEdge, err := a.effectiveEdgeAcrossForms(canonical, sourceId)
 		if err != nil {
 			return nil, err
 		}

@@ -99,108 +99,10 @@ func (a *Aggregator) ListFriends(params ListParams) (*FriendListResult, error) {
 		return nil, err
 	}
 
-	type friendEntry struct {
-		peer    string
-		record  mutualRecord
-		pending bool
-	}
-	entries := make([]friendEntry, 0)
-	prefix := mutualIndexPrefix(subjectId)
-	err = a.store.ScanPrefix(namespace, prefix, func(key, value []byte) error {
-		peer := strings.TrimPrefix(string(key), string(prefix))
-		if peer == "" || strings.Contains(peer, ":") {
-			return nil
-		}
-		if _, blocked := excluded[peer]; blocked {
-			return nil
-		}
-		var record mutualRecord
-		if err := json.Unmarshal(value, &record); err != nil {
-			return nil
-		}
-		entries = append(entries, friendEntry{peer: peer, record: record})
-		return nil
-	})
+	entries, err := a.mergedFriendEntries(subjectId, excluded)
 	if err != nil {
 		return nil, err
 	}
-
-	// §4.4b mempool overlay merge: recompute each confirmed-mutual entry from
-	// effective edges (a pending revoke breaks the friendship, a pending
-	// refollow refreshes the subject side), then add friendships that exist
-	// only through the overlay (the second follow still unconfirmed).
-	merged := make([]friendEntry, 0, len(entries)+4)
-	for _, entry := range entries {
-		out, outErr := a.loadEffectiveEdge(subjectId, entry.peer)
-		if outErr != nil {
-			return nil, outErr
-		}
-		if out == nil {
-			continue
-		}
-		in, inErr := a.loadEffectiveEdge(entry.peer, subjectId)
-		if inErr != nil {
-			return nil, inErr
-		}
-		if in == nil {
-			continue
-		}
-		record := mutualRecord{
-			FriendSince:  max(out.FollowedAt, in.FollowedAt),
-			SubjectPinId: out.FollowPinId,
-			SubjectAt:    out.FollowedAt,
-			PeerPinId:    in.FollowPinId,
-			PeerAt:       in.FollowedAt,
-		}
-		merged = append(merged, friendEntry{peer: entry.peer, record: record, pending: out.Pending || in.Pending})
-	}
-	candidates := a.pendingFollowPeers(subjectId, true)
-	for peer := range a.pendingFollowPeers(subjectId, false) {
-		candidates[peer] = pendingFollow{}
-	}
-	for peer := range candidates {
-		if _, blocked := excluded[peer]; blocked {
-			continue
-		}
-		if func() bool {
-			for _, entry := range merged {
-				if entry.peer == peer {
-					return true
-				}
-			}
-			return false
-		}() {
-			continue
-		}
-		out, _ := a.loadEffectiveEdge(subjectId, peer)
-		if out == nil {
-			continue
-		}
-		in, _ := a.loadEffectiveEdge(peer, subjectId)
-		if in == nil {
-			continue
-		}
-		if !out.Pending && !in.Pending {
-			continue // pure confirmed pair: covered by the mutual index scan
-		}
-		confirmedOut, _ := a.loadActiveEdge(subjectId, peer)
-		confirmedIn, _ := a.loadActiveEdge(peer, subjectId)
-		if confirmedOut != nil && confirmedIn != nil {
-			continue // already mutual in the confirmed model
-		}
-		merged = append(merged, friendEntry{
-			peer: peer,
-			record: mutualRecord{
-				FriendSince:  max(out.FollowedAt, in.FollowedAt),
-				SubjectPinId: out.FollowPinId,
-				SubjectAt:    out.FollowedAt,
-				PeerPinId:    in.FollowPinId,
-				PeerAt:       in.FollowedAt,
-			},
-			pending: true,
-		})
-	}
-	entries = merged
 
 	// Newest friendSince first; ties resolved deterministically by peer id
 	// (shared §4 pagination contract).
@@ -268,4 +170,100 @@ func (a *Aggregator) ListFriends(params ListParams) (*FriendListResult, error) {
 		}
 	}
 	return &FriendListResult{List: list, NextCursor: nextCursor, Size: size}, nil
+}
+
+// friendEntryView is one row of the merged friends view (§4.4c): the
+// canonical peer id, the recomputed mutual record, and the pending flag
+// when either direction edge comes from the mempool overlay.
+type friendEntryView struct {
+	peer    string
+	record  mutualRecord
+	pending bool
+}
+
+// mergedFriendEntries builds the deduplicated friends view of the subject:
+// candidate peers come from the mutual reverse index and the mempool
+// overlay (either direction), every candidate canonicalizes, and both
+// direction edges re-resolve through the §4.4c cross-form effective lookup.
+// A pending revoke on either direction drops the friendship
+// pre-confirmation; friendships that exist only through the overlay are
+// included.
+func (a *Aggregator) mergedFriendEntries(subjectId string, excluded map[string]struct{}) ([]friendEntryView, error) {
+	subjectId = strings.TrimSpace(subjectId)
+	if subjectId == "" {
+		return nil, ErrInvalidParameter
+	}
+	candidates := make([]string, 0)
+	seen := make(map[string]struct{})
+	addCandidate := func(peerRaw string) bool {
+		canonical := a.canonicalPeerId(peerRaw)
+		if canonical == "" {
+			return false
+		}
+		if _, blocked := excluded[canonical]; blocked {
+			return false
+		}
+		if _, dup := seen[canonical]; dup {
+			return false
+		}
+		seen[canonical] = struct{}{}
+		candidates = append(candidates, canonical)
+		return true
+	}
+
+	prefix := mutualIndexPrefix(subjectId)
+	if err := a.store.ScanPrefix(namespace, prefix, func(key, _ []byte) error {
+		peer := strings.TrimPrefix(string(key), string(prefix))
+		if peer == "" || strings.Contains(peer, ":") {
+			return nil
+		}
+		addCandidate(peer)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := a.forEachPendingPair(func(follower, target string, _ *pendingFollow) error {
+		followerCanonical := a.canonicalPeerId(follower)
+		targetCanonical := a.canonicalPeerId(target)
+		if followerCanonical == subjectId && targetCanonical != subjectId {
+			addCandidate(target)
+			return nil
+		}
+		if targetCanonical == subjectId && followerCanonical != subjectId {
+			addCandidate(follower)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	entries := make([]friendEntryView, 0, len(candidates))
+	for _, peer := range candidates {
+		out, err := a.effectiveEdgeAcrossForms(subjectId, peer)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			continue
+		}
+		in, err := a.effectiveEdgeAcrossForms(peer, subjectId)
+		if err != nil {
+			return nil, err
+		}
+		if in == nil {
+			continue
+		}
+		entries = append(entries, friendEntryView{
+			peer: peer,
+			record: mutualRecord{
+				FriendSince:  max(out.FollowedAt, in.FollowedAt),
+				SubjectPinId: out.FollowPinId,
+				SubjectAt:    out.FollowedAt,
+				PeerPinId:    in.FollowPinId,
+				PeerAt:       in.FollowedAt,
+			},
+			pending: out.Pending || in.Pending,
+		})
+	}
+	return entries, nil
 }

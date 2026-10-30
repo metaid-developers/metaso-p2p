@@ -175,6 +175,14 @@ Binding rules:
   canonical GlobalMetaIDs only. A legacy-hex edge and a GlobalMetaID edge for
   the same two humans are therefore the *same* edge — normalization happens
   *before* keying, so duplicates collapse by construction.
+- **Pin-supplied identity fields are never trusted verbatim (2026-10-30
+  defect follow-up).** The live MVC indexer delivers pins with the wallet
+  chain address in `pin.GlobalMetaId` and `pin.MetaId`
+  (`internal/chain/mvc/indexer.go`), while MANAPI backfill replay delivers
+  hex/GlobalMetaID forms. Both ingest paths therefore MUST flow the
+  publisher identity through `normalizeIdentity` before keying — trusting
+  the field produced address-keyed and GlobalMetaID-keyed rows for the
+  same pair (duplicate list rows, counts off; Section 4.4c).
 - **Public query inputs accept both forms** on all new endpoints in Section 4
   (`:globalMetaId` path parameters and body/query identity fields). Inputs
   are normalized with the same pipeline; an unresolvable input is a `40400`.
@@ -597,12 +605,17 @@ byte-identical to before): `following`/`followers` list items,
 `friends` items, both `relationship` sides, and `blocks` items. The batch
 endpoint (4.3) folds effective state but does not add a pending flag.
 
-**Pagination note.** `following`/`followers` surface pending-only edges
-(no confirmed index entry yet) at the head of the **first page only**
-(cursor omitted), newest first, capped at `size`; subsequent pages walk the
-confirmed index alone, keeping the shared cursor contract intact.
-`friends` and `blocks` merge the overlay into their in-memory sorts, so
-pending entries paginate normally there.
+**Pagination note.** (Revised 2026-10-30 by Section 4.4c.)
+`following`/`followers` paginate a materialized, canonically deduplicated
+view: rows whose effective edge is pending sort ahead of confirmed rows
+(newest `followedAt` first, ties by canonical peer id), so pending entries
+surface from the first page exactly as before, but every identity occupies
+one row regardless of stored key form. The cursor is now an opaque
+`(list kind, pending, followedAt, peer)` tuple anchor — same external
+contract (opaque string; wrong-list and stale anchors reject `40000`),
+so cursors minted before this revision are rejected as invalid and clients
+refetch page one. `friends` and `blocks` merge the overlay into their
+in-memory sorts, so pending entries paginate normally there.
 
 **Notify bridge.** The §4.6 session-cache bridge stays confirmed-only
 (`ApplyChainBlock`/`RemoveChainBlock` fire on confirmed folds). Chat
@@ -614,6 +627,56 @@ view; a transaction replaced or dropped after our poll shows a stale effect
 for at most the expiry window (default 2h), then self-corrects to the
 confirmed model. Chain-order inversions between competing mempool
 mutations resolve by arrival until confirmation, which is authoritative.
+
+### 4.4c Canonical cross-form merge of stored follow edges (binding; defect fix 2026-10-30)
+
+**Defect.** Terminal-verification reads on production
+(`GET /api/social/globalmetaid/<AI_Sunny>/followers`) showed 23 rows for 18
+unique identities: five followers twice each. Root cause: the live MVC
+indexer supplies the wallet **chain address** in `pin.GlobalMetaId` (and
+`pin.MetaId`), and the social ingest trusted that field verbatim — live
+pins keyed confirmed edges by address, MANAPI backfill replay keyed the
+same pins by GlobalMetaID, and one real pair occupied two Pebble keys
+(`edge:pair:<addr>:<gid>` next to `edge:pair:<gid>:<gid>`) with two index
+rows to match. Counts and lists disagreed by construction. The same trust
+gap let mempool overlay entries (keyed by the resolved GlobalMetaID) sit
+next to address/hex-keyed confirmed rows of the same pair.
+
+**Fix, ingest (root cause).** `resolveFollowerGlobalMetaId` flows every
+pin-supplied identity through the Section 2.3 pipeline: GlobalMetaIDs pass
+through, chain addresses convert locally via the IDAddress algorithm,
+legacy hex resolves through the profile archive (miss -> Section 2.5
+trail, no edge). New writes always land on canonical keys, from both
+delivery paths.
+
+**Fix, data heal (twin sweep).** Confirmed create/revoke folds additionally
+sweep stored edges of the same canonical pair sitting under *other* key
+forms (probe set: the folded pin's raw identity fields + profile aliases;
+the canonical key itself is never swept). The idempotent backfill replay on
+deploy therefore rewrites pre-fix rows organically, and a revoke of one
+form cannot leave a twin row behind as a ghost follower.
+
+**Fix, read (merge rule).** Every read surface — lists, counts, friends,
+relationship, batch — resolves through one canonical merge per
+(follower, target) pair:
+
+1. All stored key forms of the pair collapse into one group (canonical
+   GlobalMetaID key, legacy hex key, chain-address key); the group's peer
+   identity is the canonical GlobalMetaID resolved from any form
+   (address conversion local; hex via profile archive; an unresolvable
+   form stays a distinct identity rather than collapsing).
+2. Inside the group the **newest mutation wins by `followedAt`, ties to the
+   overlay** (an unconfirmed pin is the fresher chain intent): a winning
+   pending revoke hides the pair; a winning pending follow materializes it
+   with `pending: true`; otherwise the newest confirmed active edge shows
+   (ties: canonical key form, then pinId). A stale pending mutation (older
+   than the pair's newest confirmed edge) yields to the confirmed edge.
+3. Counts run over the same merged views as the lists, so counts and list
+   lengths agree by construction.
+
+**Compatibility.** Additive only: response schemas unchanged (confirmed
+rows byte-identical; deduplicated rows collapse to one entry). List
+cursors become tuple anchors per the Section 4.4b pagination note.
 
 ### 4.5 Unified filter layer (binding for S3)
 
@@ -695,6 +758,13 @@ Merge design (binding for S3):
    visible immediately (Section 4.4b). Items sourced from the overlay carry
    an additive `"pending": true` field; confirmed-only responses are
    byte-identical to before.
+4. (Dedup round, 2026-10-30) Ingest canonicalizes pin-supplied follower
+   identities (Section 2.3 binding rule), confirmed folds sweep legacy
+   twin rows, and list/count/relationship reads canonically deduplicate
+   stored edges (Section 4.4c) — one row per identity, counts agreeing.
+   `following`/`followers` cursors become opaque tuple anchors; cursors
+   minted before this change are rejected (`40000`) and clients refetch
+   page one.
 
 Nothing else about shipped endpoints changes.
 

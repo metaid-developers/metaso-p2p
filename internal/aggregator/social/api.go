@@ -1,6 +1,7 @@
 package social
 
 import (
+	"encoding/base64"
 	"errors"
 	"strconv"
 	"strings"
@@ -234,7 +235,9 @@ func parseListParams(c *gin.Context) (ListParams, error) {
 	}
 
 	cursor := strings.TrimSpace(c.Query("cursor"))
-	if _, err := decodeCursor(cursor); err != nil {
+	// Base64 envelope check only: each list endpoint decodes and validates
+	// its own cursor shape (edge tuple vs friend tuple) afterwards.
+	if _, err := base64.StdEncoding.DecodeString(cursor); err != nil {
 		return ListParams{}, ErrInvalidParameter
 	}
 

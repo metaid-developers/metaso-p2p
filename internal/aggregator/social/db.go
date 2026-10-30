@@ -1,7 +1,6 @@
 package social
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -204,26 +203,4 @@ func (a *Aggregator) deleteActiveEdge(edge *FollowEdge) error {
 	_ = a.store.Delete(namespace, followerIndexKey(edge.TargetGlobalMetaId, edge.FollowedAt, edge.FollowPinId, edge.FollowerGlobalMetaId))
 	_ = a.store.Delete(namespace, pinToPairKey(edge.FollowPinId))
 	return a.maintainMutualForPair(edge.FollowerGlobalMetaId, edge.TargetGlobalMetaId)
-}
-
-func encodeCursor(key []byte) string {
-	if len(key) == 0 {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(key)
-}
-
-func decodeCursor(cursor string) ([]byte, error) {
-	cursor = strings.TrimSpace(cursor)
-	if cursor == "" {
-		return nil, nil
-	}
-	key, err := base64.StdEncoding.DecodeString(cursor)
-	if err != nil {
-		return nil, fmt.Errorf("invalid cursor: %w", err)
-	}
-	if len(key) == 0 {
-		return nil, fmt.Errorf("invalid cursor: empty")
-	}
-	return key, nil
 }
