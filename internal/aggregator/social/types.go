@@ -23,6 +23,10 @@ type FollowEdge struct {
 	FollowPinId          string `json:"followPinId"`
 	FollowedAt           int64  `json:"followedAt"`
 	Active               bool   `json:"active"`
+	// Pending marks an edge materialized from the mempool overlay (unconfirmed
+	// pin, spec §4.4b). Confirmed edges serialize it away (omitempty), so the
+	// stored confirmed-model JSON is unchanged.
+	Pending bool `json:"pending,omitempty"`
 }
 
 const (
@@ -41,6 +45,9 @@ type RelationshipSide struct {
 	FollowsSource bool   `json:"followsSource"`
 	FollowPinId   string `json:"followPinId"`
 	FollowedAt    int64  `json:"followedAt"`
+	// Pending is true when this side's edge comes from the mempool overlay
+	// (spec §4.4b).
+	Pending bool `json:"pending,omitempty"`
 }
 
 type RelationshipResult struct {
@@ -65,6 +72,9 @@ type ListItem struct {
 	BioId        string `json:"bioId,omitempty"`
 	FollowedAt   int64  `json:"followedAt"`
 	FollowPinId  string `json:"followPinId"`
+	// Pending is true when the edge comes from the mempool overlay (the
+	// show.now "Mempool:1" marker precedent, spec §4.4b).
+	Pending bool `json:"pending,omitempty"`
 }
 
 type ListResult struct {

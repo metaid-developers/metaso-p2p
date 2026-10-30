@@ -15,6 +15,7 @@ type compactListItemResponse struct {
 	Name         string `json:"name"`
 	NameId       string `json:"nameId"`
 	AvatarId     string `json:"avatarId"`
+	Pending      bool   `json:"pending,omitempty"`
 }
 
 type profileListItemResponse struct {
@@ -26,6 +27,7 @@ type profileListItemResponse struct {
 	BioId        string `json:"bioId"`
 	FollowedAt   int64  `json:"followedAt"`
 	FollowPinId  string `json:"followPinId"`
+	Pending      bool   `json:"pending,omitempty"`
 }
 
 type compactListResponse struct {
@@ -45,6 +47,7 @@ type relationshipSourceResponse struct {
 	FollowsTarget bool   `json:"followsTarget"`
 	FollowPinId   string `json:"followPinId"`
 	FollowedAt    int64  `json:"followedAt"`
+	Pending       bool   `json:"pending,omitempty"`
 }
 
 type relationshipTargetResponse struct {
@@ -52,6 +55,7 @@ type relationshipTargetResponse struct {
 	FollowsSource bool   `json:"followsSource"`
 	FollowPinId   string `json:"followPinId"`
 	FollowedAt    int64  `json:"followedAt"`
+	Pending       bool   `json:"pending,omitempty"`
 }
 
 type relationshipResponse struct {
@@ -65,6 +69,7 @@ type friendCompactItemResponse struct {
 	Name         string `json:"name"`
 	NameId       string `json:"nameId"`
 	AvatarId     string `json:"avatarId"`
+	Pending      bool   `json:"pending,omitempty"`
 }
 
 type friendProfileItemResponse struct {
@@ -77,6 +82,7 @@ type friendProfileItemResponse struct {
 	FollowedAt   int64  `json:"followedAt"`
 	FollowPinId  string `json:"followPinId"`
 	FriendSince  int64  `json:"friendSince"`
+	Pending      bool   `json:"pending,omitempty"`
 }
 
 type friendCompactListResponse struct {
@@ -203,12 +209,14 @@ func (a *Aggregator) handleRelationship(c *gin.Context) {
 			FollowsTarget: result.Source.FollowsTarget,
 			FollowPinId:   result.Source.FollowPinId,
 			FollowedAt:    result.Source.FollowedAt,
+			Pending:       result.Source.Pending,
 		},
 		Target: relationshipTargetResponse{
 			GlobalMetaId:  result.Target.GlobalMetaId,
 			FollowsSource: result.Target.FollowsSource,
 			FollowPinId:   result.Target.FollowPinId,
 			FollowedAt:    result.Target.FollowedAt,
+			Pending:       result.Target.Pending,
 		},
 		Mutual: result.Mutual,
 	})
@@ -269,6 +277,7 @@ func buildFriendListResponse(result *FriendListResult, view string) any {
 				FollowedAt:   item.FollowedAt,
 				FollowPinId:  item.FollowPinId,
 				FriendSince:  item.FriendSince,
+				Pending:      item.Pending,
 			})
 		}
 		return friendProfileListResponse{
@@ -285,6 +294,7 @@ func buildFriendListResponse(result *FriendListResult, view string) any {
 			Name:         item.Name,
 			NameId:       item.NameId,
 			AvatarId:     item.AvatarId,
+			Pending:      item.Pending,
 		})
 	}
 	return friendCompactListResponse{
@@ -311,6 +321,7 @@ func buildListResponse(result *ListResult, view string) any {
 				BioId:        item.BioId,
 				FollowedAt:   item.FollowedAt,
 				FollowPinId:  item.FollowPinId,
+				Pending:      item.Pending,
 			})
 		}
 		return profileListResponse{
@@ -327,6 +338,7 @@ func buildListResponse(result *ListResult, view string) any {
 			Name:         item.Name,
 			NameId:       item.NameId,
 			AvatarId:     item.AvatarId,
+			Pending:      item.Pending,
 		})
 	}
 	return compactListResponse{

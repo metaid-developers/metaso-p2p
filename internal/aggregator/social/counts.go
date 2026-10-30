@@ -64,6 +64,7 @@ func (a *Aggregator) Counts(subjectInput string) (*CountsResult, error) {
 
 func (a *Aggregator) countFollowing(subjectId string, excluded map[string]struct{}) (int, error) {
 	count := 0
+	seen := make(map[string]struct{})
 	err := a.store.ScanPrefix(namespace, followingIndexPrefix(subjectId), func(key, _ []byte) error {
 		peer, ok := peerFromEdgeIndexKey(key)
 		if !ok {
@@ -72,20 +73,38 @@ func (a *Aggregator) countFollowing(subjectId string, excluded map[string]struct
 		if _, blocked := excluded[peer]; blocked {
 			return nil
 		}
-		edge, err := a.loadActiveEdge(subjectId, peer)
+		// Effective edge: a pending revoke hides the pair pre-confirmation.
+		edge, err := a.loadEffectiveEdge(subjectId, peer)
 		if err != nil {
 			return err
 		}
 		if edge != nil {
 			count++
+			seen[peer] = struct{}{}
 		}
 		return nil
 	})
-	return count, err
+	if err != nil {
+		return 0, err
+	}
+	// §4.4b: pending-only follows (no confirmed index entry) count too.
+	for peer := range a.pendingFollowPeers(subjectId, true) {
+		if _, dup := seen[peer]; dup {
+			continue
+		}
+		if _, blocked := excluded[peer]; blocked {
+			continue
+		}
+		if confirmed, _ := a.loadActiveEdge(subjectId, peer); confirmed == nil {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (a *Aggregator) countFollowers(subjectId string, excluded map[string]struct{}) (int, error) {
 	count := 0
+	seen := make(map[string]struct{})
 	err := a.store.ScanPrefix(namespace, followerIndexPrefix(subjectId), func(key, _ []byte) error {
 		peer, ok := peerFromEdgeIndexKey(key)
 		if !ok {
@@ -94,16 +113,33 @@ func (a *Aggregator) countFollowers(subjectId string, excluded map[string]struct
 		if _, blocked := excluded[peer]; blocked {
 			return nil
 		}
-		edge, err := a.loadActiveEdge(peer, subjectId)
+		// Effective edge: a pending revoke hides the pair pre-confirmation.
+		edge, err := a.loadEffectiveEdge(peer, subjectId)
 		if err != nil {
 			return err
 		}
 		if edge != nil {
 			count++
+			seen[peer] = struct{}{}
 		}
 		return nil
 	})
-	return count, err
+	if err != nil {
+		return 0, err
+	}
+	// §4.4b: pending-only followers (no confirmed index entry) count too.
+	for peer := range a.pendingFollowPeers(subjectId, false) {
+		if _, dup := seen[peer]; dup {
+			continue
+		}
+		if _, blocked := excluded[peer]; blocked {
+			continue
+		}
+		if confirmed, _ := a.loadActiveEdge(peer, subjectId); confirmed == nil {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (a *Aggregator) countFriends(subjectId string, excluded map[string]struct{}) (int, error) {
@@ -117,10 +153,57 @@ func (a *Aggregator) countFriends(subjectId string, excluded map[string]struct{}
 		if _, blocked := excluded[peer]; blocked {
 			return nil
 		}
+		// Effective mutual: a pending revoke on either direction breaks the
+		// friendship pre-confirmation (spec §4.4b).
+		out, outErr := a.loadEffectiveEdge(subjectId, peer)
+		if outErr != nil {
+			return outErr
+		}
+		if out == nil {
+			return nil
+		}
+		in, inErr := a.loadEffectiveEdge(peer, subjectId)
+		if inErr != nil {
+			return inErr
+		}
+		if in == nil {
+			return nil
+		}
 		count++
 		return nil
 	})
-	return count, err
+	if err != nil {
+		return 0, err
+	}
+	// §4.4b: friendships that only exist through the overlay (e.g. the
+	// second follow still unconfirmed) count too.
+	candidates := a.pendingFollowPeers(subjectId, true)
+	for peer := range a.pendingFollowPeers(subjectId, false) {
+		candidates[peer] = pendingFollow{}
+	}
+	for peer := range candidates {
+		if _, blocked := excluded[peer]; blocked {
+			continue
+		}
+		out, _ := a.loadEffectiveEdge(subjectId, peer)
+		if out == nil {
+			continue
+		}
+		in, _ := a.loadEffectiveEdge(peer, subjectId)
+		if in == nil {
+			continue
+		}
+		if !out.Pending && !in.Pending {
+			continue // pure confirmed pair: covered by the mutual index scan
+		}
+		confirmedOut, _ := a.loadActiveEdge(subjectId, peer)
+		confirmedIn, _ := a.loadActiveEdge(peer, subjectId)
+		if confirmedOut != nil && confirmedIn != nil {
+			continue // already mutual in the confirmed model (scan counted it)
+		}
+		count++
+	}
+	return count, nil
 }
 
 // blockPeerSets returns the (blocking, blockedBy) peer sets of the subject

@@ -20,6 +20,7 @@ type Aggregator struct {
 	notifyCh        chan *aggregator.NotifyEvent
 	profileLookup   ProfileLookup
 	chatBlockBridge ChatBlockBridge
+	pendingSeq      uint64 // mempool overlay arrival counter (LWW)
 }
 
 const (
@@ -63,8 +64,9 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 	return a.notifyCh
 }
 
-// HandleBlockPin processes a confirmed (on-chain) pin. The block read model
-// materializes confirmed pins only (spec §4.4 note / OQ-2).
+// HandleBlockPin processes a confirmed (on-chain) pin; the confirmed read
+// model remains the source of truth, and the fold consumes the pin's
+// mempool overlay entry (spec §4.4b).
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	if err := a.IngestBlockPin(pin); err != nil {
 		return nil, err
@@ -72,9 +74,15 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	return nil, nil
 }
 
-// HandleMempoolPin ignores mempool pins: block state derives from confirmed
-// pins only (spec OQ-2 default).
+// HandleMempoolPin folds unconfirmed simpleblock pins into the mempool
+// overlay so block effects take effect immediately (spec §4.4b, OQ-2
+// reversed 2026-10-30). The notify session-cache bridge stays
+// confirmed-only; chat filtering is mempool-fast through the read-side
+// union, which consults the overlay on every read.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	if err := a.IngestMempoolPin(pin); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 

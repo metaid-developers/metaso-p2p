@@ -103,11 +103,12 @@ func (a *Aggregator) BatchRelationships(params BatchRelationshipParams) (*BatchR
 			}
 		}
 
-		forwardEdge, err := a.loadActiveEdge(sourceId, canonical)
+		// Effective edges (§4.4b): unconfirmed /follow pins already count.
+		forwardEdge, err := a.loadEffectiveEdge(sourceId, canonical)
 		if err != nil {
 			return nil, err
 		}
-		reverseEdge, err := a.loadActiveEdge(canonical, sourceId)
+		reverseEdge, err := a.loadEffectiveEdge(canonical, sourceId)
 		if err != nil {
 			return nil, err
 		}

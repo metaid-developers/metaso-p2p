@@ -47,6 +47,10 @@ type BlockEdge struct {
 	BlockedAt        int64  `json:"blockedAt"`
 	BlockState       int64  `json:"blockState"`
 	Active           bool   `json:"active"`
+	// Pending marks an edge materialized from the mempool overlay
+	// (unconfirmed pin, spec §4.4b). Confirmed edges serialize it away
+	// (omitempty), so the stored confirmed-model JSON is unchanged.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // BlockListItem is one peer entry of the blocks listing (spec §4.4).
@@ -58,6 +62,9 @@ type BlockListItem struct {
 	Direction    string `json:"direction"`
 	BlockedAt    int64  `json:"blockedAt"`
 	BlockPinId   string `json:"blockPinId"`
+	// Pending is true when the edge comes from the mempool overlay (the
+	// show.now "Mempool:1" marker precedent, spec §4.4b).
+	Pending bool `json:"pending,omitempty"`
 	// Profile view additions (spec §4.4: bio/bioId).
 	Bio   string `json:"bio,omitempty"`
 	BioId string `json:"bioId,omitempty"`
@@ -78,11 +85,13 @@ type BlockListResult struct {
 }
 
 // BlockPeer is a subject-facing view of one active block pair, used by the
-// counters and the union read-side merge (spec §4.5/§4.6).
+// counters and the union read-side merge (spec §4.5/§4.6). Pending marks an
+// overlay (unconfirmed) edge (spec §4.4b).
 type BlockPeer struct {
 	GlobalMetaId string
 	BlockPinId   string
 	BlockedAt    int64
+	Pending      bool
 }
 
 // BlockLister is the unified filter interface every filtered surface depends
