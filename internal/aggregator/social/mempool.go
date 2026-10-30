@@ -3,7 +3,6 @@ package social
 import (
 	"encoding/json"
 	"log"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -233,30 +232,6 @@ func (a *Aggregator) forEachPendingPair(fn func(followerGlobalMetaId, targetGlob
 	})
 }
 
-// pendingFollowsFor returns the peers whose effective edge for the subject
-// comes from the overlay (kind=follow, correct direction). Peers whose
-// confirmed edge already exists are included: the index scan surfaces them
-// and the effective loader picks the overlay payload, but the caller needs
-// this set to know which list items carry the pending marker.
-func (a *Aggregator) pendingFollowPeers(subject string, outbound bool) map[string]pendingFollow {
-	out := make(map[string]pendingFollow)
-	if a == nil || a.store == nil {
-		return out
-	}
-	_ = a.forEachPendingPair(func(follower, target string, entry *pendingFollow) error {
-		if entry.Kind != pendingKindFollow {
-			return nil
-		}
-		if outbound && follower == subject {
-			out[target] = *entry
-		} else if !outbound && target == subject {
-			out[follower] = *entry
-		}
-		return nil
-	})
-	return out
-}
-
 // SweepExpiredMempoolOverlay is the janitor path (spec §4.4b): it walks the
 // unconfirmed pin refs and
 //   - consumes entries whose pin already folded into the confirmed model
@@ -301,47 +276,6 @@ func (a *Aggregator) SweepExpiredMempoolOverlay(now time.Time, expiry time.Durat
 		log.Printf("[social] mempool overlay sweep removed %d entries", removed)
 	}
 	return removed
-}
-
-// pendingPeerEdge is one overlay follow edge keyed by its peer id.
-type pendingPeerEdge struct {
-	peer  string
-	pinId string
-	at    int64 // followedAt, for ordering
-}
-
-// pendingOnlyEdges returns the overlay follow peers of the subject that the
-// confirmed index will never surface (their confirmed pair edge is nil),
-// newest followedAt first, ties by peer id — the shared §4 ordering rule.
-// Peers excluded by the unified filter are dropped here.
-func (a *Aggregator) pendingOnlyEdges(subject string, outbound bool, excluded map[string]struct{}) []pendingPeerEdge {
-	pending := a.pendingFollowPeers(subject, outbound)
-	if len(pending) == 0 {
-		return nil
-	}
-	edges := make([]pendingPeerEdge, 0, len(pending))
-	for peer, entry := range pending {
-		if _, blocked := excluded[peer]; blocked {
-			continue
-		}
-		var confirmed *FollowEdge
-		if outbound {
-			confirmed, _ = a.loadActiveEdge(subject, peer)
-		} else {
-			confirmed, _ = a.loadActiveEdge(peer, subject)
-		}
-		if confirmed != nil {
-			continue // surfaced by the confirmed index scan
-		}
-		edges = append(edges, pendingPeerEdge{peer: peer, pinId: entry.FollowPinId, at: entry.FollowedAt})
-	}
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].at != edges[j].at {
-			return edges[i].at > edges[j].at
-		}
-		return edges[i].peer < edges[j].peer
-	})
-	return edges
 }
 
 // StartMempoolSweeper runs the overlay janitor on a ticker until stop is

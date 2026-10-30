@@ -1,7 +1,6 @@
 package social
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -112,12 +111,27 @@ func (a *Aggregator) processCreate(pin *aggregator.PinInscription) error {
 		// index records it so backfill replay can re-normalize later.
 		return a.recordUnresolvedPin(pin, followerGlobalMetaId, targetRef)
 	}
+	// §4.4c ingest heal: drop pre-fix twin rows of this pair (the same
+	// identity keyed by chain address / legacy hex) before the canonical
+	// write, so the idempotent backfill replay rewrites legacy data and
+	// pinToPair always ends up pointing at the canonical form.
+	a.sweepPairTwins(pinFollowerForms(pin), followerGlobalMetaId, targetGlobalMetaId)
 	return a.saveActiveEdge(&FollowEdge{
 		FollowerGlobalMetaId: followerGlobalMetaId,
 		TargetGlobalMetaId:   targetGlobalMetaId,
 		FollowPinId:          strings.TrimSpace(pin.Id),
 		FollowedAt:           pin.Timestamp,
 	})
+}
+
+// pinFollowerForms lists the raw identity strings a pin carries for its
+// publisher — the exact key forms historical ingest paths may have used
+// for the same identity (§4.4c sweep input).
+func pinFollowerForms(pin *aggregator.PinInscription) []string {
+	if pin == nil {
+		return nil
+	}
+	return []string{pin.GlobalMetaId, pin.MetaId, pin.CreateMetaId, pin.Address, pin.CreateAddress}
 }
 
 // unresolvedPinRecord is the edge:pin trail entry written when a follow pin's
@@ -158,7 +172,14 @@ func (a *Aggregator) processRevoke(pin *aggregator.PinInscription) error {
 	if err != nil || edge == nil {
 		return err
 	}
-	return a.deleteActiveEdge(edge)
+	if err := a.deleteActiveEdge(edge); err != nil {
+		return err
+	}
+	// §4.4c ingest heal: a pre-fix twin row of the same pair under another
+	// key form would otherwise resurface as a ghost follower once this
+	// direction is revoked.
+	a.sweepPairTwins([]string{edge.FollowerGlobalMetaId}, a.canonicalPeerId(edge.FollowerGlobalMetaId), edge.TargetGlobalMetaId)
+	return nil
 }
 
 func (a *Aggregator) Relationship(params RelationshipParams) (*RelationshipResult, error) {
@@ -171,11 +192,11 @@ func (a *Aggregator) Relationship(params RelationshipParams) (*RelationshipResul
 		return nil, err
 	}
 
-	sourceEdge, err := a.loadEffectiveEdge(source.GlobalMetaId, target.GlobalMetaId)
+	sourceEdge, err := a.effectiveEdgeAcrossForms(source.GlobalMetaId, target.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
-	targetEdge, err := a.loadEffectiveEdge(target.GlobalMetaId, source.GlobalMetaId)
+	targetEdge, err := a.effectiveEdgeAcrossForms(target.GlobalMetaId, source.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
@@ -211,29 +232,19 @@ func (a *Aggregator) ListFollowing(params ListParams) (*ListResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	cursor, err := decodeEdgeListCursor(edgeCursorKindFollowing, params.Cursor)
+	if err != nil {
+		return nil, ErrInvalidParameter
+	}
 	excluded, err := a.blockedPeerSet(subject.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
-	return a.listEdges(followingIndexPrefix(subject.GlobalMetaId), params, excluded, func(key []byte) (string, bool) {
-		keyText := string(key)
-		idx := strings.LastIndex(keyText, ":")
-		if idx < 0 || idx+1 >= len(keyText) {
-			return "", false
-		}
-		return keyText[idx+1:], true
-	}, func(peerGlobalMetaId string) (*FollowEdge, error) {
-		return a.loadEffectiveEdge(subject.GlobalMetaId, peerGlobalMetaId)
-	}, a.pendingOnlyEdges(subject.GlobalMetaId, true, excluded), func(p pendingPeerEdge) *FollowEdge {
-		return &FollowEdge{
-			FollowerGlobalMetaId: subject.GlobalMetaId,
-			TargetGlobalMetaId:   p.peer,
-			FollowPinId:          p.pinId,
-			FollowedAt:           p.at,
-			Active:               true,
-			Pending:              true,
-		}
-	})
+	views, err := a.mergedPeerEdges(subject.GlobalMetaId, true, excluded)
+	if err != nil {
+		return nil, err
+	}
+	return a.buildEdgeListResult(views, cursor, params, edgeCursorKindFollowing)
 }
 
 func (a *Aggregator) ListFollowers(params ListParams) (*ListResult, error) {
@@ -247,122 +258,75 @@ func (a *Aggregator) ListFollowers(params ListParams) (*ListResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	cursor, err := decodeEdgeListCursor(edgeCursorKindFollowers, params.Cursor)
+	if err != nil {
+		return nil, ErrInvalidParameter
+	}
 	excluded, err := a.blockedPeerSet(subject.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
-	return a.listEdges(followerIndexPrefix(subject.GlobalMetaId), params, excluded, func(key []byte) (string, bool) {
-		keyText := string(key)
-		idx := strings.LastIndex(keyText, ":")
-		if idx < 0 || idx+1 >= len(keyText) {
-			return "", false
-		}
-		return keyText[idx+1:], true
-	}, func(peerGlobalMetaId string) (*FollowEdge, error) {
-		return a.loadEffectiveEdge(peerGlobalMetaId, subject.GlobalMetaId)
-	}, a.pendingOnlyEdges(subject.GlobalMetaId, false, excluded), func(p pendingPeerEdge) *FollowEdge {
-		return &FollowEdge{
-			FollowerGlobalMetaId: p.peer,
-			TargetGlobalMetaId:   subject.GlobalMetaId,
-			FollowPinId:          p.pinId,
-			FollowedAt:           p.at,
-			Active:               true,
-			Pending:              true,
-		}
-	})
-}
-
-// listEdges merges the mempool overlay into one direction of the follow
-// listing (spec §4.4b): pending-only edges (no confirmed index entry yet)
-// surface at the head of the first page — newest first, capped at size, so
-// the shared cursor contract over the confirmed index stays intact — while
-// the index scan itself serves effective edges (a pending revoke hides its
-// pair, a pending refollow replaces the confirmed payload).
-func (a *Aggregator) listEdges(prefix []byte, params ListParams, excludedPeers map[string]struct{}, parsePeer func([]byte) (string, bool), loadEdge func(string) (*FollowEdge, error), pendingOnly []pendingPeerEdge, pendingEdgeOf func(pendingPeerEdge) *FollowEdge) (*ListResult, error) {
-	view, err := normaliseListView(params.View)
+	views, err := a.mergedPeerEdges(subject.GlobalMetaId, false, excluded)
 	if err != nil {
 		return nil, err
+	}
+	return a.buildEdgeListResult(views, cursor, params, edgeCursorKindFollowers)
+}
+
+const (
+	edgeCursorKindFollowing = "following"
+	edgeCursorKindFollowers = "followers"
+)
+
+// buildEdgeListResult pages the merged view with the tuple cursor
+// (§4.4c): rows sort pending bucket first, then newest followedAt, ties by
+// canonical peer; the cursor anchors at the last returned row and a stale
+// anchor (row no longer present) rejects with 40000, same external
+// contract as before.
+func (a *Aggregator) buildEdgeListResult(views []peerEdgeView, cursor edgeListCursor, params ListParams, kind string) (*ListResult, error) {
+	start := 0
+	if cursor.Peer != "" {
+		start = -1
+		for i, view := range views {
+			if view.edge.Pending == cursor.Pending &&
+				view.edge.FollowedAt == cursor.FollowedAt &&
+				view.peer == cursor.Peer {
+				start = i + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, ErrInvalidParameter
+		}
 	}
 
 	size := clampListSize(params.Size)
-	cursorKey, err := decodeCursor(params.Cursor)
-	if err != nil {
-		return nil, err
+	end := start + size
+	if end > len(views) {
+		end = len(views)
 	}
-	if len(cursorKey) > 0 && !bytes.HasPrefix(cursorKey, prefix) {
-		return nil, ErrInvalidParameter
-	}
-
-	items := make([]ListItem, 0, size)
-	nextCursor := ""
-	lastReturnedKey := []byte(nil)
-	skipUntilCursor := len(cursorKey) > 0
-	foundCursor := len(cursorKey) == 0
-
-	if foundCursor {
-		for _, pending := range pendingOnly {
-			if len(items) >= size {
-				break
-			}
-			profile, err := a.lookupListProfile(pending.peer)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, buildListItem(view, profile, pendingEdgeOf(pending)))
-		}
-		if len(items) >= size {
-			return &ListResult{List: items, NextCursor: "", Size: size}, nil
-		}
-	}
-
-	err = a.store.ScanPrefix(namespace, prefix, func(key, _ []byte) error {
-		if skipUntilCursor {
-			if bytes.Equal(key, cursorKey) {
-				skipUntilCursor = false
-				foundCursor = true
-			}
-			return nil
-		}
-		peerGlobalMetaId, ok := parsePeer(key)
-		if !ok || peerGlobalMetaId == "" {
-			return nil
-		}
-		// §4.5 unified filter: blocked pairs never appear in list reads.
-		if _, excluded := excludedPeers[peerGlobalMetaId]; excluded {
-			return nil
-		}
-
-		edge, err := loadEdge(peerGlobalMetaId)
-		if err != nil || edge == nil {
-			return err
-		}
-
-		profile, err := a.lookupListProfile(peerGlobalMetaId)
+	items := make([]ListItem, 0, end-start)
+	for _, view := range views[start:end] {
+		profile, err := a.lookupListProfile(view.peer)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		items = append(items, buildListItem(params.View, profile, view.edge))
+	}
 
-		items = append(items, buildListItem(view, profile, edge))
-		if len(items) <= size {
-			lastReturnedKey = append(lastReturnedKey[:0], key...)
+	nextCursor := ""
+	if end < len(views) && end > start {
+		last := views[end-1]
+		encoded, err := encodeEdgeListCursor(edgeListCursor{
+			Kind:       kind,
+			Pending:    last.edge.Pending,
+			FollowedAt: last.edge.FollowedAt,
+			Peer:       last.peer,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if len(items) == size+1 {
-			nextCursor = encodeCursor(lastReturnedKey)
-			return errStopScan
-		}
-		return nil
-	})
-	if err == errStopScan {
-		err = nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !foundCursor {
-		return nil, ErrInvalidParameter
-	}
-	if len(items) > size {
-		items = items[:size]
+		nextCursor = encoded
 	}
 	return &ListResult{List: items, NextCursor: nextCursor, Size: size}, nil
 }
@@ -424,14 +388,20 @@ func (a *Aggregator) lookupRequestSubject(globalMetaId string) (*TargetRef, erro
 	return target, nil
 }
 
+// resolveFollowerGlobalMetaId normalizes the pin publisher identity to the
+// canonical GlobalMetaID through the §2.3 pipeline. The live MVC indexer
+// supplies the wallet chain address in pin.GlobalMetaId (and pin.MetaId),
+// so the field is never trusted verbatim: GlobalMetaIDs pass through,
+// chain addresses convert locally via the IDAddress algorithm, legacy hex
+// resolves through the profile archive (§4.4c root-cause fix).
 func (a *Aggregator) resolveFollowerGlobalMetaId(pin *aggregator.PinInscription) (string, error) {
 	if pin == nil {
 		return "", nil
 	}
-	if globalMetaId := strings.TrimSpace(pin.GlobalMetaId); globalMetaId != "" {
-		return globalMetaId, nil
+	ref := firstNonEmpty(pin.GlobalMetaId, pin.MetaId, pin.CreateMetaId, pin.Address, pin.CreateAddress)
+	if ref == "" {
+		return "", nil
 	}
-	ref := firstNonEmpty(pin.MetaId, pin.CreateMetaId, pin.Address, pin.CreateAddress)
 	canonical, ok, err := a.normalizeIdentity(ref)
 	if err != nil || !ok {
 		return "", err
@@ -483,9 +453,3 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
-
-type stopScanError struct{}
-
-func (stopScanError) Error() string { return "stop scan" }
-
-var errStopScan error = stopScanError{}
