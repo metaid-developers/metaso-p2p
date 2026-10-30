@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
@@ -150,6 +151,60 @@ func (a *Aggregator) IngestBlockPin(pin *aggregator.PinInscription) error {
 		}
 		log.Printf("[block] block folded: from=%s to=%s pinId=%s", fromIdentity.GlobalMetaId, toIdentity.GlobalMetaId, blockPinId)
 	}
+
+	// The confirmed fold consumes this pin's mempool overlay entry so the
+	// transition is seamless (spec §4.4b).
+	a.consumePendingPin(strings.TrimSpace(pin.Id))
+	return nil
+}
+
+// IngestMempoolPin folds one unconfirmed simpleblock pin into the mempool
+// overlay (spec §4.4b): blockState=1 blocks immediately, blockState=-1
+// unblocks immediately, LWW per pair by arrival. The notify bridge is NOT
+// touched here — it mirrors confirmed state only; read surfaces consult the
+// overlay directly.
+func (a *Aggregator) IngestMempoolPin(pin *aggregator.PinInscription) error {
+	if pin == nil || !IsBlockPath(pin.Path) {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(pin.Operation), operationCreate) {
+		return nil
+	}
+
+	var payload simpleblockPayload
+	if err := json.Unmarshal(pin.ContentBody, &payload); err != nil {
+		log.Printf("[block] mempool %s pinId=%s parse failed: %v", normalisedPinPath(pin.Path), pin.Id, err)
+		return nil
+	}
+	targetRef := strings.TrimSpace(payload.To)
+	if targetRef == "" {
+		return nil
+	}
+	pinId := strings.TrimSpace(pin.Id)
+	if pinId != "" {
+		// Already folded into the confirmed model (e.g. replay ran first):
+		// never resurrect the overlay for a confirmed pin.
+		if _, _, seen := a.loadPairByPin(pinId); seen {
+			return nil
+		}
+	}
+
+	fromIdentity, err := a.resolveFromIdentity(pin)
+	if err != nil {
+		return err
+	}
+	if fromIdentity == nil || fromIdentity.GlobalMetaId == "" {
+		return nil // publisher unresolved pre-confirmation: fold on confirm
+	}
+	toIdentity, ok := a.normalizeTargetIdentity(targetRef)
+	if !ok {
+		return nil // target unresolved pre-confirmation: fold on confirm
+	}
+
+	if err := a.applyPendingBlock(pinId, fromIdentity.GlobalMetaId, toIdentity.GlobalMetaId, payload.state(), pin.Timestamp, time.Now()); err != nil {
+		return err
+	}
+	log.Printf("[block] mempool folded: from=%s to=%s state=%d pinId=%s", fromIdentity.GlobalMetaId, toIdentity.GlobalMetaId, payload.state(), pinId)
 	return nil
 }
 

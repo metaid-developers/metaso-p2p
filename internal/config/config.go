@@ -169,10 +169,16 @@ type ZMQConfig struct {
 	MempoolPollingEnabled bool           `json:"mempoolPollingEnabled"`
 	MempoolPollInterval   time.Duration  `json:"mempoolPollInterval"`
 	MempoolDedupeTTL      time.Duration  `json:"mempoolDedupeTTL"`
-	BTC                   ChainZMQConfig `json:"btc"`
-	MVC                   ChainZMQConfig `json:"mvc"`
-	DOGE                  ChainZMQConfig `json:"doge"`
-	OPCAT                 ChainZMQConfig `json:"opcat"`
+	// Mempool overlay janitor for the social/block aggregators (spec
+	// 2026-10-29 §4.4b): unconfirmed /follow and simpleblock pins take
+	// effect immediately; the sweeper drops entries whose pin never
+	// confirmed past the expiry threshold.
+	MempoolOverlayExpiry        time.Duration  `json:"mempoolOverlayExpiry"`
+	MempoolOverlaySweepInterval time.Duration  `json:"mempoolOverlaySweepInterval"`
+	BTC                         ChainZMQConfig `json:"btc"`
+	MVC                         ChainZMQConfig `json:"mvc"`
+	DOGE                        ChainZMQConfig `json:"doge"`
+	OPCAT                       ChainZMQConfig `json:"opcat"`
 }
 
 type ChainZMQConfig struct {
@@ -231,10 +237,12 @@ func Default() Config {
 			ExtraPushAuthKey:     "",
 		},
 		ZMQ: ZMQConfig{
-			Enabled:               false,
-			MempoolPollingEnabled: true,
-			MempoolPollInterval:   10 * time.Second,
-			MempoolDedupeTTL:      30 * time.Minute,
+			Enabled:                     false,
+			MempoolPollingEnabled:       true,
+			MempoolPollInterval:         10 * time.Second,
+			MempoolDedupeTTL:            30 * time.Minute,
+			MempoolOverlayExpiry:        2 * time.Hour,
+			MempoolOverlaySweepInterval: 5 * time.Minute,
 			BTC: ChainZMQConfig{
 				Enabled:         false,
 				Endpoint:        "",
@@ -396,6 +404,8 @@ func Load() (Config, error) {
 	applyBoolEnv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", &cfg.ZMQ.MempoolPollingEnabled)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", &cfg.ZMQ.MempoolPollInterval)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", &cfg.ZMQ.MempoolDedupeTTL)
+	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_OVERLAY_EXPIRY", &cfg.ZMQ.MempoolOverlayExpiry)
+	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_OVERLAY_SWEEP_INTERVAL", &cfg.ZMQ.MempoolOverlaySweepInterval)
 	applyBoolEnv("METASO_P2P_ZMQ_BTC_ENABLED", &cfg.ZMQ.BTC.Enabled)
 	applyStringEnv("METASO_P2P_ZMQ_BTC_ENDPOINT", &cfg.ZMQ.BTC.Endpoint)
 	applyStringEnv("METASO_P2P_ZMQ_BTC_TOPIC", &cfg.ZMQ.BTC.Topic)

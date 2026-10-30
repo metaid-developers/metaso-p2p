@@ -171,6 +171,11 @@ func (a *Aggregator) activeEdgesTo(subjectGlobalMetaId string) ([]BlockPeer, err
 	return a.collectEdges(inIndexPrefix(subjectGlobalMetaId), subjectGlobalMetaId, false)
 }
 
+// collectEdges lists the subject's effective block peers in one direction
+// (spec §4.4b): the confirmed index scan serves effective edges (a pending
+// unblock hides its pair, a pending re-block supplies the overlay payload),
+// then pending-only pairs (overlay block with no confirmed edge) are
+// appended. ListBlocks re-sorts the merged set, so append order is fine.
 func (a *Aggregator) collectEdges(prefix []byte, subjectGlobalMetaId string, outbound bool) ([]BlockPeer, error) {
 	peers := make([]BlockPeer, 0, 8)
 	err := a.store.ScanPrefix(namespace, prefix, func(key, _ []byte) error {
@@ -187,28 +192,60 @@ func (a *Aggregator) collectEdges(prefix []byte, subjectGlobalMetaId string, out
 		var edge *BlockEdge
 		var err error
 		if outbound {
-			edge, err = a.loadActiveEdge(subjectGlobalMetaId, peerGlobalMetaId)
+			edge, err = a.loadEffectiveBlockEdge(subjectGlobalMetaId, peerGlobalMetaId)
 		} else {
-			edge, err = a.loadActiveEdge(peerGlobalMetaId, subjectGlobalMetaId)
+			edge, err = a.loadEffectiveBlockEdge(peerGlobalMetaId, subjectGlobalMetaId)
 		}
 		if err != nil {
 			return err
 		}
 		if edge == nil {
-			// Stale index entry without an active pair record: skip.
+			// Stale index entry, or hidden by a pending unblock: skip.
 			return nil
 		}
 		peers = append(peers, BlockPeer{
 			GlobalMetaId: peerGlobalMetaId,
 			BlockPinId:   edge.BlockPinId,
 			BlockedAt:    edge.BlockedAt,
+			Pending:      edge.Pending,
 		})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return peers, nil
+
+	// Pending-only blocks (no confirmed index entry) join the listing.
+	seen := make(map[string]struct{}, len(peers))
+	for _, peer := range peers {
+		seen[peer.GlobalMetaId] = struct{}{}
+	}
+	var pendingOnly []BlockPeer
+	for peer, entry := range a.pendingBlocksInvolving(subjectGlobalMetaId, outbound) {
+		if entry.BlockState != blockStateBlocked {
+			continue
+		}
+		if _, dup := seen[peer]; dup {
+			continue
+		}
+		var confirmed *BlockEdge
+		if outbound {
+			confirmed, _ = a.loadActiveEdge(subjectGlobalMetaId, peer)
+		} else {
+			confirmed, _ = a.loadActiveEdge(peer, subjectGlobalMetaId)
+		}
+		if confirmed != nil {
+			continue // surfaced by the confirmed index scan above
+		}
+		pendingOnly = append(pendingOnly, BlockPeer{
+			GlobalMetaId: peer,
+			BlockPinId:   entry.BlockPinId,
+			BlockedAt:    entry.BlockedAt,
+			Pending:      true,
+		})
+	}
+	sortPendingBlockPeers(pendingOnly)
+	return append(peers, pendingOnly...), nil
 }
 
 func encodeCursor(key []byte) string {

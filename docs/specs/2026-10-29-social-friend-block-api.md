@@ -92,8 +92,9 @@ migration cost.
   same block handler with the same payload schema
   (`{"to": string, "blockState": 1 | -1}`).
 - Only `create` operations are ingested. Other operations on these paths are
-  ignored (consistent with the follow read model, which folds only confirmed
-  create/revoke pairs for `/follow` and would ignore unknown operations).
+  ignored (consistent with the follow read model, which folds only
+  create/revoke pairs for `/follow` and would ignore unknown operations);
+  unconfirmed creates flow through the Section 4.4b overlay.
 - New block pins written by our own clients (IDBots) must use the registered
   path `/protocols/simpleblock` and SHOULD write `to` as a GlobalMetaID (see
   Section 2.4).
@@ -540,8 +541,79 @@ Item field notes:
   the shipped lists).
 - Unblock (`blockState = -1`) removes the pair from this read model;
   the counters in 4.2 drop accordingly.
-- Read-model scope mirrors the follow model: only confirmed pins are
-  materialized; mempool state is excluded (see OQ-2 on latency).
+- Read-model scope: confirmed pins materialize the confirmed read model;
+  unconfirmed pins take effect immediately through the mempool overlay
+  (Section 4.4b; OQ-2 resolved 2026-10-30).
+
+### 4.4b Mempool instant-effect overlay (binding; owner decision 2026-10-30)
+
+**Decision.** Unconfirmed `/follow` and `simpleblock` pins take effect in
+every read view **immediately** (mempool-speed), not after block
+confirmation. This resolves OQ-2 by reversing its confirmed-only default,
+per the owner's 2026-10-30 call, citing the show.now precedent (the legacy
+frontend already overlays unconfirmed follows — old metaso
+`basicprotocols/metaso/sync_mempool.go`, mempool overlay collection with
+`Mempool:1` markers).
+
+**Model.** The confirmed read models (Sections 4.1–4.4) stay confirmed-only
+and remain the single source of truth; live ingest, backfill replay and
+restart recovery are unchanged. On top of them each aggregator keeps a small
+**pending overlay** in separate Pebble keys
+(`edge:mp:pair:` / `edge:mp:pin:` in `social`, `blk:mp:pair:` /
+`blk:mp:pin:` in `block`):
+
+1. **Write.** `HandleMempoolPin` folds a mempool `/follow` create/revoke or
+   simpleblock pin into the overlay: follow/block materializes the pair,
+   follow revoke / `blockState = -1` is an unblock tombstone hiding it.
+2. **LWW per pair.** Exactly one overlay entry per (follower, target) /
+   (from, to) pair, last-write-wins by local arrival sequence — mempool pins
+   carry no height, arrival order is the only ordering available. Repeated
+   delivery of the same pin is idempotent; a pin already folded into the
+   confirmed model never re-enters the overlay.
+3. **Effective read.** Every read surface — relationship (mutual), friends /
+   following / followers lists, counts, batch relationships, `blocks`
+   listing, `IsBlockedBetween`, `BlockingBy`/`BlockedBy`, and therefore the
+   §4.5 unified filter and the §4.6 chat read-side union — answers from the
+   **effective state**: overlay entry if present, else the confirmed edge.
+   A pending follow makes the pair visible instantly (friend flips the
+   moment the second direction lands in mempool); a pending revoke/unblock
+   hides it instantly.
+4. **Confirmation transition.** When the pin confirms, the normal confirmed
+   fold runs and consumes the pin's overlay ref; the pair entry drains only
+   if this pin still owns it (a newer unconfirmed mutation survives). The
+   transition is seamless: same pin id, values unchanged, `pending` gone.
+5. **Expiry janitor.** A sweeper (config `zmq.mempoolOverlaySweepInterval`,
+   default 5m; env `METASO_P2P_ZMQ_MEMPOOL_OVERLAY_SWEEP_INTERVAL`) walks
+   the overlay pin refs: entries whose pin already folded (missed
+   consumption, e.g. across a restart) are consumed as self-heal; entries
+   older than `zmq.mempoolOverlayExpiry` (default 2h; env
+   `METASO_P2P_ZMQ_MEMPOOL_OVERLAY_EXPIRY`) whose pin never confirmed —
+   dropped or replaced mempool transactions — are deleted, revealing the
+   confirmed state beneath. No rollback bookkeeping exists or is needed.
+
+**API surface.** Items whose edge comes from the overlay carry
+`"pending": true` (additive, `omitempty` — confirmed-only responses are
+byte-identical to before): `following`/`followers` list items,
+`friends` items, both `relationship` sides, and `blocks` items. The batch
+endpoint (4.3) folds effective state but does not add a pending flag.
+
+**Pagination note.** `following`/`followers` surface pending-only edges
+(no confirmed index entry yet) at the head of the **first page only**
+(cursor omitted), newest first, capped at `size`; subsequent pages walk the
+confirmed index alone, keeping the shared cursor contract intact.
+`friends` and `blocks` merge the overlay into their in-memory sorts, so
+pending entries paginate normally there.
+
+**Notify bridge.** The §4.6 session-cache bridge stays confirmed-only
+(`ApplyChainBlock`/`RemoveChainBlock` fire on confirmed folds). Chat
+filtering is still mempool-fast: every filtered read consults the §4.6
+read-side union, which resolves through the effective state.
+
+**Residual risk (accepted).** Overlay state derives from the node mempool
+view; a transaction replaced or dropped after our poll shows a stale effect
+for at most the expiry window (default 2h), then self-corrects to the
+confirmed model. Chain-order inversions between competing mempool
+mutations resolve by arrival until confirmation, which is authoritative.
 
 ### 4.5 Unified filter layer (binding for S3)
 
@@ -618,6 +690,11 @@ Merge design (binding for S3):
    GlobalMetaID (Section 2.3). The shipped endpoints' input contract is not
    changed by this document; the shipped note against legacy inputs is
    superseded **for new endpoints only**.
+3. (Mempool-effect round, 2026-10-30) List/count/relationship reads answer
+   from effective state — unconfirmed `/follow` and `simpleblock` pins are
+   visible immediately (Section 4.4b). Items sourced from the overlay carry
+   an additive `"pending": true` field; confirmed-only responses are
+   byte-identical to before.
 
 Nothing else about shipped endpoints changes.
 
@@ -631,6 +708,8 @@ Nothing else about shipped endpoints changes.
   normalization (Sections 2–3).
 - Simpleblock aggregation read model, dual-path ingest, unified filter
   layer, notify merge (Sections 1, 4.4–4.6).
+- Mempool instant-effect overlay for `/follow` and `simpleblock`
+  (Section 4.4b, added 2026-10-30).
 - Relationship enumeration for consumers:
   `friend / follower / following / stranger / blocked` (five states, fold
   rule in 4.3).
@@ -641,7 +720,9 @@ Nothing else about shipped endpoints changes.
   parsed, not aggregated, not filtered on. A later round may add them.
 - Error-envelope unification between the notify module (`code = 1`) and the
   social API family (`40000` family).
-- Mempool-speed block effects (Section 4.4 note and OQ-2).
+- ~~Mempool-speed block effects~~ — moved **in scope** by Section 4.4b
+  (owner decision 2026-10-30); the session-cache bridge itself stays
+  confirmed-only (read-side union provides the mempool speed).
 - Any write-side proxying: metaso-p2p remains a read/aggregation service;
   clients publish their own pins.
 - Migrating or rewriting historical follow payloads (none needed —
@@ -660,12 +741,16 @@ applies unless the owner says otherwise.
   the practical reality that the whole on-chain inventory is hex). If the
   owner prefers strict GlobalMetaID-only public inputs, only the input
   validation clause changes — internal normalization is unaffected.
-- **OQ-2 — block effect latency.** Like the follow model, the block model
-  materializes confirmed pins only, so a freshly written block pin takes
-  effect after chain confirmation + indexer pickup. If private-chat
-  filtering must be instant, an additional mempool-honoring fast path in
-  the notify session layer would be needed (not specified here). Default:
-  confirmed-only, consistent with the follow model.
+- **OQ-2 — block effect latency. [RESOLVED 2026-10-30, reversed by owner]**
+  The original default was confirmed-only: a freshly written block or
+  follow pin would take effect after chain confirmation + indexer pickup.
+  The owner ruled the opposite — mempool transactions must take effect
+  immediately, citing the show.now precedent (the legacy frontend already
+  overlays unconfirmed follows). Section 4.4b is the binding
+  implementation contract: pending overlay on top of the confirmed models,
+  effective reads everywhere, seamless confirmation transition, expiry
+  janitor; the notify session-cache bridge stays confirmed-only with the
+  §4.6 read-side union providing mempool-speed chat filtering.
 - **OQ-3 — `blockedBy` visibility.** The API exposes "who blocks me"
   (`type=blockedBy`, `blockedBy` booleans, `blockedByCount`). Some products
   hide this (blocking is meant to be invisible to the blocked side). The

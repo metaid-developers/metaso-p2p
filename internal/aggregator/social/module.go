@@ -16,6 +16,7 @@ type Aggregator struct {
 	notifyCh      chan *aggregator.NotifyEvent
 	profileLookup ProfileLookup
 	blockLister   BlockLister
+	pendingSeq    uint64 // mempool overlay arrival counter (LWW)
 }
 
 const (
@@ -45,7 +46,12 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	return nil, nil
 }
 
+// HandleMempoolPin folds unconfirmed /follow pins into the mempool overlay
+// so they take effect immediately (spec §4.4b, OQ-2 reversed 2026-10-30).
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	if err := a.processMempoolPin(pin); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 

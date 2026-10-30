@@ -18,6 +18,7 @@ type compactBlockItemResponse struct {
 	Direction    string `json:"direction"`
 	BlockedAt    int64  `json:"blockedAt"`
 	BlockPinId   string `json:"blockPinId"`
+	Pending      bool   `json:"pending,omitempty"`
 }
 
 type profileBlockItemResponse struct {
@@ -71,6 +72,7 @@ func (a *Aggregator) handleBlocks(c *gin.Context) {
 					Direction:    item.Direction,
 					BlockedAt:    item.BlockedAt,
 					BlockPinId:   item.BlockPinId,
+					Pending:      item.Pending,
 				},
 				Bio:   item.Bio,
 				BioId: item.BioId,
@@ -90,6 +92,7 @@ func (a *Aggregator) handleBlocks(c *gin.Context) {
 			Direction:    item.Direction,
 			BlockedAt:    item.BlockedAt,
 			BlockPinId:   item.BlockPinId,
+			Pending:      item.Pending,
 		})
 	}
 	api.RespSuccess(c, blocksListResponse{List: list, NextCursor: result.NextCursor, Size: result.Size})
@@ -212,6 +215,7 @@ func (a *Aggregator) ListBlocks(params BlockListParams) (*BlockListResult, error
 			Direction:    entry.direction,
 			BlockedAt:    entry.peer.BlockedAt,
 			BlockPinId:   entry.peer.BlockPinId,
+			Pending:      entry.peer.Pending,
 			Bio:          profile.Bio,
 			BioId:        profile.BioId,
 		})
@@ -309,7 +313,8 @@ func (a *Aggregator) lookupRequestSubject(globalMetaId string) (*IdentityRef, er
 // IsBlockedBetween implements BlockLister (spec §4.5): true when either
 // direction of the pair is currently active. Inputs accept both identifier
 // forms and normalize per spec §2.3; unresolvable inputs yield
-// (false, nil) — fail-open, see the interface contract.
+// (false, nil) — fail-open, see the interface contract. Effective state per
+// §4.4b: an unconfirmed simpleblock pin already blocks.
 func (a *Aggregator) IsBlockedBetween(aIdent, bIdent string) (bool, error) {
 	from, ok := a.normalizeIdentityForQuery(aIdent)
 	if !ok {
@@ -322,14 +327,14 @@ func (a *Aggregator) IsBlockedBetween(aIdent, bIdent string) (bool, error) {
 	if from == to {
 		return false, nil
 	}
-	forward, err := a.loadActiveEdge(from, to)
+	forward, err := a.loadEffectiveBlockEdge(from, to)
 	if err != nil {
 		return false, err
 	}
 	if forward != nil {
 		return true, nil
 	}
-	backward, err := a.loadActiveEdge(to, from)
+	backward, err := a.loadEffectiveBlockEdge(to, from)
 	if err != nil {
 		return false, err
 	}

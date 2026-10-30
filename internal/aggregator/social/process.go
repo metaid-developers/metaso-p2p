@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
@@ -24,12 +25,76 @@ func (a *Aggregator) processPin(pin *aggregator.PinInscription) error {
 	case pathFollow:
 		switch strings.ToLower(strings.TrimSpace(pin.Operation)) {
 		case operationCreate:
-			return a.processCreate(pin)
+			if err := a.processCreate(pin); err != nil {
+				return err
+			}
 		case operationRevoke:
-			return a.processRevoke(pin)
+			if err := a.processRevoke(pin); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+		// The confirmed fold consumes this pin's mempool overlay entry so
+		// the transition is seamless (spec §4.4b).
+		a.consumePendingPin(strings.TrimSpace(pin.Id))
+	}
+	return nil
+}
+
+// processMempoolPin folds unconfirmed /follow pins into the overlay: creates
+// materialize the edge immediately (pending), revokes hide it, both LWW per
+// pair by arrival (spec §4.4b).
+func (a *Aggregator) processMempoolPin(pin *aggregator.PinInscription) error {
+	if pin == nil {
+		return nil
+	}
+	switch normalisedPinPath(pin.Path) {
+	case pathFollow:
+		switch strings.ToLower(strings.TrimSpace(pin.Operation)) {
+		case operationCreate:
+			return a.processMempoolCreate(pin)
+		case operationRevoke:
+			return a.processMempoolRevoke(pin)
 		}
 	}
 	return nil
+}
+
+func (a *Aggregator) processMempoolCreate(pin *aggregator.PinInscription) error {
+	pinId := strings.TrimSpace(pin.Id)
+	if pinId != "" {
+		// Already folded into the confirmed model (e.g. replay ran first):
+		// never resurrect the overlay for a confirmed pin.
+		if confirmed, _ := a.loadActiveEdgeByPin(pinId); confirmed != nil {
+			return nil
+		}
+	}
+	followerGlobalMetaId, err := a.resolveFollowerGlobalMetaId(pin)
+	if err != nil {
+		return err
+	}
+	targetRef := decodeTargetRef(pin)
+	targetGlobalMetaId, ok, err := a.normalizeIdentity(targetRef)
+	if err != nil {
+		return err
+	}
+	if followerGlobalMetaId == "" || !ok {
+		// Unresolved references fold nothing pre-confirmation; the
+		// confirmed path records the §2.5 audit trail when the pin lands.
+		return nil
+	}
+	return a.applyPendingFollow(pinId, followerGlobalMetaId, targetGlobalMetaId, pendingKindFollow, pin.Timestamp, time.Now())
+}
+
+func (a *Aggregator) processMempoolRevoke(pin *aggregator.PinInscription) error {
+	follower, target, ok := a.resolvePendingPairForPin(resolveTargetPinId(pin))
+	if !ok {
+		// The revoked follow pin is unknown to both layers yet; the
+		// confirmed folds apply it in chain order when the pins land.
+		return nil
+	}
+	return a.applyPendingFollow(strings.TrimSpace(pin.Id), follower, target, pendingKindRevoke, pin.Timestamp, time.Now())
 }
 
 func (a *Aggregator) processCreate(pin *aggregator.PinInscription) error {
@@ -106,11 +171,11 @@ func (a *Aggregator) Relationship(params RelationshipParams) (*RelationshipResul
 		return nil, err
 	}
 
-	sourceEdge, err := a.loadActiveEdge(source.GlobalMetaId, target.GlobalMetaId)
+	sourceEdge, err := a.loadEffectiveEdge(source.GlobalMetaId, target.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
-	targetEdge, err := a.loadActiveEdge(target.GlobalMetaId, source.GlobalMetaId)
+	targetEdge, err := a.loadEffectiveEdge(target.GlobalMetaId, source.GlobalMetaId)
 	if err != nil {
 		return nil, err
 	}
@@ -123,11 +188,13 @@ func (a *Aggregator) Relationship(params RelationshipParams) (*RelationshipResul
 		out.Source.FollowsTarget = true
 		out.Source.FollowPinId = sourceEdge.FollowPinId
 		out.Source.FollowedAt = sourceEdge.FollowedAt
+		out.Source.Pending = sourceEdge.Pending
 	}
 	if targetEdge != nil {
 		out.Target.FollowsSource = true
 		out.Target.FollowPinId = targetEdge.FollowPinId
 		out.Target.FollowedAt = targetEdge.FollowedAt
+		out.Target.Pending = targetEdge.Pending
 	}
 	out.Mutual = out.Source.FollowsTarget && out.Target.FollowsSource
 	return out, nil
@@ -156,7 +223,16 @@ func (a *Aggregator) ListFollowing(params ListParams) (*ListResult, error) {
 		}
 		return keyText[idx+1:], true
 	}, func(peerGlobalMetaId string) (*FollowEdge, error) {
-		return a.loadActiveEdge(subject.GlobalMetaId, peerGlobalMetaId)
+		return a.loadEffectiveEdge(subject.GlobalMetaId, peerGlobalMetaId)
+	}, a.pendingOnlyEdges(subject.GlobalMetaId, true, excluded), func(p pendingPeerEdge) *FollowEdge {
+		return &FollowEdge{
+			FollowerGlobalMetaId: subject.GlobalMetaId,
+			TargetGlobalMetaId:   p.peer,
+			FollowPinId:          p.pinId,
+			FollowedAt:           p.at,
+			Active:               true,
+			Pending:              true,
+		}
 	})
 }
 
@@ -183,11 +259,26 @@ func (a *Aggregator) ListFollowers(params ListParams) (*ListResult, error) {
 		}
 		return keyText[idx+1:], true
 	}, func(peerGlobalMetaId string) (*FollowEdge, error) {
-		return a.loadActiveEdge(peerGlobalMetaId, subject.GlobalMetaId)
+		return a.loadEffectiveEdge(peerGlobalMetaId, subject.GlobalMetaId)
+	}, a.pendingOnlyEdges(subject.GlobalMetaId, false, excluded), func(p pendingPeerEdge) *FollowEdge {
+		return &FollowEdge{
+			FollowerGlobalMetaId: p.peer,
+			TargetGlobalMetaId:   subject.GlobalMetaId,
+			FollowPinId:          p.pinId,
+			FollowedAt:           p.at,
+			Active:               true,
+			Pending:              true,
+		}
 	})
 }
 
-func (a *Aggregator) listEdges(prefix []byte, params ListParams, excludedPeers map[string]struct{}, parsePeer func([]byte) (string, bool), loadEdge func(string) (*FollowEdge, error)) (*ListResult, error) {
+// listEdges merges the mempool overlay into one direction of the follow
+// listing (spec §4.4b): pending-only edges (no confirmed index entry yet)
+// surface at the head of the first page — newest first, capped at size, so
+// the shared cursor contract over the confirmed index stays intact — while
+// the index scan itself serves effective edges (a pending revoke hides its
+// pair, a pending refollow replaces the confirmed payload).
+func (a *Aggregator) listEdges(prefix []byte, params ListParams, excludedPeers map[string]struct{}, parsePeer func([]byte) (string, bool), loadEdge func(string) (*FollowEdge, error), pendingOnly []pendingPeerEdge, pendingEdgeOf func(pendingPeerEdge) *FollowEdge) (*ListResult, error) {
 	view, err := normaliseListView(params.View)
 	if err != nil {
 		return nil, err
@@ -207,6 +298,22 @@ func (a *Aggregator) listEdges(prefix []byte, params ListParams, excludedPeers m
 	lastReturnedKey := []byte(nil)
 	skipUntilCursor := len(cursorKey) > 0
 	foundCursor := len(cursorKey) == 0
+
+	if foundCursor {
+		for _, pending := range pendingOnly {
+			if len(items) >= size {
+				break
+			}
+			profile, err := a.lookupListProfile(pending.peer)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, buildListItem(view, profile, pendingEdgeOf(pending)))
+		}
+		if len(items) >= size {
+			return &ListResult{List: items, NextCursor: "", Size: size}, nil
+		}
+	}
 
 	err = a.store.ScanPrefix(namespace, prefix, func(key, _ []byte) error {
 		if skipUntilCursor {
@@ -288,6 +395,7 @@ func buildListItem(view string, profile *TargetRef, edge *FollowEdge) ListItem {
 		Name:         profile.Name,
 		NameId:       profile.NameId,
 		AvatarId:     profile.AvatarId,
+		Pending:      edge.Pending,
 	}
 	if view == ViewProfile {
 		item.Bio = profile.Bio

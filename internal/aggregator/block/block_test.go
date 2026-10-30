@@ -89,15 +89,15 @@ func blockPin(id, path, fromGlobal, fromMeta, to string, state interface{}, ts i
 
 func TestIsBlockPathRecognizesBothPathsAndRejectsOthers(t *testing.T) {
 	cases := map[string]bool{
-		"/protocols/simpleblock":                true,
-		"protocols/simpleblock":                 true,
-		"/private/block/simpleprivateblock":     true,
-		"private/block/simpleprivateblock":      true,
-		"/follow":                               false,
-		"/private/chat/simplemsg":               false,
-		"/protocols/simplegroupblock":           false,
-		"/protocols/simplegroupjoinblock":       false,
-		"/protocols/simpleblock@somepin:i0":     true,
+		"/protocols/simpleblock":                 true,
+		"protocols/simpleblock":                  true,
+		"/private/block/simpleprivateblock":      true,
+		"private/block/simpleprivateblock":       true,
+		"/follow":                                false,
+		"/private/chat/simplemsg":                false,
+		"/protocols/simplegroupblock":            false,
+		"/protocols/simplegroupjoinblock":        false,
+		"/protocols/simpleblock@somepin:i0":      true,
 		"/private/block/simpleprivateblock@x:i0": true,
 	}
 	for path, want := range cases {
@@ -343,19 +343,25 @@ func TestUnresolvedTargetRecordsPinButNoEdge(t *testing.T) {
 	}
 }
 
-// ---- mempool is ignored (confirmed-only, spec OQ-2) ----
+// ---- mempool pins take effect via the overlay; the confirmed model stays
+// confirmed-only (spec §4.4b, OQ-2 reversed 2026-10-30) ----
 
-func TestMempoolPinsIgnored(t *testing.T) {
+func TestMempoolPinsMaterializeOverlayOnly(t *testing.T) {
 	agg, _ := newTestAggregatorWithLookup(t)
 
 	if _, err := agg.HandleMempoolPin(blockPin("blk-mem:i0", "/protocols/simpleblock", idAlice, "", idBob, 1, 1000)); err != nil {
 		t.Fatalf("HandleMempoolPin: %v", err)
 	}
-	if blocked, _ := agg.IsBlockedBetween(idAlice, idBob); blocked {
-		t.Fatalf("mempool pin must not materialize")
+	// Effective view: blocked immediately (pending, spec §4.4b).
+	if blocked, _ := agg.IsBlockedBetween(idAlice, idBob); !blocked {
+		t.Fatalf("mempool pin must take effect immediately (pending)")
 	}
+	// Confirmed model: untouched — the pin index must NOT record it.
 	if _, _, seen := agg.loadPairByPin("blk-mem:i0"); seen {
-		t.Fatalf("mempool pin must not be recorded")
+		t.Fatalf("mempool pin must not be folded into the confirmed model")
+	}
+	if confirmed, _ := agg.loadActiveEdge(idAlice, idBob); confirmed != nil {
+		t.Fatalf("mempool pin must not materialize a confirmed edge")
 	}
 }
 

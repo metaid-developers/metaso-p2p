@@ -385,6 +385,18 @@ func main() {
 		if idxEngine.Chains() > 0 {
 			idxEngine.Start(context.Background())
 		}
+
+		// Mempool overlay janitors (spec 2026-10-29 §4.4b): drop social/block
+		// overlay entries whose pin never confirmed past the expiry
+		// threshold; sweep on a ticker until shutdown.
+		sweepStop := make(chan struct{})
+		if socialAgg != nil {
+			socialAgg.StartMempoolSweeper(cfg.ZMQ.MempoolOverlaySweepInterval, cfg.ZMQ.MempoolOverlayExpiry, sweepStop)
+		}
+		if blockAgg != nil {
+			blockAgg.StartMempoolSweeper(cfg.ZMQ.MempoolOverlaySweepInterval, cfg.ZMQ.MempoolOverlayExpiry, sweepStop)
+		}
+		defer close(sweepStop)
 	}
 
 	// --- Socket.IO server ---
