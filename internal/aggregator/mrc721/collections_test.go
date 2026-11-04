@@ -288,3 +288,27 @@ func TestRunCollectionSyncLoopStopsAndSyncs(t *testing.T) {
 		t.Fatalf("loop collection not indexed: %+v err=%v", page, err)
 	}
 }
+
+// Regression (found by live smoke): NewCollectionClient with a nil http
+// client must default to http.DefaultClient instead of panicking on use —
+// the daemon and the backfill cmd both construct it that way.
+func TestCollectionClientNilHTTPClientDefaults(t *testing.T) {
+	agg := newTestAggregator(t)
+	server := collectionPageListServer(t, [][]map[string]any{{
+		collectionRowFor("pixel-cats", hexOf("nilc")+"i0", testSeller1),
+	}})
+	defer server.Close()
+
+	client := NewCollectionClient(server.URL, nil)
+	stats, err := agg.SyncCollections(context.Background(), client, 100)
+	if err != nil {
+		t.Fatalf("sync with default client: %v", err)
+	}
+	if stats.Upserted != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	page, err := agg.SearchCollections("pixel", "", "", 0)
+	if err != nil || page.Total != 1 {
+		t.Fatalf("row not served: %+v err=%v", page, err)
+	}
+}

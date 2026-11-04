@@ -52,6 +52,9 @@ type CollectionClient struct {
 }
 
 func NewCollectionClient(baseURL string, httpClient *http.Client) *CollectionClient {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	return &CollectionClient{
 		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		httpClient: httpClient,
