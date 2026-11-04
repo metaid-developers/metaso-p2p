@@ -224,3 +224,87 @@ func (c *UpstreamClient) ListItemTransfers(ctx context.Context, itemPinId string
 	}
 	return rows, total, nil
 }
+
+// ErrUpstreamNotFound reports a code-100 (no data found) single-object
+// lookup.
+var ErrUpstreamNotFound = errors.New("mrc721nft upstream: no data found")
+
+// fetchObject GETs a single-object manapi view ({code:1,data:{...}}) and
+// decodes it into obj; code 100 answers ErrUpstreamNotFound.
+func (c *UpstreamClient) fetchObject(ctx context.Context, endpoint string, query url.Values, obj any) error {
+	if c == nil || strings.TrimSpace(c.baseURL) == "" {
+		return errors.New("mrc721nft upstream base URL is required")
+	}
+	parsed, err := url.Parse(c.baseURL)
+	if err != nil {
+		return fmt.Errorf("parse mrc721nft upstream base URL: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("mrc721nft upstream base URL requires scheme and host")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + endpoint
+	parsed.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return fmt.Errorf("create mrc721nft upstream request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s returned HTTP %d", endpoint, resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", endpoint, err)
+	}
+	var envelope struct {
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode %s response: %w", endpoint, err)
+	}
+	switch envelope.Code {
+	case 0, 1:
+	case 100:
+		return ErrUpstreamNotFound
+	default:
+		return fmt.Errorf("%s failed: code=%d message=%s", endpoint, envelope.Code, envelope.Message)
+	}
+	if len(envelope.Data) == 0 || envelope.Data[0] != '{' {
+		return ErrUpstreamNotFound
+	}
+	if err := json.Unmarshal(envelope.Data, obj); err != nil {
+		return fmt.Errorf("decode %s object: %w", endpoint, err)
+	}
+	return nil
+}
+
+// CollectionInfo fetches one collection record by collectionid (upstream
+// pinId= parameter).
+func (c *UpstreamClient) CollectionInfo(ctx context.Context, pinId string) (*upstreamCollection, error) {
+	q := url.Values{}
+	q.Set("pinId", pinId)
+	var row upstreamCollection
+	if err := c.fetchObject(ctx, "/api/mrc721/collection/info", q, &row); err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// ItemInfo fetches one item record by item pin id (upstream pinId=
+// parameter).
+func (c *UpstreamClient) ItemInfo(ctx context.Context, pinId string) (*upstreamItem, error) {
+	q := url.Values{}
+	q.Set("pinId", pinId)
+	var row upstreamItem
+	if err := c.fetchObject(ctx, "/api/mrc721/item/info", q, &row); err != nil {
+		return nil, err
+	}
+	return &row, nil
+}

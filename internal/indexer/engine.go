@@ -583,3 +583,25 @@ func (e *Engine) zmqLoop(ctx context.Context) {
 		}
 	}
 }
+
+// TransactionStatus resolves the confirmation facts of one transaction on
+// the named chain (the data source behind GET /api/tx/status). Unknown
+// chains and chains without a TxStatusProvider report ok=false; RPC errors
+// surface as errors and the API layer answers found:false/unknown.
+func (e *Engine) TransactionStatus(chainName, txid string) (ok bool, confirmed bool, confirmations int64, blockHash string, height int64, err error) {
+	if e == nil {
+		return false, false, 0, "", 0, nil
+	}
+	e.mu.RLock()
+	entry := e.chains[chainName]
+	e.mu.RUnlock()
+	if entry == nil {
+		return false, false, 0, "", 0, nil
+	}
+	provider, ok := entry.chain.(chain.TxStatusProvider)
+	if !ok {
+		return false, false, 0, "", 0, nil
+	}
+	confirmed, confirmations, blockHash, height, err = provider.GetTransactionStatus(txid)
+	return true, confirmed, confirmations, blockHash, height, err
+}

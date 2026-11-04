@@ -3,6 +3,7 @@ package mrc721nft
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -431,6 +432,27 @@ func (a *Aggregator) handleItemTransfers(c *gin.Context) {
 		pendingList = append(pendingList, a.pendingTransferDTO(pt))
 	}
 	a.respondOK(c, gin.H{"list": list, "total": total, "pending": pendingList})
+}
+
+func (a *Aggregator) handleAdminReplayPins(c *gin.Context) {
+	if a.db == nil || a.replayClient == nil {
+		a.respondServiceError(c)
+		return
+	}
+	var ids []string
+	for _, id := range strings.Split(c.Query("pinIds"), ",") {
+		if strings.TrimSpace(id) != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		a.respondParamError(c)
+		return
+	}
+	if len(ids) > 100 {
+		ids = ids[:100]
+	}
+	a.respondOK(c, gin.H{"results": a.ReplayPins(c.Request.Context(), a.replayClient, ids)})
 }
 
 func (a *Aggregator) handleItemVerify(c *gin.Context) {

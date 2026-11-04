@@ -98,5 +98,14 @@ type MempoolTransferDetector interface {
 	DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error)
 }
 
+// TxStatusProvider is an optional Chain extension exposing the generic
+// transaction-status lookup behind GET /api/tx/status (mirror of man-p2p's
+// ChainAdapter.GetTransactionStatus). A tx with no confirmations and no
+// block hash is unconfirmed; RPC failures surface as errors and the API
+// layer answers found:false / txStatus:unknown.
+type TxStatusProvider interface {
+	GetTransactionStatus(txid string) (confirmed bool, confirmations int64, blockHash string, height int64, err error)
+}
+
 // ZMQHandler is called by the indexer engine when a ZMQ message arrives.
 type ZMQHandler func(topic string, data []byte, sequence uint64)

@@ -46,6 +46,18 @@ type Aggregator struct {
 	// every write that can change an item's outpoint or owner.
 	tracked      map[string]aggregator.TrackedOutput
 	trackedDirty bool
+
+	// replayClient is the upstream client the admin replay-pins endpoint
+	// repairs entities from (set at startup, nil disables the endpoint).
+	replayClient *UpstreamClient
+}
+
+// SetReplayClient wires the upstream client used by the admin replay-pins
+// endpoint (called from the daemon startup, after Init).
+func (a *Aggregator) SetReplayClient(client *UpstreamClient) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.replayClient = client
 }
 
 func (a *Aggregator) Name() string { return Namespace }
@@ -97,4 +109,7 @@ func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	group.GET("/item/info", a.handleItemInfo)
 	group.GET("/item/transfers", a.handleItemTransfers)
 	group.GET("/item/verify", a.handleItemVerify)
+	// Admin repair: re-apply entities by id from the upstream state (same
+	// surface as man-p2p's admin endpoint, incl. its no-auth posture).
+	group.GET("/admin/replay-pins", a.handleAdminReplayPins)
 }

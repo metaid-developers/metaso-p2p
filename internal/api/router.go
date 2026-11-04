@@ -12,8 +12,16 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
+// TxStatusResolver resolves the confirmation facts of a transaction on a
+// named chain (satisfied by the indexer engine). ok=false means the chain
+// is unknown or has no status provider.
+type TxStatusResolver interface {
+	TransactionStatus(chainName, txid string) (ok bool, confirmed bool, confirmations int64, blockHash string, height int64, err error)
+}
+
 // SetupRouter creates and configures the Gin router with all routes.
 // It centralizes route registration for health checks, socket.io, aggregator APIs, and presence.
+
 func SetupRouter(
 	cfg config.Config,
 	store *storage.PebbleStore,
@@ -21,6 +29,7 @@ func SetupRouter(
 	aggRegistry *aggregator.Registry,
 	socketServer *socket.Server,
 	version string,
+	txStatusResolver TxStatusResolver,
 ) *gin.Engine {
 	router := gin.New()
 	router.Use(RequestTimingMiddleware(), corsMiddleware(), gin.Logger(), gin.Recovery())
@@ -98,9 +107,63 @@ func SetupRouter(
 				a.RegisterRoutes(metafileGroup)
 			}
 		}
+
+		// Generic transaction-status lookup (man-p2p parity, not module
+		// gated): confirmed=false means mempool-unconfirmed
+		// (confirmations=0), so readers can tell "sent, unconfirmed" from
+		// "no such tx". Unresolvable txids and RPC errors both answer
+		// found=false/txStatus=unknown without leaking the raw error.
+		router.GET("/api/tx/status", txStatusHandler(txStatusResolver))
 	}
 
 	return router
+}
+
+// txStatusHandler serves GET /api/tx/status with man-p2p's exact envelope
+// (respond codes 404 parameter error / 1 ok, HTTP always 200).
+func txStatusHandler(resolver TxStatusResolver) gin.HandlerFunc {
+	type txStatusEnvelope struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    any    `json:"data"`
+	}
+	return func(c *gin.Context) {
+		chainName := c.Query("chainName")
+		txid := c.Query("txid")
+		if chainName == "" || txid == "" || resolver == nil {
+			c.JSON(http.StatusOK, txStatusEnvelope{Code: 404, Message: "Parameter error."})
+			return
+		}
+		ok, confirmed, confirmations, blockHash, height, err := resolver.TransactionStatus(chainName, txid)
+		if !ok {
+			// Unknown chain (or no provider configured): parameter error,
+			// same observable shape as man-p2p's missing ChainAdapter.
+			c.JSON(http.StatusOK, txStatusEnvelope{Code: 404, Message: "Parameter error."})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusOK, txStatusEnvelope{Code: 1, Message: "ok", Data: gin.H{
+				"chainName": chainName,
+				"txid":      txid,
+				"found":     false,
+				"txStatus":  "unknown",
+			}})
+			return
+		}
+		status := "unconfirmed"
+		if confirmed {
+			status = "confirmed"
+		}
+		c.JSON(http.StatusOK, txStatusEnvelope{Code: 1, Message: "ok", Data: gin.H{
+			"chainName":     chainName,
+			"txid":          txid,
+			"found":         true,
+			"txStatus":      status,
+			"confirmations": confirmations,
+			"blockHash":     blockHash,
+			"height":        height,
+		}})
+	}
 }
 
 func corsMiddleware() gin.HandlerFunc {

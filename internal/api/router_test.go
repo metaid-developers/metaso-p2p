@@ -134,7 +134,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	cfg := config.Default()
 	// SetupRouter handles nil socketServer gracefully (Socket.IO routes skipped).
 	return &fullRouterFixture{
-		router:           api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test"),
+		router:           api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test", nil),
 		store:            store,
 		userAgg:          userAgg,
 		groupAgg:         groupAgg,
@@ -307,7 +307,7 @@ func setupPresenceRouterWithConfig(t *testing.T, cfg config.Config, provider pre
 	t.Cleanup(socketServer.Shutdown)
 	socketServer.SetSnapshotProvider(provider)
 
-	return api.SetupRouter(cfg, nil, nil, nil, socketServer, "test"), socketServer
+	return api.SetupRouter(cfg, nil, nil, nil, socketServer, "test", nil), socketServer
 }
 
 func fakePresenceSnapshot() *presence.Snapshot {

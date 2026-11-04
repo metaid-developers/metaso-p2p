@@ -255,6 +255,8 @@ func main() {
 			nftCandidate := &mrc721nft.Aggregator{}
 			if err := aggRegistry.Register(nftCandidate); err != nil {
 				log.Printf("WARNING: mrc721nft aggregator init failed: %v", err)
+			} else {
+				nftCandidate.SetReplayClient(mrc721nft.NewUpstreamClient(cfg.Mrc721.Nft.MANAPIBaseURL, http.DefaultClient))
 			}
 		}
 		// preference is the open comparison-feedback read model over
@@ -517,7 +519,11 @@ func main() {
 	}
 
 	// --- HTTP router ---
-	router := api.SetupRouter(cfg, store, cacheProvider, aggRegistry, socketServer, version)
+	var txStatusResolver api.TxStatusResolver
+	if idxEngine != nil {
+		txStatusResolver = idxEngine
+	}
+	router := api.SetupRouter(cfg, store, cacheProvider, aggRegistry, socketServer, version, txStatusResolver)
 
 	// --- Start HTTP server ---
 	srv := &http.Server{
