@@ -61,6 +61,11 @@ Nothing to do: the IDBots client ships with this base BUILT IN
 automatically. The `IDBOTS_METASO_API_BASE` env exists only as a
 staging/local-testing override.
 
+For the full NFT read surface (collections/items/transfers — the
+man-p2p-originated endpoints), see the migration guide:
+[`docs/mrc721-nft-downstream-guide.md`](mrc721-nft-downstream-guide.md)
+(base-URL switch in `mrc721Service.ts` + the global-metaid口径 note).
+
 ## 6. What NOT to deploy
 
 man-p2p needs no changes and no new release for any of this:
