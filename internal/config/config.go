@@ -24,9 +24,50 @@ type Config struct {
 	SocialBackfill        SocialBackfillConfig        `json:"socialBackfill"`
 	SocialContentBackfill SocialContentBackfillConfig `json:"socialContentBackfill"`
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
-	BlockBackfill        BlockBackfillConfig        `json:"blockBackfill"`
+	BlockBackfill         BlockBackfillConfig         `json:"blockBackfill"`
 	RateLimit             RateLimitConfig             `json:"rateLimit"`
 	ProtocolRegistry      ProtocolRegistryConfig      `json:"protocolRegistry"`
+	Mrc721                Mrc721Config                `json:"mrc721"`
+}
+
+// Mrc721Config groups the MRC-721 business-index knobs (docs/specs/
+// 2026-11-04-mrc721-sell-collection-api.md). MetaSo-P2P owns all NFT-related
+// business indexing: the sell-intent declaration log is ingested from the
+// chain (live) plus MANAPI replay (backfill), and the collection search /
+// issuer views are served from a read model that periodically refreshes the
+// manapi-compatible MRC-721 collection page list.
+type Mrc721Config struct {
+	// SellBackfill replays the /protocols/mrc721sell declaration history
+	// through the sell-intent read model at daemon startup (disabled by
+	// default; the one-shot cmd/metaso-p2p-mrc721-backfill covers manual
+	// builds).
+	SellBackfill Mrc721SellBackfillConfig `json:"sellBackfill"`
+	// Collection drives the periodic refresh of the MRC-721 collection read
+	// model consumed by /api/mrc721/collection/search and
+	// /api/mrc721/address/collections-issued (disabled by default).
+	Collection Mrc721CollectionConfig `json:"collection"`
+}
+
+// Mrc721SellBackfillConfig configures the startup backfill of the
+// /protocols/mrc721sell declaration log (same shape as the other feature
+// backfills).
+type Mrc721SellBackfillConfig struct {
+	Enabled       bool          `json:"enabled"`
+	Lookback      time.Duration `json:"lookback"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
+}
+
+// Mrc721CollectionConfig configures the collection read-model refresh loop.
+// The refresh is a full pageList sweep with upsert-by-pinid; the registry is
+// append-mostly (collection_desc first-wins), so rows are never deleted.
+type Mrc721CollectionConfig struct {
+	Enabled       bool          `json:"enabled"`
+	SyncInterval  time.Duration `json:"syncInterval"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
 }
 
 // ProtocolRegistryConfig holds the authoritative metaprotocol registry knobs
@@ -165,10 +206,10 @@ type SocketConfig struct {
 }
 
 type ZMQConfig struct {
-	Enabled               bool           `json:"enabled"`
-	MempoolPollingEnabled bool           `json:"mempoolPollingEnabled"`
-	MempoolPollInterval   time.Duration  `json:"mempoolPollInterval"`
-	MempoolDedupeTTL      time.Duration  `json:"mempoolDedupeTTL"`
+	Enabled               bool          `json:"enabled"`
+	MempoolPollingEnabled bool          `json:"mempoolPollingEnabled"`
+	MempoolPollInterval   time.Duration `json:"mempoolPollInterval"`
+	MempoolDedupeTTL      time.Duration `json:"mempoolDedupeTTL"`
 	// Mempool overlay janitor for the social/block aggregators (spec
 	// 2026-10-29 §4.4b): unconfirmed /follow and simpleblock pins take
 	// effect immediately; the sweeper drops entries whose pin never
@@ -376,6 +417,22 @@ func Default() Config {
 			Blocklist:          nil,
 			OwnerBoundModifies: true,
 		},
+		Mrc721: Mrc721Config{
+			SellBackfill: Mrc721SellBackfillConfig{
+				Enabled:       false,
+				Lookback:      1440 * time.Hour,
+				Timeout:       2 * time.Minute,
+				PageSize:      100,
+				MANAPIBaseURL: "https://manapi.metaid.io",
+			},
+			Collection: Mrc721CollectionConfig{
+				Enabled:       false,
+				SyncInterval:  10 * time.Minute,
+				Timeout:       time.Minute,
+				PageSize:      100,
+				MANAPIBaseURL: "https://manapi.metaid.io",
+			},
+		},
 	}
 }
 
@@ -512,6 +569,18 @@ func Load() (Config, error) {
 
 	applyStringEnv("METASO_P2P_BOT_HOMEPAGE_V2_BACKFILL_MANAPI_BASE_URL", &cfg.BotHomepageV2Backfill.MANAPIBaseURL)
 
+	applyBoolEnv("METASO_P2P_MRC721_SELL_BACKFILL_ENABLED", &cfg.Mrc721.SellBackfill.Enabled)
+	applyDurationEnv("METASO_P2P_MRC721_SELL_BACKFILL_LOOKBACK", &cfg.Mrc721.SellBackfill.Lookback)
+	applyDurationEnv("METASO_P2P_MRC721_SELL_BACKFILL_TIMEOUT", &cfg.Mrc721.SellBackfill.Timeout)
+	applyIntEnv("METASO_P2P_MRC721_SELL_BACKFILL_PAGE_SIZE", &cfg.Mrc721.SellBackfill.PageSize)
+	applyStringEnv("METASO_P2P_MRC721_SELL_BACKFILL_MANAPI_BASE_URL", &cfg.Mrc721.SellBackfill.MANAPIBaseURL)
+
+	applyBoolEnv("METASO_P2P_MRC721_COLLECTION_ENABLED", &cfg.Mrc721.Collection.Enabled)
+	applyDurationEnv("METASO_P2P_MRC721_COLLECTION_SYNC_INTERVAL", &cfg.Mrc721.Collection.SyncInterval)
+	applyDurationEnv("METASO_P2P_MRC721_COLLECTION_TIMEOUT", &cfg.Mrc721.Collection.Timeout)
+	applyIntEnv("METASO_P2P_MRC721_COLLECTION_PAGE_SIZE", &cfg.Mrc721.Collection.PageSize)
+	applyStringEnv("METASO_P2P_MRC721_COLLECTION_MANAPI_BASE_URL", &cfg.Mrc721.Collection.MANAPIBaseURL)
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -566,6 +635,39 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateBotHomepageV2Backfill(); err != nil {
 		return err
+	}
+	if err := c.validateMrc721(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateMrc721() error {
+	sell := c.Mrc721.SellBackfill
+	if sell.Lookback <= 0 {
+		return errors.New("mrc721.sellBackfill.lookback must be greater than zero")
+	}
+	if sell.Timeout <= 0 {
+		return errors.New("mrc721.sellBackfill.timeout must be greater than zero")
+	}
+	if sell.PageSize <= 0 {
+		return errors.New("mrc721.sellBackfill.pageSize must be greater than zero")
+	}
+	if sell.Enabled && strings.TrimSpace(sell.MANAPIBaseURL) == "" {
+		return errors.New("mrc721.sellBackfill.manapiBaseUrl is required when backfill is enabled")
+	}
+	collection := c.Mrc721.Collection
+	if collection.SyncInterval <= 0 {
+		return errors.New("mrc721.collection.syncInterval must be greater than zero")
+	}
+	if collection.Timeout <= 0 {
+		return errors.New("mrc721.collection.timeout must be greater than zero")
+	}
+	if collection.PageSize <= 0 {
+		return errors.New("mrc721.collection.pageSize must be greater than zero")
+	}
+	if collection.Enabled && strings.TrimSpace(collection.MANAPIBaseURL) == "" {
+		return errors.New("mrc721.collection.manapiBaseUrl is required when collection sync is enabled")
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
@@ -74,6 +75,7 @@ func main() {
 	var botSearchAgg *botsearch.Aggregator
 	var blockAgg *block.Aggregator
 	var notifyAgg *notify.Aggregator
+	var mrc721Agg *mrc721.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -229,6 +231,18 @@ func main() {
 		if err := aggRegistry.Register(qaCandidate); err != nil {
 			log.Printf("WARNING: qa aggregator init failed: %v", err)
 		}
+		// mrc721 is the MRC-721 business-index layer: the /protocols/
+		// mrc721sell declaration log (latest-wins per itemPinId) behind
+		// /api/mrc721/sell/*, and the collection search / issuer views over
+		// the manapi-refreshed collection read model behind
+		// /api/mrc721/collection/search and /api/mrc721/address/
+		// collections-issued (docs/specs/2026-11-04-mrc721-sell-collection-api.md).
+		mrc721Candidate := &mrc721.Aggregator{}
+		if err := aggRegistry.Register(mrc721Candidate); err != nil {
+			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
+		} else {
+			mrc721Agg = mrc721Candidate
+		}
 		// preference is the open comparison-feedback read model over
 		// /protocols/preference/feedback, serving
 		// GET /api/preference/comparisons and the open-preference summaries
@@ -328,6 +342,50 @@ func main() {
 			}
 		}
 		startPublishedContentReplayIfEnabled(publishedAgg, cfg)
+		// MRC-721 startup jobs (both opt-in via config): the sell-intent
+		// declaration replay, and the periodic collection read-model
+		// refresh behind the collection search / issuer views.
+		if cfg.Mrc721.SellBackfill.Enabled {
+			if mrc721Agg == nil {
+				log.Printf("WARNING: mrc721 sell backfill requested but aggregator is unavailable")
+			} else {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), cfg.Mrc721.SellBackfill.Timeout)
+					defer cancel()
+					stats := &mrc721.SellBackfillStats{}
+					err := mrc721Agg.BackfillSell(mrc721.SellBackfillOptions{
+						Context:  ctx,
+						Client:   publishedcontent.NewBackfillClient(cfg.Mrc721.SellBackfill.MANAPIBaseURL, http.DefaultClient),
+						Since:    time.Now().Add(-cfg.Mrc721.SellBackfill.Lookback),
+						PageSize: cfg.Mrc721.SellBackfill.PageSize,
+						Stats:    stats,
+					})
+					if err != nil {
+						log.Printf("WARNING: mrc721 sell backfill failed: %v", err)
+					}
+					log.Printf("mrc721 sell backfill done: fetched=%d applied=%d skipped=%d errors=%d",
+						stats.Fetched, stats.Applied, stats.Skipped, stats.Errors)
+				}()
+			}
+		}
+		if cfg.Mrc721.Collection.Enabled {
+			if mrc721Agg == nil {
+				log.Printf("WARNING: mrc721 collection sync requested but aggregator is unavailable")
+			} else {
+				mrc721CollectionStop := make(chan struct{})
+				defer close(mrc721CollectionStop)
+				go mrc721.RunCollectionSyncLoop(
+					context.Background(),
+					mrc721Agg,
+					mrc721.NewCollectionClient(cfg.Mrc721.Collection.MANAPIBaseURL, http.DefaultClient),
+					cfg.Mrc721.Collection.SyncInterval,
+					cfg.Mrc721.Collection.Timeout,
+					cfg.Mrc721.Collection.PageSize,
+					mrc721CollectionStop,
+					log.Printf,
+				)
+			}
+		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))
 	}
 
