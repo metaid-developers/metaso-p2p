@@ -57,6 +57,9 @@ type Mrc721Config struct {
 // Mrc721NftConfig configures the native /nft/mrc721 NFT aggregate.
 type Mrc721NftConfig struct {
 	Enabled bool `json:"enabled"`
+	// MANAPIBaseURL is the manapi-compatible upstream the offline bootstrap
+	// (cmd/metaso-p2p-mrc721-nft-backfill) hydrates the aggregate from.
+	MANAPIBaseURL string `json:"manapiBaseUrl"`
 }
 
 // Mrc721SellBackfillConfig configures the startup backfill of the
@@ -444,7 +447,8 @@ func Default() Config {
 				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
 			Nft: Mrc721NftConfig{
-				Enabled: false,
+				Enabled:       false,
+				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
 		},
 	}
@@ -596,6 +600,7 @@ func Load() (Config, error) {
 	applyStringEnv("METASO_P2P_MRC721_COLLECTION_MANAPI_BASE_URL", &cfg.Mrc721.Collection.MANAPIBaseURL)
 
 	applyBoolEnv("METASO_P2P_MRC721_NFT_ENABLED", &cfg.Mrc721.Nft.Enabled)
+	applyStringEnv("METASO_P2P_MRC721_NFT_MANAPI_BASE_URL", &cfg.Mrc721.Nft.MANAPIBaseURL)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

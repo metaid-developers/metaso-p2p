@@ -605,3 +605,7 @@ mempoolDedupeTTL = "30m"
 # and the collection search keeps its manapi-refreshed source.
 # Env: METASO_P2P_MRC721_NFT_ENABLED
 # mrc721NftEnabled = false
+# Upstream the offline bootstrap (cmd/metaso-p2p-mrc721-nft-backfill)
+# hydrates the aggregate from.
+# Env: METASO_P2P_MRC721_NFT_MANAPI_BASE_URL
+# mrc721NftManapiBaseUrl = "https://manapi.metaid.io"
