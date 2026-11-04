@@ -50,15 +50,11 @@ curl -s "$BASE/api/mrc721/address/collections-issued?address=<addr>"
 
 ## 5. Wire the client (IDBots)
 
-Set on the IDBots host:
-
-```
-IDBOTS_METASO_API_BASE=http://<metaso-host>:8080
-```
-
-With that set, IDBots' `mrc721_market_intents` and
-`mrc721_search_collections` route to MetaSo first (honest fallback to the
-manapi interim otherwise). No other IDBots configuration changes.
+Nothing to do: the IDBots client ships with this base BUILT IN
+(`https://so.metaid.io`, mirroring how it treats manapi.metaid.io) —
+`mrc721_market_intents` and `mrc721_search_collections` hit MetaSo
+automatically. The `IDBOTS_METASO_API_BASE` env exists only as a
+staging/local-testing override.
 
 ## 6. What NOT to deploy
 
