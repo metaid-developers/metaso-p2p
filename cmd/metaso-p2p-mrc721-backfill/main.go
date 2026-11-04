@@ -50,7 +50,7 @@ func run(args []string) error {
 	dataDir := fs.String("data-dir", cfg.Pebble.DataDir, "Pebble data directory of the metaso-p2p daemon")
 	manapiBaseURL := fs.String("manapi-base-url", cfg.Mrc721.SellBackfill.MANAPIBaseURL, "MANAPI base URL for the sell-intent path listing")
 	collectionBaseURL := fs.String("collection-base-url", cfg.Mrc721.Collection.MANAPIBaseURL, "Base URL of the manapi-compatible MRC-721 collection page list")
-	lookback := fs.Duration("lookback", cfg.Mrc721.SellBackfill.Lookback, "only replay sell pins newer than this age (0 = full history)")
+	lookback := fs.Duration("lookback", 0, "only replay sell pins newer than this age (default 0 = full history)")
 	timeout := fs.Duration("timeout", defaultTimeout, "overall run timeout")
 	pageSize := fs.Int("page-size", defaultPageSize, "MANAPI page size")
 	skipSell := fs.Bool("skip-sell", false, "skip the sell-intent replay")
@@ -62,10 +62,9 @@ func run(args []string) error {
 		return errors.New("nothing to do: both --skip-sell and --skip-collection are set")
 	}
 
-	// Full history by default (lookback 0 disables the cutoff); the config
-	// default lookback only applies when the flag is not given. The flag
-	// default wires the config value, so a negative or zero lookback means
-	// "no cutoff" here.
+	// Full history by default (the protocol is new, so a first build wants
+	// everything; same stance as the qa backfill). A positive --lookback
+	// narrows the replay window.
 	since := time.Time{}
 	if *lookback > 0 {
 		since = time.Now().Add(-*lookback)

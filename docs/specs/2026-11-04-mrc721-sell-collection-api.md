@@ -211,7 +211,8 @@ go run ./cmd/metaso-p2p-mrc721-backfill \
   --data-dir /path/to/pebble \
   --manapi-base-url https://manapi.metaid.io \
   --collection-base-url https://manapi.metaid.io \
-  --page-size 100            # --lookback 0 = full history (default)
+  --page-size 100            # --lookback 0 = full history (the default;
+                             # a positive lookback narrows the sell replay)
 # flags: --skip-sell / --skip-collection to run one phase only
 ```
 
