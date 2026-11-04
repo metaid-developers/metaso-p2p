@@ -10,6 +10,9 @@ import (
 	"testing"
 )
 
+// liveOwner is a valid mainnet base58 address for the rewind-protection test.
+const liveOwner = "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX"
+
 // Backfill unit tests: an httptest server plays the manapi-compatible
 // upstream (collection pageList / collection items pageList / item
 // transfers) and the hydrate must rebuild the aggregate identically —
@@ -74,7 +77,7 @@ func fixtureUpstream() *fakeUpstream {
 				CollectionName: "BootAlbum", Name: "Boot Name", TotalSupply: 10, RoyaltyRate: 3,
 				Desc: "booted", Website: "https://boot.example", Cover: "metafile://bootcover",
 				Metadata: `{"boot":true}`, PinId: "bootcoll-1",
-				Address: "mvc1qissuer", CreateAddress: "mvc1qissuer",
+				Address: creator, CreateAddress: creator,
 				MetaId: "idissuer", CreateMetaId: "idissuer",
 				CreateTime: 1700000001, TotalNum: 3,
 				ModifyHistory:    []string{"modpin-1"},
@@ -87,7 +90,7 @@ func fixtureUpstream() *fakeUpstream {
 					CollectionPinId: "bootcoll-1", CollectionName: "BootAlbum",
 					ItemPinId: "item-1", Number: 1, Name: "One", Desc: "first",
 					Cover: "metafile://one", Metadata: `{"k":1}`,
-					OwnerAddress: "mvc1qholder1", OwnerMetaId: "idholder1",
+					OwnerAddress: other, OwnerMetaId: "idholder1",
 					CreatorMinted: true, ContentType: "application/json",
 					ContentSummary: `"raw one"`, Output: "origtx:1", OutputValue: 546,
 					TransferCount: 1, GenesisChainName: "mvc", GenesisHeight: 501,
@@ -96,7 +99,7 @@ func fixtureUpstream() *fakeUpstream {
 				{
 					CollectionPinId: "bootcoll-1", CollectionName: "BootAlbum",
 					ItemPinId: "item-2", Number: 2, Name: "Two",
-					OwnerAddress: "mvc1qholder2", OwnerMetaId: "idholder2",
+					OwnerAddress: holder, OwnerMetaId: "idholder2",
 					ContentSummary: `"raw two"`, Output: "origtx:2", OutputValue: 546,
 					TransferCount: 0, GenesisChainName: "mvc", GenesisHeight: 502,
 					GenesisTx: "itemtx-2", CreateTime: 1700000012,
@@ -113,11 +116,11 @@ func fixtureUpstream() *fakeUpstream {
 		},
 		transfers: map[string][]upstreamTransfer{
 			"item-1": {
-				{ItemPinId: "item-1", FromAddress: "mvc1qissuer", ToAddress: "mvc1qholder1", ChainName: "mvc", Height: 600, TxId: "spendtx-1", Time: 1700000200},
+				{ItemPinId: "item-1", FromAddress: creator, ToAddress: other, ChainName: "mvc", Height: 600, TxId: "spendtx-1", Time: 1700000200},
 			},
 			"item-3": {
-				{ItemPinId: "item-3", FromAddress: "mvc1qissuer", ToAddress: "mvc1qmid", ChainName: "mvc", Height: 700, TxId: "spendtx-3a", Time: 1700000300},
-				{ItemPinId: "item-3", FromAddress: "mvc1qmid", ToAddress: "", ChainName: "mvc", Height: 701, TxId: "spendtx-3b", Time: 1700000301},
+				{ItemPinId: "item-3", FromAddress: creator, ToAddress: impostor, ChainName: "mvc", Height: 700, TxId: "spendtx-3a", Time: 1700000300},
+				{ItemPinId: "item-3", FromAddress: impostor, ToAddress: "", ChainName: "mvc", Height: 701, TxId: "spendtx-3b", Time: 1700000301},
 			},
 		},
 	}
@@ -149,15 +152,17 @@ func TestBackfillNftHydrates(t *testing.T) {
 	if len(col.ModifyHistory) != 1 || col.ModifyHistory[0] != "modpin-1" {
 		t.Fatalf("modify history not hydrated: %v", col.ModifyHistory)
 	}
-	if col.CreateMetaId != "idissuer" {
-		t.Fatalf("createMetaId not taken from upstream: %q", col.CreateMetaId)
+	// createMetaId is derived locally as a global metaid; the upstream
+	// row's legacy sha256 hex value is ignored.
+	if col.CreateMetaId != globalMetaIdByAddress(creator) || col.CreateMetaId == "" {
+		t.Fatalf("createMetaId not derived as global metaid: %q", col.CreateMetaId)
 	}
 	if _, err := a.db.GetCollectionByPinId("bootcoll-1"); err != nil {
 		t.Fatalf("collection by pinid missing after hydrate: %v", err)
 	}
 
 	item1, _ := a.db.GetItem("item-1")
-	if item1 == nil || item1.OwnerAddress != "mvc1qholder1" || item1.Number != 1 ||
+	if item1 == nil || item1.OwnerAddress != other || item1.Number != 1 ||
 		item1.Output != "origtx:1" || item1.OutputValue != 546 || item1.TransferCount != 1 ||
 		item1.Name != "One" || !item1.CreatorMinted {
 		t.Fatalf("item-1 not hydrated: %+v", item1)
@@ -169,7 +174,7 @@ func TestBackfillNftHydrates(t *testing.T) {
 
 	// Holder index: burned item stays out, holders land in.
 	holderCount := 0
-	a.db.IterateOwnerItems("mvc1qholder1", "BootAlbum", func(cn, ip string) bool { holderCount++; return true })
+	a.db.IterateOwnerItems(other, "BootAlbum", func(cn, ip string) bool { holderCount++; return true })
 	if holderCount != 1 {
 		t.Fatalf("holder index missing item-1: %d", holderCount)
 	}
@@ -222,18 +227,18 @@ func TestBackfillNftIdempotentRerun(t *testing.T) {
 	if stats.Items != 0 || stats.Transfers != 0 || stats.SkippedTransfers != 3 || stats.OwnerMoves != 0 {
 		t.Fatalf("plain re-run must be a no-op: %+v", stats)
 	}
-	if item, _ := a.db.GetItem("item-2"); item.OwnerAddress != "mvc1qholder2" {
+	if item, _ := a.db.GetItem("item-2"); item.OwnerAddress != holder {
 		t.Fatalf("re-run must not touch live state: %+v", item)
 	}
 
 	// Upstream strictly ahead (item-2 transferred while the daemon was
 	// down): the row's transferCount beats the stored one, so owner,
 	// transferCount and the holder index follow the upstream state.
-	fake.items["bootcoll-1"][1].OwnerAddress = "mvc1qholder1"
+	fake.items["bootcoll-1"][1].OwnerAddress = other
 	fake.items["bootcoll-1"][1].OwnerMetaId = "idholder1"
 	fake.items["bootcoll-1"][1].TransferCount = 1
 	fake.transfers["item-2"] = []upstreamTransfer{
-		{ItemPinId: "item-2", FromAddress: "mvc1qholder2", ToAddress: "mvc1qholder1", ChainName: "mvc", Height: 800, TxId: "spendtx-2", Time: 1700000400},
+		{ItemPinId: "item-2", FromAddress: holder, ToAddress: other, ChainName: "mvc", Height: 800, TxId: "spendtx-2", Time: 1700000400},
 	}
 
 	stats = &BackfillStats{}
@@ -245,13 +250,13 @@ func TestBackfillNftIdempotentRerun(t *testing.T) {
 		t.Fatalf("ahead re-run should apply the newer row: %+v", stats)
 	}
 	item2, _ := a.db.GetItem("item-2")
-	if item2.OwnerAddress != "mvc1qholder1" || item2.TransferCount != 1 {
+	if item2.OwnerAddress != other || item2.TransferCount != 1 {
 		t.Fatalf("upstream-newer item not applied: %+v", item2)
 	}
-	if cnt := countOwnerItems(t, a, "mvc1qholder1", "BootAlbum"); cnt != 2 {
+	if cnt := countOwnerItems(t, a, other, "BootAlbum"); cnt != 2 {
 		t.Fatalf("holder1 should hold item-1 + item-2: %d", cnt)
 	}
-	if cnt := countOwnerItems(t, a, "mvc1qholder2", "BootAlbum"); cnt != 0 {
+	if cnt := countOwnerItems(t, a, holder, "BootAlbum"); cnt != 0 {
 		t.Fatalf("holder2 should hold nothing: %d", cnt)
 	}
 	trs := 0
@@ -264,11 +269,11 @@ func TestBackfillNftIdempotentRerun(t *testing.T) {
 	// upstream row, so a re-run must keep the local state.
 	item2, _ = a.db.GetItem("item-2")
 	item2.TransferCount = 5
-	item2.OwnerAddress = "mvc1qliveowner"
-	if err := a.db.DeleteOwnerItem("mvc1qholder1", "BootAlbum", "item-2"); err != nil {
+	item2.OwnerAddress = liveOwner
+	if err := a.db.DeleteOwnerItem(other, "BootAlbum", "item-2"); err != nil {
 		t.Fatalf("re-key: %v", err)
 	}
-	if err := a.db.PutOwnerItem("mvc1qliveowner", "BootAlbum", "item-2"); err != nil {
+	if err := a.db.PutOwnerItem(liveOwner, "BootAlbum", "item-2"); err != nil {
 		t.Fatalf("re-key: %v", err)
 	}
 	if err := a.db.SaveItem(item2); err != nil {
@@ -282,10 +287,10 @@ func TestBackfillNftIdempotentRerun(t *testing.T) {
 		t.Fatalf("stale upstream must not move owners: %+v", stats)
 	}
 	item2, _ = a.db.GetItem("item-2")
-	if item2.OwnerAddress != "mvc1qliveowner" || item2.TransferCount != 5 {
+	if item2.OwnerAddress != liveOwner || item2.TransferCount != 5 {
 		t.Fatalf("stale upstream must not rewind live state: %+v", item2)
 	}
-	if cnt := countOwnerItems(t, a, "mvc1qliveowner", "BootAlbum"); cnt != 1 {
+	if cnt := countOwnerItems(t, a, liveOwner, "BootAlbum"); cnt != 1 {
 		t.Fatalf("live owner key must survive: %d", cnt)
 	}
 }

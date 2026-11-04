@@ -75,7 +75,7 @@ func TestSearchNativeCollectionsIssuerAndPaging(t *testing.T) {
 	}
 
 	// Issuer by createMetaId (case-insensitive).
-	rows, total, _, _ = a.SearchNativeCollections("", metaIdByAddress(creator), "", 20)
+	rows, total, _, _ = a.SearchNativeCollections("", globalMetaIdByAddress(creator), "", 20)
 	if total != 2 {
 		t.Fatalf("metaId issuer wrong: %d", total)
 	}

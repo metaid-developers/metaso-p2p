@@ -1,8 +1,6 @@
 package mrc721nft
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log"
 	"sort"
@@ -10,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
 // MRC-721 NFT aggregation, ported from man-p2p's man/mrc721.go (design:
@@ -94,14 +93,26 @@ func effectivePath(path string) string {
 	return path
 }
 
-// metaIdByAddress mirrors man-p2p's common.GetMetaIdByAddress (sha256 hex of
-// the address). MetaSo's chain adapters put the base58 address itself into
-// PinInscription.MetaId while man-p2p's pins carry this derived value, so
-// the aggregate computes it locally to keep the DTO metaId fields identical
-// for downstream consumers.
-func metaIdByAddress(address string) string {
-	sum := sha256.Sum256([]byte(address))
-	return hex.EncodeToString(sum[:])
+// globalMetaIdByAddress converts a chain address to the ecosystem's global
+// metaid (IDAddress format, pkg/idaddress — the same convention man-p2p's
+// common.ConvertToGlobalMetaId applies to its GlobalMetaId fields).
+// Unconvertible addresses (invalid/unknown format) yield "".
+//
+// NOTE: this deliberately diverges from man-p2p's MRC-721 DTOs, whose
+// metaid/createMetaId/ownerMetaId values carry the legacy sha256(address)
+// hex ("legacy metaid" — sunset usage). Downstream consumers of this
+// surface use global metaids, so the aggregate derives them from the
+// address locally, in both the live and the bootstrap paths.
+func globalMetaIdByAddress(address string) string {
+	if address == "" {
+		return ""
+	}
+	idAddr, err := idaddress.ConvertFromBitcoin(address)
+	if err != nil {
+		log.Printf("[WARN] mrc721nft: convert address %s to global metaid: %v", address, err)
+		return ""
+	}
+	return idAddr
 }
 
 func nftChainName(pin *aggregator.PinInscription) string {
@@ -142,7 +153,7 @@ func (a *Aggregator) collectionRegister(collectionName string, pin *aggregator.P
 		CollectionName:   collectionName,
 		PinId:            pin.Id,
 		CreateAddress:    pin.Address,
-		CreateMetaId:     metaIdByAddress(pin.Address),
+		CreateMetaId:     globalMetaIdByAddress(pin.Address),
 		CreateTime:       pin.Timestamp,
 		GenesisChainName: nftChainName(pin),
 		GenesisHeight:    pin.GenesisHeight,
@@ -389,7 +400,7 @@ func (a *Aggregator) mintHandle(collectionName string, pin *aggregator.PinInscri
 	mint := &PendingMint{
 		ItemPinId:        pin.Id,
 		OwnerAddress:     pin.Address,
-		OwnerMetaId:      metaIdByAddress(pin.Address),
+		OwnerMetaId:      globalMetaIdByAddress(pin.Address),
 		ContentType:      pin.ContentType,
 		ContentSummary:   pinListSummary(pin.ContentBody),
 		GenesisChainName: nftChainName(pin),
@@ -502,7 +513,7 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 			}
 			a.db.PutOwnerItem(info.Address, item.CollectionName, item.ItemPinId)
 			item.OwnerAddress = info.Address
-			item.OwnerMetaId = metaIdByAddress(info.Address)
+			item.OwnerMetaId = globalMetaIdByAddress(info.Address)
 		}
 		if !info.IsMeltdown {
 			item.Output = info.Output

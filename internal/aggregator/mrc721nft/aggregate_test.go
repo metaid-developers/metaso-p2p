@@ -81,12 +81,31 @@ func transferFor(itemPinId, to, from, output string, value int64, meltdown bool)
 	return transferMap, pinIdByOutput
 }
 
+// Test addresses are valid mainnet base58 addresses so the global-metaid
+// derivation (IDAddress) produces non-empty deterministic values.
 const (
-	creator  = "mvc1qcreator"
-	other    = "mvc1qother"
-	holder   = "mvc1qholder"
-	impostor = "mvc1qimpostor"
+	creator  = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+	other    = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+	holder   = "1BitcoinEaterAddressDontSendF59ku6"
+	impostor = "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"
 )
+
+func TestGlobalMetaIdDerivation(t *testing.T) {
+	// Valid base58 addresses convert deterministically.
+	if got := globalMetaIdByAddress(creator); got == "" {
+		t.Fatalf("valid address must convert, got empty")
+	}
+	if globalMetaIdByAddress(creator) != globalMetaIdByAddress(creator) {
+		t.Fatal("derivation must be stable")
+	}
+	// Invalid addresses yield "" (never a junk value).
+	if got := globalMetaIdByAddress("mvc1qnot-an-address"); got != "" {
+		t.Fatalf("invalid address must yield empty: %q", got)
+	}
+	if got := globalMetaIdByAddress(""); got != "" {
+		t.Fatalf("empty address must yield empty: %q", got)
+	}
+}
 
 func TestCollectionRegisterFirstWins(t *testing.T) {
 	a := newTestAggregator(t)
@@ -111,7 +130,7 @@ func TestCollectionRegisterFirstWins(t *testing.T) {
 	if col.TotalSupply != 100 || col.RoyaltyRate != 5 {
 		t.Fatalf("fields wrong: totalSupply=%d royaltyRate=%d", col.TotalSupply, col.RoyaltyRate)
 	}
-	if col.CreateAddress != creator || col.CreateMetaId != metaIdByAddress(creator) || col.TotalNum != 0 {
+	if col.CreateAddress != creator || col.CreateMetaId != globalMetaIdByAddress(creator) || col.TotalNum != 0 {
 		t.Fatalf("creator/totalnum wrong: %s %s %d", col.CreateAddress, col.CreateMetaId, col.TotalNum)
 	}
 	byPinId, err := a.db.GetCollectionByPinId("collA")
@@ -161,7 +180,7 @@ func TestMintSeqAndCreatorMinted(t *testing.T) {
 	if item2 == nil || item2.Number != 2 || item2.CreatorMinted {
 		t.Fatalf("item2 wrong: %+v", item2)
 	}
-	if item2.OwnerAddress != other || item2.OwnerMetaId != metaIdByAddress(other) {
+	if item2.OwnerAddress != other || item2.OwnerMetaId != globalMetaIdByAddress(other) {
 		t.Fatalf("owner wrong: %+v", item2)
 	}
 	if item1.CollectionPinId != "c1" {
@@ -366,7 +385,7 @@ func TestTransferUpdatesOwner(t *testing.T) {
 	if item == nil || item.OwnerAddress != creator || item.TransferCount != 1 {
 		t.Fatalf("owner not updated: %+v", item)
 	}
-	if item.OwnerMetaId != metaIdByAddress(creator) {
+	if item.OwnerMetaId != globalMetaIdByAddress(creator) {
 		t.Fatalf("owner metaid wrong: %q", item.OwnerMetaId)
 	}
 	if item.Output != "spendtx-n1:1" || item.OutputValue != 546 {

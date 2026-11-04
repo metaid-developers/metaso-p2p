@@ -53,7 +53,7 @@ func TestHandleBlockTransfersMovesOwnership(t *testing.T) {
 		item.Output != "spendtx:1" || item.OutputValue != 546 {
 		t.Fatalf("ownership not moved via the consumer interface: %+v", item)
 	}
-	if item.OwnerMetaId != metaIdByAddress(other) {
+	if item.OwnerMetaId != globalMetaIdByAddress(other) {
 		t.Fatalf("owner metaId wrong: %q", item.OwnerMetaId)
 	}
 	// Provenance history written with the notice facts.

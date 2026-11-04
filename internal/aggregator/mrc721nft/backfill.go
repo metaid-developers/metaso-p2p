@@ -107,8 +107,9 @@ func (a *Aggregator) backfillCollections(ctx context.Context, client *UpstreamCl
 }
 
 // collectionFromUpstream maps an upstream collection DTO row onto the native
-// record. createMetaId is derived when absent, matching man-p2p's
-// sha256(address) convention.
+// record. createMetaId is always derived from the create address: the
+// upstream metaid fields carry man-p2p's legacy sha256(address) hex, while
+// this surface serves global metaids (IDAddress format).
 func collectionFromUpstream(row *upstreamCollection) *Collection {
 	col := &Collection{
 		CollectionName:   row.CollectionName,
@@ -121,7 +122,6 @@ func collectionFromUpstream(row *upstreamCollection) *Collection {
 		Metadata:         row.Metadata,
 		PinId:            row.PinId,
 		CreateAddress:    row.CreateAddress,
-		CreateMetaId:     row.CreateMetaId,
 		CreateTime:       row.CreateTime,
 		GenesisChainName: row.GenesisChainName,
 		GenesisHeight:    row.GenesisHeight,
@@ -132,9 +132,7 @@ func collectionFromUpstream(row *upstreamCollection) *Collection {
 	if col.CreateAddress == "" {
 		col.CreateAddress = row.Address
 	}
-	if col.CreateMetaId == "" {
-		col.CreateMetaId = metaIdByAddress(col.CreateAddress)
-	}
+	col.CreateMetaId = globalMetaIdByAddress(col.CreateAddress)
 	return col
 }
 
@@ -233,7 +231,6 @@ func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats
 		Cover:            row.Cover,
 		Metadata:         row.Metadata,
 		OwnerAddress:     row.OwnerAddress,
-		OwnerMetaId:      row.OwnerMetaId,
 		CreatorMinted:    row.CreatorMinted,
 		Burned:           row.Burned,
 		ContentType:      row.ContentType,
@@ -252,9 +249,9 @@ func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats
 	if item.GenesisChainName == "" {
 		item.GenesisChainName = col.GenesisChainName
 	}
-	if item.OwnerMetaId == "" {
-		item.OwnerMetaId = metaIdByAddress(item.OwnerAddress)
-	}
+	// ownerMetaId is derived from the owner address (global metaid), never
+	// taken from the upstream row's legacy sha256 hex value.
+	item.OwnerMetaId = globalMetaIdByAddress(item.OwnerAddress)
 	if existing != nil {
 		// Upstream is strictly ahead: re-key the holder index from the
 		// stored owner to the upstream one.
