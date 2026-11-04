@@ -135,6 +135,8 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/mrc721/sell/intents", a.handleSellIntents)
 	router.GET("/mrc721/sell/intent/info", a.handleSellIntentInfo)
+	router.GET("/mrc721/collection/search", a.handleCollectionSearch)
+	router.GET("/mrc721/address/collections-issued", a.handleAddressCollectionsIssued)
 }
 
 // normalisedPinPath lowercases and strips the version suffix (@pinId) and

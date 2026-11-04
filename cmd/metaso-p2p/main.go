@@ -342,8 +342,9 @@ func main() {
 			}
 		}
 		startPublishedContentReplayIfEnabled(publishedAgg, cfg)
-		// MRC-721 startup job (opt-in via config): the sell-intent
-		// declaration replay through the latest-wins read model.
+		// MRC-721 startup jobs (both opt-in via config): the sell-intent
+		// declaration replay, and the periodic collection read-model
+		// refresh behind the collection search / issuer views.
 		if cfg.Mrc721.SellBackfill.Enabled {
 			if mrc721Agg == nil {
 				log.Printf("WARNING: mrc721 sell backfill requested but aggregator is unavailable")
@@ -365,6 +366,24 @@ func main() {
 					log.Printf("mrc721 sell backfill done: fetched=%d applied=%d skipped=%d errors=%d",
 						stats.Fetched, stats.Applied, stats.Skipped, stats.Errors)
 				}()
+			}
+		}
+		if cfg.Mrc721.Collection.Enabled {
+			if mrc721Agg == nil {
+				log.Printf("WARNING: mrc721 collection sync requested but aggregator is unavailable")
+			} else {
+				mrc721CollectionStop := make(chan struct{})
+				defer close(mrc721CollectionStop)
+				go mrc721.RunCollectionSyncLoop(
+					context.Background(),
+					mrc721Agg,
+					mrc721.NewCollectionClient(cfg.Mrc721.Collection.MANAPIBaseURL, http.DefaultClient),
+					cfg.Mrc721.Collection.SyncInterval,
+					cfg.Mrc721.Collection.Timeout,
+					cfg.Mrc721.Collection.PageSize,
+					mrc721CollectionStop,
+					log.Printf,
+				)
 			}
 		}
 		log.Printf("aggregators registered: %d", len(aggRegistry.All()))

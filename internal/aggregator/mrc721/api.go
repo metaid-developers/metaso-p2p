@@ -212,3 +212,102 @@ func parseListSize(raw string) (int, error) {
 	return size, nil
 }
 
+// collectionRow is the wire shape of one collection row (the MRC-721
+// collection summary the IDBots client reads), served by
+// /api/mrc721/collection/search and /api/mrc721/address/collections-issued.
+type collectionRow struct {
+	CollectionName   string `json:"collectionName"`
+	Name             string `json:"name,omitempty"`
+	Desc             string `json:"desc,omitempty"`
+	TotalSupply      int64  `json:"totalSupply,omitempty"`
+	Totalnum         int64  `json:"totalnum,omitempty"`
+	RoyaltyRate      int64  `json:"royaltyRate,omitempty"`
+	Pinid            string `json:"pinid,omitempty"`
+	CreateAddress    string `json:"createAddress,omitempty"`
+	CreateMetaId     string `json:"createMetaId,omitempty"`
+	CreateTime       int64  `json:"createTime,omitempty"`
+	Cover            string `json:"cover,omitempty"`
+	GenesisChainName string `json:"genesisChainName,omitempty"`
+	MintedCount      int64  `json:"mintedCount,omitempty"`
+}
+
+func collectionRowFrom(rec *CollectionRecord) *collectionRow {
+	if rec == nil {
+		return nil
+	}
+	return &collectionRow{
+		CollectionName:   rec.CollectionName,
+		Name:             rec.Name,
+		Desc:             rec.Desc,
+		TotalSupply:      rec.TotalSupply,
+		Totalnum:         rec.Totalnum,
+		RoyaltyRate:      rec.RoyaltyRate,
+		Pinid:            rec.PinId,
+		CreateAddress:    rec.CreateAddress,
+		CreateMetaId:     rec.CreateMetaId,
+		CreateTime:       rec.CreateTime,
+		Cover:            rec.Cover,
+		GenesisChainName: rec.GenesisChainName,
+		MintedCount:      rec.MintedCount,
+	}
+}
+
+type collectionListData struct {
+	List   []*collectionRow `json:"list"`
+	Total  int              `json:"total"`
+	Cursor string           `json:"cursor,omitempty"`
+}
+
+func (a *Aggregator) handleCollectionSearch(c *gin.Context) {
+	size, err := parseListSize(c.Query("size"))
+	if err != nil {
+		respondMrc721Error(c, err)
+		return
+	}
+	page, err := a.SearchCollections(
+		c.Query("keyword"),
+		strings.TrimSpace(c.Query("issuer")),
+		strings.TrimSpace(c.Query("cursor")),
+		size,
+	)
+	if err != nil {
+		respondMrc721Error(c, err)
+		return
+	}
+	respondMrc721OK(c, collectionPageData(page))
+}
+
+func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
+	size, err := parseListSize(c.Query("size"))
+	if err != nil {
+		respondMrc721Error(c, err)
+		return
+	}
+	page, err := a.CollectionsIssuedByAddress(
+		strings.TrimSpace(c.Query("address")),
+		strings.TrimSpace(c.Query("cursor")),
+		size,
+	)
+	if err != nil {
+		if errors.Is(err, ErrInvalidParameter) {
+			respondMrc721Err(c, mrc721InvalidParamCode, "invalid parameter: address")
+			return
+		}
+		respondMrc721Error(c, err)
+		return
+	}
+	respondMrc721OK(c, collectionPageData(page))
+}
+
+func collectionPageData(page *CollectionPage) collectionListData {
+	data := collectionListData{List: []*collectionRow{}, Total: 0}
+	if page == nil {
+		return data
+	}
+	data.Total = page.Total
+	data.Cursor = page.NextCursor
+	for _, rec := range page.List {
+		data.List = append(data.List, collectionRowFrom(rec))
+	}
+	return data
+}
