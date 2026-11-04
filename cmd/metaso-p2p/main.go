@@ -18,6 +18,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
@@ -242,6 +243,19 @@ func main() {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {
 			mrc721Agg = mrc721Candidate
+		}
+		// mrc721nft is the native /nft/mrc721 NFT aggregate (collections,
+		// items, transfer provenance) ported from man-p2p, serving the
+		// manapi-compatible /api/mrc721 collection/item query surface. It
+		// joins the registry only when enabled: until the historical
+		// bootstrap has run, its read models are empty and the manapi-
+		// refreshed mrc721 collection views remain the serving source for
+		// the search endpoints.
+		if cfg.Mrc721.Nft.Enabled {
+			nftCandidate := &mrc721nft.Aggregator{}
+			if err := aggRegistry.Register(nftCandidate); err != nil {
+				log.Printf("WARNING: mrc721nft aggregator init failed: %v", err)
+			}
 		}
 		// preference is the open comparison-feedback read model over
 		// /protocols/preference/feedback, serving

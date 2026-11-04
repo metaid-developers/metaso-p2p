@@ -29,9 +29,16 @@ type PinInscription struct {
 	GenesisHeight      int64  `json:"genesisHeight"`
 	Timestamp          int64  `json:"timestamp"`
 	Output             string `json:"output"`
+	OutputValue        int64  `json:"outputValue,omitempty"`
 	IsTransfered       bool   `json:"isTransfered"`
 	OriginalId         string `json:"originalId,omitempty"`
 	Host               string `json:"host"`
+	// IsOpReturn marks pins parsed from an MVC OP_RETURN output. The MVC
+	// witness envelope is a separate parse path that man-p2p's MVC adapter
+	// never feeds into its pin store, so the mrc721nft aggregate consumes
+	// only OP_RETURN-sourced MVC pins to keep its pin universe identical to
+	// man-p2p's.
+	IsOpReturn bool `json:"isOpReturn,omitempty"`
 }
 
 // PinEvent represents a parsed pin emitted by the indexer engine.

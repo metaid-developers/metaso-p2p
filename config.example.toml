@@ -593,3 +593,15 @@ mempoolDedupeTTL = "30m"
 # mrc721CollectionPageSize = 100
 # Env: METASO_P2P_MRC721_COLLECTION_MANAPI_BASE_URL
 # mrc721CollectionManapiBaseUrl = "https://manapi.metaid.io"
+
+# ---------------------------------------------------------------------------
+# [mrc721]  Native /nft/mrc721 NFT aggregate (ported from man-p2p)
+# ---------------------------------------------------------------------------
+# Collections, items and transfer provenance indexed natively from the chain
+# feed; serves the manapi-compatible /api/mrc721 collection/item query
+# surface so downstream consumers can switch their base URL from man-p2p to
+# MetaSo-P2P unchanged. Keep disabled until the historical bootstrap has run
+# (cmd/metaso-p2p-mrc721-nft-backfill): until then the read models are empty
+# and the collection search keeps its manapi-refreshed source.
+# Env: METASO_P2P_MRC721_NFT_ENABLED
+# mrc721NftEnabled = false

@@ -123,6 +123,10 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			pin.MetaId = address
 			pin.GlobalMetaId = address
 			pin.Output = fmt.Sprintf("%s:%d", pinHash, ownerOutIdx)
+			if ownerOutIdx >= 0 && ownerOutIdx < len(tx.TxOut) {
+				pin.OutputValue = tx.TxOut[ownerOutIdx].Value
+			}
+			pin.IsOpReturn = true
 			_ = outIdx
 
 			pins = append(pins, pin)
