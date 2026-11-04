@@ -121,6 +121,10 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// Start ZMQ listeners
 	go e.zmqLoop(runCtx)
+
+	// Start the periodic full-mempool transfer scan (unconfirmed NFT spend
+	// visibility for TransferConsumer aggregators).
+	go e.mempoolTransferLoop(runCtx)
 }
 
 // Stop gracefully stops the engine.
@@ -195,31 +199,26 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 	chainName := entry.chain.Name()
 
 	for h := fromHeight; h <= toHeight; h++ {
-		pins, txIDs, err := entry.indexer.CatchPins(h)
+		pins, _, err := entry.indexer.CatchPins(h)
 		if err != nil {
 			log.Printf("[indexer] %s block %d: CatchPins error: %v", chainName, h, err)
 			continue
 		}
 
-		if len(pins) == 0 {
-			entry.lastHeight = h
-			e.persistHeight(chainName, h)
-			continue
-		}
-
-		log.Printf("[indexer] %s block %d: %d pins parsed", chainName, h, len(pins))
-
-		// Route confirmed pins to aggregators
 		var events []*aggregator.NotifyEvent
-		for _, p := range pins {
-			evt := e.registry.RouteBlockPin(p)
-			events = append(events, evt...)
+		if len(pins) > 0 {
+			log.Printf("[indexer] %s block %d: %d pins parsed", chainName, h, len(pins))
+
+			// Route confirmed pins to aggregators
+			for _, p := range pins {
+				evt := e.registry.RouteBlockPin(p)
+				events = append(events, evt...)
+			}
 		}
 
-		// Handle transfers if we have txIDs
-		if len(txIDs) > 0 {
-			e.processTransfers(entry, txIDs)
-		}
+		// Detect spends of tracked outputs every block — a transfer block
+		// can contain no new pins at all (plain UTXO spends).
+		e.processTransfers(entry, h)
 
 		entry.lastHeight = h
 		e.persistHeight(chainName, h)
@@ -233,11 +232,111 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 	}
 }
 
-// processTransfers detects spent pins and notifies aggregators.
-func (e *Engine) processTransfers(entry *chainEntry, txIDs []string) {
-	// Build idMap from stored pins that reference these outputs
-	// In a full implementation, this queries the aggregator's Pebble DB
-	_ = txIDs
+// processTransfers feeds the block's spends of tracked outputs to the
+// TransferConsumer aggregators. The chain adapter performs the detection
+// (chain.TransferDetector, optional per chain); the tracked-output set
+// comes from the consumers themselves. Chains without a transfer detector
+// and runs without consumers are no-ops.
+func (e *Engine) processTransfers(entry *chainEntry, height int64) {
+	consumers := e.registry.TransferConsumers()
+	if len(consumers) == 0 {
+		return
+	}
+	detector, ok := entry.indexer.(chain.TransferDetector)
+	if !ok {
+		return
+	}
+	idMap := make(map[string]string)
+	for _, consumer := range consumers {
+		for outpoint, tracked := range consumer.TrackedOutputs() {
+			if tracked.Owner != "" {
+				idMap[outpoint] = tracked.Owner
+			}
+		}
+	}
+	if len(idMap) == 0 {
+		return
+	}
+	notices, err := detector.DetectTransfers(idMap)
+	if err != nil {
+		log.Printf("[indexer] %s block %d: DetectTransfers error: %v", entry.chain.Name(), height, err)
+		return
+	}
+	if len(notices) == 0 {
+		return
+	}
+	chainName := entry.chain.Name()
+	log.Printf("[indexer] %s block %d: %d tracked-output spends", chainName, height, len(notices))
+	for _, consumer := range consumers {
+		consumer.HandleBlockTransfers(chainName, height, notices)
+	}
+}
+
+// mempoolTransferScanInterval mirrors man-p2p's periodic full-mempool sync
+// cadence for unconfirmed NFT spend visibility.
+const mempoolTransferScanInterval = 30 * time.Second
+
+// mempoolTransferLoop periodically scans the FULL mempool of each chain
+// with a MempoolTransferDetector for spends of tracked outputs. Full-list
+// sync (not incremental) is what the consumers' reconcile correctness
+// relies on: a pending spend not observed this round is settled/dropped.
+func (e *Engine) mempoolTransferLoop(ctx context.Context) {
+	ticker := time.NewTicker(mempoolTransferScanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.processMempoolTransfers()
+		}
+	}
+}
+
+// processMempoolTransfers runs one full-mempool spend-scan round for every
+// chain with a MempoolTransferDetector. A failed mempool fetch skips the
+// chain entirely — reconcile must never run on a round whose tx list was
+// not fully observed (it would evict live pendings).
+func (e *Engine) processMempoolTransfers() {
+	consumers := e.registry.TransferConsumers()
+	if len(consumers) == 0 {
+		return
+	}
+	e.mu.RLock()
+	entries := make([]*chainEntry, 0, len(e.chains))
+	for _, entry := range e.chains {
+		entries = append(entries, entry)
+	}
+	e.mu.RUnlock()
+
+	for _, entry := range entries {
+		detector, ok := entry.indexer.(chain.MempoolTransferDetector)
+		if !ok {
+			continue
+		}
+		idMap := make(map[string]string)
+		for _, consumer := range consumers {
+			for outpoint, tracked := range consumer.TrackedOutputs() {
+				if tracked.Owner != "" {
+					idMap[outpoint] = tracked.Owner
+				}
+			}
+		}
+		txList, err := entry.chain.GetMempoolTransactionList()
+		if err != nil {
+			log.Printf("[indexer] %s mempool transfer scan: fetch error: %v", entry.chain.Name(), err)
+			continue
+		}
+		notices, err := detector.DetectMempoolSpends(idMap, txList)
+		if err != nil {
+			log.Printf("[indexer] %s mempool transfer scan: detect error: %v", entry.chain.Name(), err)
+			continue
+		}
+		chainName := entry.chain.Name()
+		for _, consumer := range consumers {
+			consumer.HandleMempoolSpends(chainName, notices)
+		}
+	}
 }
 
 // pollMempoolOnce fetches raw mempool transactions from each registered chain
@@ -483,4 +582,26 @@ func (e *Engine) zmqLoop(ctx context.Context) {
 			e.pollMempoolOnce()
 		}
 	}
+}
+
+// TransactionStatus resolves the confirmation facts of one transaction on
+// the named chain (the data source behind GET /api/tx/status). Unknown
+// chains and chains without a TxStatusProvider report ok=false; RPC errors
+// surface as errors and the API layer answers found:false/unknown.
+func (e *Engine) TransactionStatus(chainName, txid string) (ok bool, confirmed bool, confirmations int64, blockHash string, height int64, err error) {
+	if e == nil {
+		return false, false, 0, "", 0, nil
+	}
+	e.mu.RLock()
+	entry := e.chains[chainName]
+	e.mu.RUnlock()
+	if entry == nil {
+		return false, false, 0, "", 0, nil
+	}
+	provider, ok := entry.chain.(chain.TxStatusProvider)
+	if !ok {
+		return false, false, 0, "", 0, nil
+	}
+	confirmed, confirmations, blockHash, height, err = provider.GetTransactionStatus(txid)
+	return true, confirmed, confirmations, blockHash, height, err
 }

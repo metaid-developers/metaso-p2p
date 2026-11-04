@@ -29,9 +29,16 @@ type PinInscription struct {
 	GenesisHeight      int64  `json:"genesisHeight"`
 	Timestamp          int64  `json:"timestamp"`
 	Output             string `json:"output"`
+	OutputValue        int64  `json:"outputValue,omitempty"`
 	IsTransfered       bool   `json:"isTransfered"`
 	OriginalId         string `json:"originalId,omitempty"`
 	Host               string `json:"host"`
+	// IsOpReturn marks pins parsed from an MVC OP_RETURN output. The MVC
+	// witness envelope is a separate parse path that man-p2p's MVC adapter
+	// never feeds into its pin store, so the mrc721nft aggregate consumes
+	// only OP_RETURN-sourced MVC pins to keep its pin universe identical to
+	// man-p2p's.
+	IsOpReturn bool `json:"isOpReturn,omitempty"`
 }
 
 // PinEvent represents a parsed pin emitted by the indexer engine.
@@ -52,6 +59,49 @@ type NotifyEvent struct {
 	GroupId      string      // target group (for room broadcast)
 	PinId        string      // source pin for delivery tracing
 	Payload      interface{} // notification body
+}
+
+// TransferNotice describes one detected spend of a tracked output, as
+// derived by a chain adapter's transfer detection (mirror of man-p2p's
+// pin.PinTransferInfo). Output/Location use the chain's ledger txid
+// convention (for MVC version>=10 txs the reordered hash).
+type TransferNotice struct {
+	FromAddress string
+	ToAddress   string // new owner address ("" on unresolvable burn)
+	Output      string // "<txid>:<vout>" the NFT now sits at
+	OutputValue int64  // sat value of that output
+	Offset      uint64
+	Location    string // spend tx pointer (ledger convention)
+	Meltdown    bool
+}
+
+// TrackedOutput is one spendable output an aggregator currently tracks,
+// keyed by outpoint "txid:vout" in the map returned by TransferConsumer.
+type TrackedOutput struct {
+	Owner string // current owning address
+	Ref   string // aggregator-local reference (e.g. the item pin id)
+}
+
+// TransferConsumer is an optional Aggregator extension for modules that
+// track spendable outputs (NFT-style UTXO ownership). The engine collects
+// the tracked outputs to feed the chain adapter's transfer detection and
+// routes the detected spends back per confirmed block.
+type TransferConsumer interface {
+	// TrackedOutputs returns the outputs currently tracked, keyed by
+	// outpoint "txid:vout" → owning address.
+	TrackedOutputs() map[string]TrackedOutput
+
+	// HandleBlockTransfers consumes the spends detected in one confirmed
+	// block (keyed by spent outpoint). Notices for outputs this consumer
+	// does not track are ignored.
+	HandleBlockTransfers(chainName string, height int64, transfers map[string]TransferNotice)
+
+	// HandleMempoolSpends consumes one full mempool-scan round (engine
+	// ticker). Each call is a complete round: the consumer records the
+	// observed unconfirmed spends (advisory pending channel) and reconciles
+	// away its pendings for this chain that the round no longer observes
+	// (confirmed → settled by the block hook; dropped/RBF → cleaned).
+	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
 }
 
 // Aggregator is the interface each business module must implement.
@@ -136,4 +186,16 @@ func (r *Registry) RouteMempoolPin(pin *PinInscription) []*NotifyEvent {
 		}
 	}
 	return events
+}
+
+// TransferConsumers returns the registered aggregators that implement the
+// optional TransferConsumer extension (spendable-output trackers).
+func (r *Registry) TransferConsumers() []TransferConsumer {
+	var consumers []TransferConsumer
+	for _, a := range r.aggregators {
+		if consumer, ok := a.(TransferConsumer); ok {
+			consumers = append(consumers, consumer)
+		}
+	}
+	return consumers
 }

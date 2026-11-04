@@ -75,5 +75,37 @@ type Indexer interface {
 	ZmqTopics() []string
 }
 
+// TransferDetector is an optional Indexer extension for chains whose
+// indexer can detect spends of tracked outputs within the block last
+// fetched by CatchPins. The engine uses it when TransferConsumer
+// aggregators are registered; chains that do not implement it simply skip
+// transfer detection (mirror of man-p2p's per-chain CatchTransfer).
+type TransferDetector interface {
+	// DetectTransfers scans the current block for spends of the tracked
+	// outputs. idMap maps outpoint "txid:vout" → current owner address;
+	// the result is keyed by the same outpoints.
+	DetectTransfers(idMap map[string]string) (map[string]aggregator.TransferNotice, error)
+}
+
+// MempoolTransferDetector is an optional Indexer extension mirroring
+// man-p2p's MempoolSpends: detect spends of tracked outputs across the
+// CURRENT mempool transaction list (unconfirmed visibility only — the
+// confirmed path is TransferDetector). Meltdown is not evaluated at the
+// mempool stage; the confirmed hook decides authoritatively.
+type MempoolTransferDetector interface {
+	// DetectMempoolSpends scans txList (chain-specific items, e.g.
+	// *wire.MsgTx) for spends of the tracked outputs.
+	DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error)
+}
+
+// TxStatusProvider is an optional Chain extension exposing the generic
+// transaction-status lookup behind GET /api/tx/status (mirror of man-p2p's
+// ChainAdapter.GetTransactionStatus). A tx with no confirmations and no
+// block hash is unconfirmed; RPC failures surface as errors and the API
+// layer answers found:false / txStatus:unknown.
+type TxStatusProvider interface {
+	GetTransactionStatus(txid string) (confirmed bool, confirmations int64, blockHash string, height int64, err error)
+}
+
 // ZMQHandler is called by the indexer engine when a ZMQ message arrives.
 type ZMQHandler func(topic string, data []byte, sequence uint64)

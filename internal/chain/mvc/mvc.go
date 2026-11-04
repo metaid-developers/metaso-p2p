@@ -161,3 +161,29 @@ func NetParams(testNet string) *chaincfg.Params {
 		return &chaincfg.MainNetParams
 	}
 }
+
+// GetTransactionStatus implements chain.TxStatusProvider: confirmation
+// facts for the generic /api/tx/status lookup (mirror of man-p2p's
+// MicroVisionChain.GetTransactionStatus). A tx with no confirmations and
+// no block hash is unconfirmed.
+func (c *Chain) GetTransactionStatus(txid string) (confirmed bool, confirmations int64, blockHash string, height int64, err error) {
+	hash, err := chainhash.NewHashFromStr(txid)
+	if err != nil {
+		return
+	}
+	tx, err := c.client.GetRawTransactionVerbose(hash)
+	if err != nil {
+		return
+	}
+	confirmations = int64(tx.Confirmations)
+	blockHash = tx.BlockHash
+	confirmed = confirmations > 0 && blockHash != ""
+	if confirmed {
+		if bh, bErr := chainhash.NewHashFromStr(blockHash); bErr == nil {
+			if blk, vErr := c.client.GetBlockVerbose(bh); vErr == nil {
+				height = blk.Height
+			}
+		}
+	}
+	return
+}

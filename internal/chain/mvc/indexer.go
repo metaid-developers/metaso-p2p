@@ -23,7 +23,17 @@ type Indexer struct {
 	chainParams *chaincfg.Params
 	chain       *Chain
 	block       *wire.MsgBlock // current block being processed (for transfer detection)
+
+	// valueOfSpent overrides the RPC spent-output value lookup (test seam).
+	valueOfSpent func(txid string, vout int) (int64, error)
 }
+
+// Transfer-detection constants, mirroring man-p2p's pin package
+// (StandardPinUtxoValue / MeltdownMinPinCount).
+const (
+	standardPinUtxoValue = 546
+	meltdownMinPinCount  = 3
+)
 
 func NewIndexer(chain *Chain, params *chaincfg.Params) *Indexer {
 	return &Indexer{
@@ -123,6 +133,10 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			pin.MetaId = address
 			pin.GlobalMetaId = address
 			pin.Output = fmt.Sprintf("%s:%d", pinHash, ownerOutIdx)
+			if ownerOutIdx >= 0 && ownerOutIdx < len(tx.TxOut) {
+				pin.OutputValue = tx.TxOut[ownerOutIdx].Value
+			}
+			pin.IsOpReturn = true
 			_ = outIdx
 
 			pins = append(pins, pin)
@@ -496,24 +510,230 @@ func extractCreatorAddress(tx *wire.MsgTx, params *chaincfg.Params) string {
 	return ""
 }
 
-func (idx *Indexer) CatchTransfer(idMap map[string]string) (map[string]any, error) {
+// DetectTransfers scans the block last fetched by CatchPins for spends of
+// the tracked outputs (chain.TransferDetector). Semantics mirror man-p2p's
+// MVC CatchTransfer:
+//
+//   - meltdown detection per transaction (≥3 tracked 546-sat inputs, one
+//     output, same addresses),
+//   - the NFT lands at output 0 when the spent outpoint is input 0 (or the
+//     tx is single-input), otherwise a cumulative input-value walk locates
+//     the carrying output,
+//   - all pointers use the ledger txid (mvcMetaIDTxHash) — sha256d pointers
+//     are unresolvable on-chain for version>=10 txs and break downstream
+//     transfer construction with [-25] Missing inputs.
+func (idx *Indexer) DetectTransfers(idMap map[string]string) (map[string]aggregator.TransferNotice, error) {
+	notices := make(map[string]aggregator.TransferNotice)
 	if idx.block == nil {
-		return nil, nil
+		// CatchPins assigns the block on its normal path; a nil block means
+		// an abnormal call order — skip this block's transfer detection
+		// instead of nil-panicking.
+		return notices, nil
 	}
-	result := make(map[string]any)
 	for _, tx := range idx.block.Transactions {
+		isMeltdown := idx.isMeltdownTransaction(tx, idMap, idx.spentOutputValue)
 		for _, in := range tx.TxIn {
 			id := fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
-			if fromAddr, ok := idMap[id]; ok {
-				info := idx.getOwnerAddress(id, tx)
-				if info != nil {
-					info["fromAddress"] = fromAddr
-					result[id] = info
-				}
+			fromAddress, ok := idMap[id]
+			if !ok {
+				continue
 			}
+			notice, err := idx.transferOwnerAddress(id, tx)
+			if err != nil || notice == nil {
+				continue
+			}
+			notice.FromAddress = fromAddress
+			notice.Meltdown = isMeltdown
+			notices[id] = *notice
+		}
+	}
+	return notices, nil
+}
+
+// CatchTransfer implements the legacy Indexer interface shape on top of
+// DetectTransfers (kept for interface compatibility; the engine consumes
+// the typed DetectTransfers).
+func (idx *Indexer) CatchTransfer(idMap map[string]string) (map[string]any, error) {
+	notices, err := idx.DetectTransfers(idMap)
+	if err != nil || notices == nil {
+		return nil, err
+	}
+	result := make(map[string]any, len(notices))
+	for id, notice := range notices {
+		result[id] = map[string]any{
+			"fromAddress": notice.FromAddress,
+			"address":     notice.ToAddress,
+			"location":    notice.Location,
+			"output":      notice.Output,
+			"outputValue": notice.OutputValue,
+			"offset":      notice.Offset,
+			"isMeltdown":  notice.Meltdown,
 		}
 	}
 	return result, nil
+}
+
+// DetectMempoolSpends implements chain.MempoolTransferDetector: scan the
+// current mempool transaction list for spends of the tracked outputs
+// (mirror of man-p2p's MempoolSpends). Same derivation as the block path
+// but no meltdown evaluation — the confirmed hook decides authoritatively.
+func (idx *Indexer) DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error) {
+	notices := make(map[string]aggregator.TransferNotice)
+	if len(idMap) == 0 {
+		return notices, nil
+	}
+	for _, item := range txList {
+		tx, ok := item.(*wire.MsgTx)
+		if !ok {
+			continue
+		}
+		for _, in := range tx.TxIn {
+			id := fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+			fromAddress, ok := idMap[id]
+			if !ok {
+				continue
+			}
+			notice, err := idx.transferOwnerAddress(id, tx)
+			if err != nil || notice == nil {
+				continue
+			}
+			notice.FromAddress = fromAddress
+			notices[id] = *notice
+		}
+	}
+	return notices, nil
+}
+
+// transferOwnerAddress derives the new owner/output of a spent outpoint
+// (mirror of man-p2p's GetOWnerAddress). Location is the three-segment
+// "<ledgerTxid>:<vout>:<satOffset>" pointer and Output the spendable
+// "<ledgerTxid>:<vout>".
+func (idx *Indexer) transferOwnerAddress(inputId string, tx *wire.MsgTx) (*aggregator.TransferNotice, error) {
+	ledgerTxid, err := mvcMetaIDTxHash(tx)
+	if err != nil {
+		return nil, err
+	}
+	notice := &aggregator.TransferNotice{}
+	firstInputId := fmt.Sprintf("%s:%d", tx.TxIn[0].PreviousOutPoint.Hash, tx.TxIn[0].PreviousOutPoint.Index)
+	// Fast path: single-input txs or the tracked outpoint IS input 0 — the
+	// NFT lands at output 0.
+	if len(tx.TxIn) == 1 || firstInputId == inputId {
+		class, addresses, _, _ := txscript.ExtractPkScriptAddrs(tx.TxOut[0].PkScript, idx.chainParams)
+		if len(addresses) > 0 {
+			notice.ToAddress = addresses[0].String()
+		} else if class.String() == "nulldata" {
+			notice.ToAddress = hex.EncodeToString(tx.TxOut[0].PkScript)
+		}
+		notice.Location = fmt.Sprintf("%s:%d:%d", ledgerTxid, 0, 0)
+		notice.Offset = 0
+		notice.Output = fmt.Sprintf("%s:%d", ledgerTxid, 0)
+		notice.OutputValue = tx.TxOut[0].Value
+		return notice, nil
+	}
+	// Slow path: walk the inputs accumulating their values (RPC lookups)
+	// until the running total exceeds the outputs — the output where that
+	// happens carries the tracked value through.
+	totalOutputValue := int64(0)
+	for _, out := range tx.TxOut {
+		totalOutputValue += out.Value
+	}
+	inputValue := int64(0)
+	for _, in := range tx.TxIn {
+		id := fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+		if id == inputId {
+			break
+		}
+		value, err := idx.spentOutputValue(in.PreviousOutPoint.Hash.String(), int(in.PreviousOutPoint.Index))
+		if err != nil {
+			return nil, errors.New("get value error")
+		}
+		inputValue += value
+		if inputValue > totalOutputValue {
+			return nil, nil
+		}
+	}
+	outputValue := int64(0)
+	for i, out := range tx.TxOut {
+		outputValue += out.Value
+		if outputValue > inputValue {
+			class, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, idx.chainParams)
+			if len(addresses) > 0 {
+				notice.ToAddress = addresses[0].String()
+			} else if class.String() == "nulldata" {
+				notice.ToAddress = hex.EncodeToString(out.PkScript)
+			}
+			notice.Output = fmt.Sprintf("%s:%d", ledgerTxid, i)
+			notice.Location = fmt.Sprintf("%s:%d", notice.Output, out.Value-(outputValue-inputValue))
+			notice.Offset = uint64(i)
+			notice.OutputValue = out.Value
+			break
+		}
+	}
+	return notice, nil
+}
+
+// isMeltdownTransaction mirrors man-p2p's IsMeltdownTransaction: ≥3 tracked
+// 546-sat PIN inputs, exactly one output, and all tracked PIN-input
+// addresses equal to the output address. valueOf is the spent-output value
+// lookup (RPC in production, in-memory in tests).
+func (idx *Indexer) isMeltdownTransaction(tx *wire.MsgTx, idMap map[string]string, valueOf func(txid string, vout int) (int64, error)) bool {
+	// Condition 2: exactly one output.
+	if len(tx.TxOut) != 1 {
+		return false
+	}
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(tx.TxOut[0].PkScript, idx.chainParams)
+	if len(addresses) == 0 {
+		return false
+	}
+	outAddress := addresses[0].String()
+	if outAddress == "" {
+		return false
+	}
+	pinUtxoCount := 0
+	allSameAddress := true
+	for _, in := range tx.TxIn {
+		id := fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+		fromAddress, ok := idMap[id]
+		if !ok {
+			continue
+		}
+		value, err := valueOf(in.PreviousOutPoint.Hash.String(), int(in.PreviousOutPoint.Index))
+		if err == nil && value == standardPinUtxoValue {
+			pinUtxoCount++
+			if fromAddress != outAddress {
+				allSameAddress = false
+			}
+		}
+	}
+	return pinUtxoCount >= meltdownMinPinCount && allSameAddress
+}
+
+// spentOutputValue looks up the sat value of a spent output via the node
+// RPC (mirror of man-p2p's GetValueByTx).
+func (idx *Indexer) spentOutputValue(txid string, vout int) (int64, error) {
+	if idx.valueOfSpent != nil {
+		return idx.valueOfSpent(txid, vout)
+	}
+	if idx.chain == nil {
+		return 0, errors.New("mvc chain client not set")
+	}
+	rawTx, err := idx.chain.GetTransaction(txid)
+	if err != nil {
+		return 0, err
+	}
+	var tx *wire.MsgTx
+	switch t := rawTx.(type) {
+	case *wire.MsgTx:
+		tx = t
+	case interface{ MsgTx() *wire.MsgTx }:
+		tx = t.MsgTx()
+	default:
+		return 0, errors.New("unexpected transaction type")
+	}
+	if vout < 0 || vout >= len(tx.TxOut) {
+		return 0, errors.New("vout out of range")
+	}
+	return tx.TxOut[vout].Value, nil
 }
 
 func (idx *Indexer) GetAddress(pkScript []byte) string {
@@ -526,18 +746,4 @@ func (idx *Indexer) GetAddress(pkScript []byte) string {
 
 func (idx *Indexer) ZmqTopics() []string {
 	return []string{"rawtx", "hashblock"}
-}
-
-// getOwnerAddress finds the new owner of a spent output.
-func (idx *Indexer) getOwnerAddress(outputPoint string, tx *wire.MsgTx) map[string]any {
-	for outIdx, out := range tx.TxOut {
-		_, addresses, _, _ := txscript.ExtractPkScriptAddrs(out.PkScript, idx.chainParams)
-		if len(addresses) > 0 {
-			return map[string]any{
-				"location": fmt.Sprintf("%s:%d", tx.TxHash().String(), outIdx),
-				"address":  addresses[0].String(),
-			}
-		}
-	}
-	return nil
 }

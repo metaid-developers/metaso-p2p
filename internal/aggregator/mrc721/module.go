@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
 	"github.com/metaid-developers/metaso-p2p/internal/cache"
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
@@ -94,6 +95,46 @@ type Aggregator struct {
 	store    *storage.PebbleStore
 	notifyCh chan *aggregator.NotifyEvent
 	mu       sync.Mutex // serialises ingest write paths (live + backfill replay)
+
+	// nativeSource, when set, is the mrc721nft aggregate the collection
+	// search / issuer endpoints serve from instead of the upstream-refreshed
+	// read model. Wired at startup only when the native aggregate is
+	// enabled (i.e. its store has been bootstrapped); the wire contract is
+	// unchanged either way.
+	nativeSource NativeCollectionSource
+}
+
+// NativeCollectionSource abstracts the native mrc721nft collection read
+// model for the search / issuer endpoints. Rows carry the collectionRow
+// wire shape.
+type NativeCollectionSource interface {
+	SearchNativeCollections(keyword, issuer, cursor string, size int) ([]*mrc721nft.SearchRow, int, string, error)
+	NativeCollectionsIssued(address, cursor string, size int) ([]*mrc721nft.SearchRow, int, string, error)
+}
+
+// SetNativeCollectionSource hands the search / issuer endpoints to the
+// native read model (called from the daemon startup after both aggregators
+// registered).
+func (a *Aggregator) SetNativeCollectionSource(src NativeCollectionSource) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.nativeSource = src
+}
+
+// nativeCollectionSource snapshots the optional source for a request.
+func (a *Aggregator) nativeCollectionSource() NativeCollectionSource {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.nativeSource
+}
+
+// nativeCollectionListData is the native-source variant of
+// collectionListData (identical JSON shape; rows come pre-shaped from
+// mrc721nft).
+type nativeCollectionListData struct {
+	List   []*mrc721nft.SearchRow `json:"list"`
+	Total  int                    `json:"total"`
+	Cursor string                 `json:"cursor,omitempty"`
 }
 
 func (a *Aggregator) Name() string { return Namespace }

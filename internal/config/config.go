@@ -46,6 +46,20 @@ type Mrc721Config struct {
 	// model consumed by /api/mrc721/collection/search and
 	// /api/mrc721/address/collections-issued (disabled by default).
 	Collection Mrc721CollectionConfig `json:"collection"`
+	// Nft enables the native /nft/mrc721 aggregate (collections, items,
+	// transfer provenance ported from man-p2p), which serves the
+	// manapi-compatible /api/mrc721 collection/item query surface. Keep it
+	// disabled until the historical bootstrap has run: the read models are
+	// empty and the collection search keeps its manapi-refreshed source.
+	Nft Mrc721NftConfig `json:"nft"`
+}
+
+// Mrc721NftConfig configures the native /nft/mrc721 NFT aggregate.
+type Mrc721NftConfig struct {
+	Enabled bool `json:"enabled"`
+	// MANAPIBaseURL is the manapi-compatible upstream the offline bootstrap
+	// (cmd/metaso-p2p-mrc721-nft-backfill) hydrates the aggregate from.
+	MANAPIBaseURL string `json:"manapiBaseUrl"`
 }
 
 // Mrc721SellBackfillConfig configures the startup backfill of the
@@ -432,6 +446,10 @@ func Default() Config {
 				PageSize:      100,
 				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
+			Nft: Mrc721NftConfig{
+				Enabled:       false,
+				MANAPIBaseURL: "https://manapi.metaid.io",
+			},
 		},
 	}
 }
@@ -580,6 +598,9 @@ func Load() (Config, error) {
 	applyDurationEnv("METASO_P2P_MRC721_COLLECTION_TIMEOUT", &cfg.Mrc721.Collection.Timeout)
 	applyIntEnv("METASO_P2P_MRC721_COLLECTION_PAGE_SIZE", &cfg.Mrc721.Collection.PageSize)
 	applyStringEnv("METASO_P2P_MRC721_COLLECTION_MANAPI_BASE_URL", &cfg.Mrc721.Collection.MANAPIBaseURL)
+
+	applyBoolEnv("METASO_P2P_MRC721_NFT_ENABLED", &cfg.Mrc721.Nft.Enabled)
+	applyStringEnv("METASO_P2P_MRC721_NFT_MANAPI_BASE_URL", &cfg.Mrc721.Nft.MANAPIBaseURL)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
