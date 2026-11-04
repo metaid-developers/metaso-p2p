@@ -104,6 +104,17 @@ See [`docs/specs/2026-05-28-bot-hub-skill-service-aggregation-api.md`](docs/spec
 See [`docs/specs/2026-06-07-bot-homepage-api.md`](docs/specs/2026-06-07-bot-homepage-api.md) for the full v1 contract.
 See [`docs/BOT_HOMEPAGE_V3_CONSUMER_GUIDE.md`](docs/BOT_HOMEPAGE_V3_CONSUMER_GUIDE.md) for a lightweight v3 consumer guide.
 
+### MRC-721 NFT Index
+- `GET /api/mrc721/sell/intents?collectionPinId=&collectionName=&itemPinId=&sellerAddress=&active=&cursor=&size=` — latest-wins sell-intent declarations from `/protocols/mrc721sell`
+- `GET /api/mrc721/sell/intent/info?itemPinId=` — one item's current sell intent
+- `GET /api/mrc721/collection/search?keyword=&issuer=&cursor=&size=` — MRC-721 collection search (keyword / issuer) over the manapi-refreshed collection read model
+- `GET /api/mrc721/address/collections-issued?address=&cursor=&size=` — collections issued by an address
+
+See [`docs/specs/2026-11-04-mrc721-sell-collection-api.md`](docs/specs/2026-11-04-mrc721-sell-collection-api.md) for the full contract,
+ingestion architecture, and the `METASO_P2P_MRC721_*` configuration. The
+sell index is built live from chain pins plus the idempotent
+`go run ./cmd/metaso-p2p-mrc721-backfill` replay.
+
 ## Development
 
 ```bash

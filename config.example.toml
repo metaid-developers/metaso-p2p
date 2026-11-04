@@ -560,3 +560,36 @@ mempoolDedupeTTL = "30m"
 # Publisher-identity check on metaprotocol modify pins (default true).
 # Env: METASO_P2P_PROTOCOL_OWNER_BOUND_MODIFIES
 # protocolOwnerBoundModifies = true
+
+# ---------------------------------------------------------------------------
+# [mrc721]  MRC-721 business indexes (sell-intent index + collection views)
+# ---------------------------------------------------------------------------
+# docs/specs/2026-11-04-mrc721-sell-collection-api.md
+#
+# Sell-intent declaration replay at daemon startup (MANAPI -> latest-wins
+# read model behind /api/mrc721/sell/*). The chain-driven live path needs
+# no config; this replay backfills history.
+# Env: METASO_P2P_MRC721_SELL_BACKFILL_ENABLED
+# mrc721SellBackfillEnabled = false
+# Env: METASO_P2P_MRC721_SELL_BACKFILL_LOOKBACK
+# mrc721SellBackfillLookback = "1440h"
+# Env: METASO_P2P_MRC721_SELL_BACKFILL_TIMEOUT
+# mrc721SellBackfillTimeout = "2m"
+# Env: METASO_P2P_MRC721_SELL_BACKFILL_PAGE_SIZE
+# mrc721SellBackfillPageSize = 100
+# Env: METASO_P2P_MRC721_SELL_BACKFILL_MANAPI_BASE_URL
+# mrc721SellBackfillManapiBaseUrl = "https://manapi.metaid.io"
+#
+# Collection read-model refresh loop behind /api/mrc721/collection/search
+# and /api/mrc721/address/collections-issued (full pageList sweep with
+# upsert by pinid).
+# Env: METASO_P2P_MRC721_COLLECTION_ENABLED
+# mrc721CollectionEnabled = false
+# Env: METASO_P2P_MRC721_COLLECTION_SYNC_INTERVAL
+# mrc721CollectionSyncInterval = "10m"
+# Env: METASO_P2P_MRC721_COLLECTION_TIMEOUT
+# mrc721CollectionTimeout = "1m"
+# Env: METASO_P2P_MRC721_COLLECTION_PAGE_SIZE
+# mrc721CollectionPageSize = 100
+# Env: METASO_P2P_MRC721_COLLECTION_MANAPI_BASE_URL
+# mrc721CollectionManapiBaseUrl = "https://manapi.metaid.io"
