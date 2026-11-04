@@ -78,7 +78,17 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 
 // RegisterRoutes mounts the manapi-compatible MRC-721 collection/item query
 // API on the given group (the /api group in the daemon router; the /api
-// prefix is added by the caller). Handlers arrive with the query-API
-// milestone; the aggregate ingests regardless of route availability.
+// prefix is added by the caller). Paths/params/response shapes mirror
+// man-p2p's /api/mrc721 surface; the sibling mrc721 package's sell/search
+// routes coexist (disjoint static children).
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
+	group := router.Group("/mrc721")
+	group.GET("/collection/pageList", a.handleCollectionPageList)
+	group.GET("/collection/info", a.handleCollectionInfo)
+	group.GET("/collection/items/pageList", a.handleCollectionItemsPageList)
+	group.GET("/address/collection", a.handleAddressCollection)
+	group.GET("/address/item", a.handleAddressItem)
+	group.GET("/item/info", a.handleItemInfo)
+	group.GET("/item/transfers", a.handleItemTransfers)
+	group.GET("/item/verify", a.handleItemVerify)
 }
