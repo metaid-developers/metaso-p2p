@@ -44,6 +44,11 @@ func (a *Aggregator) replayOne(ctx context.Context, client *UpstreamClient, pinI
 	if item, err := client.ItemInfo(ctx, pinId); err == nil && item != nil && item.ItemPinId == pinId {
 		col, err := a.ensureCollection(ctx, client, item.CollectionPinId)
 		if err != nil {
+			if errors.Is(err, ErrUpstreamNotFound) {
+				// Upstream inconsistency: the item exists but its collection
+				// does not — nothing to anchor the item to.
+				return ReplayResult{PinId: pinId, Applied: false, Reason: "collection not found"}
+			}
 			return ReplayResult{PinId: pinId, Applied: false, Reason: "upstream error"}
 		}
 		a.mu.Lock()

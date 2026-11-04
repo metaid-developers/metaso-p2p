@@ -107,13 +107,22 @@ See [`docs/BOT_HOMEPAGE_V3_CONSUMER_GUIDE.md`](docs/BOT_HOMEPAGE_V3_CONSUMER_GUI
 ### MRC-721 NFT Index
 - `GET /api/mrc721/sell/intents?collectionPinId=&collectionName=&itemPinId=&sellerAddress=&active=&cursor=&size=` — latest-wins sell-intent declarations from `/protocols/mrc721sell`
 - `GET /api/mrc721/sell/intent/info?itemPinId=` — one item's current sell intent
-- `GET /api/mrc721/collection/search?keyword=&issuer=&cursor=&size=` — MRC-721 collection search (keyword / issuer) over the manapi-refreshed collection read model
+- `GET /api/mrc721/collection/search?keyword=&issuer=&cursor=&size=` — MRC-721 collection search (keyword / issuer) over the native read model (manapi-refreshed read model as fallback)
 - `GET /api/mrc721/address/collections-issued?address=&cursor=&size=` — collections issued by an address
+- `GET /api/mrc721/collection/pageList|info` · `collection/items/pageList` — man-p2p-compatible collection registry / detail / item listing
+- `GET /api/mrc721/address/collection|item` — holder views (per-collection ownnum / held items)
+- `GET /api/mrc721/item/info?pinId=` · `item/transfers?pinId=` · `item/verify?pinId=` — item detail (with mempool pending overlay), provenance history, verify fact set
+- `GET /api/mrc721/admin/replay-pins?pinIds=` — upstream-state repair for individual entities
+- `GET /api/tx/status?chainName=&txid=` — generic transaction confirmation status
 
-See [`docs/specs/2026-11-04-mrc721-sell-collection-api.md`](docs/specs/2026-11-04-mrc721-sell-collection-api.md) for the full contract,
-ingestion architecture, and the `METASO_P2P_MRC721_*` configuration. The
-sell index is built live from chain pins plus the idempotent
-`go run ./cmd/metaso-p2p-mrc721-backfill` replay.
+See [`docs/specs/2026-11-04-mrc721-sell-collection-api.md`](docs/specs/2026-11-04-mrc721-sell-collection-api.md) for the sell/collection-search contract and
+[`docs/specs/2026-11-05-mrc721-nft-api.md`](docs/specs/2026-11-05-mrc721-nft-api.md) for the native
+manapi-compatible NFT aggregate (ingestion semantics, mempool pending channel,
+bootstrap sequence, `METASO_P2P_MRC721_*` configuration). The sell index is
+built live from chain pins plus the idempotent
+`go run ./cmd/metaso-p2p-mrc721-backfill` replay; the NFT aggregate is
+bootstrapped once with `go run ./cmd/metaso-p2p-mrc721-nft-backfill` and
+then lives off chain pins.
 
 ## Development
 

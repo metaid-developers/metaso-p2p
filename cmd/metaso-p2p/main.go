@@ -257,6 +257,13 @@ func main() {
 				log.Printf("WARNING: mrc721nft aggregator init failed: %v", err)
 			} else {
 				nftCandidate.SetReplayClient(mrc721nft.NewUpstreamClient(cfg.Mrc721.Nft.MANAPIBaseURL, http.DefaultClient))
+				// The native aggregate is the bootstrapped read model: hand
+				// the collection search / issuer endpoints over to it (same
+				// wire contract, native source). Only meaningful after the
+				// offline bootstrap has run — the operator enables the gate.
+				if mrc721Agg != nil {
+					mrc721Agg.SetNativeCollectionSource(nftCandidate)
+				}
 			}
 		}
 		// preference is the open comparison-feedback read model over

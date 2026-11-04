@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
 )
 
 // The mrc721 endpoints speak the IDBots MRC-721 client contract exactly:
@@ -264,12 +266,21 @@ func (a *Aggregator) handleCollectionSearch(c *gin.Context) {
 		respondMrc721Error(c, err)
 		return
 	}
-	page, err := a.SearchCollections(
-		c.Query("keyword"),
-		strings.TrimSpace(c.Query("issuer")),
-		strings.TrimSpace(c.Query("cursor")),
-		size,
-	)
+	keyword := c.Query("keyword")
+	issuer := strings.TrimSpace(c.Query("issuer"))
+	cursor := strings.TrimSpace(c.Query("cursor"))
+	if src := a.nativeCollectionSource(); src != nil {
+		// Native read model (mrc721nft aggregate): same wire contract, the
+		// registry serves from its own store instead of the upstream sweep.
+		rows, total, next, err := src.SearchNativeCollections(keyword, issuer, cursor, size)
+		if err != nil {
+			respondMrc721Error(c, err)
+			return
+		}
+		respondMrc721OK(c, nativeCollectionPageData(rows, total, next))
+		return
+	}
+	page, err := a.SearchCollections(keyword, issuer, cursor, size)
 	if err != nil {
 		respondMrc721Error(c, err)
 		return
@@ -283,11 +294,22 @@ func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
 		respondMrc721Error(c, err)
 		return
 	}
-	page, err := a.CollectionsIssuedByAddress(
-		strings.TrimSpace(c.Query("address")),
-		strings.TrimSpace(c.Query("cursor")),
-		size,
-	)
+	address := strings.TrimSpace(c.Query("address"))
+	cursor := strings.TrimSpace(c.Query("cursor"))
+	if src := a.nativeCollectionSource(); src != nil {
+		rows, total, next, err := src.NativeCollectionsIssued(address, cursor, size)
+		if err != nil {
+			if errors.Is(err, mrc721nft.ErrInvalidSearch) {
+				respondMrc721Err(c, mrc721InvalidParamCode, "invalid parameter: address")
+				return
+			}
+			respondMrc721Error(c, err)
+			return
+		}
+		respondMrc721OK(c, nativeCollectionPageData(rows, total, next))
+		return
+	}
+	page, err := a.CollectionsIssuedByAddress(address, cursor, size)
 	if err != nil {
 		if errors.Is(err, ErrInvalidParameter) {
 			respondMrc721Err(c, mrc721InvalidParamCode, "invalid parameter: address")
@@ -297,6 +319,15 @@ func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
 		return
 	}
 	respondMrc721OK(c, collectionPageData(page))
+}
+
+// nativeCollectionPageData wraps native search rows in the same wire shape
+// as collectionPageData ({list,total,cursor} with cursor omitted at end).
+func nativeCollectionPageData(rows []*mrc721nft.SearchRow, total int, next string) nativeCollectionListData {
+	if rows == nil {
+		rows = []*mrc721nft.SearchRow{}
+	}
+	return nativeCollectionListData{List: rows, Total: total, Cursor: next}
 }
 
 func collectionPageData(page *CollectionPage) collectionListData {
