@@ -61,6 +61,42 @@ type NotifyEvent struct {
 	Payload      interface{} // notification body
 }
 
+// TransferNotice describes one detected spend of a tracked output, as
+// derived by a chain adapter's transfer detection (mirror of man-p2p's
+// pin.PinTransferInfo). Output/Location use the chain's ledger txid
+// convention (for MVC version>=10 txs the reordered hash).
+type TransferNotice struct {
+	FromAddress string
+	ToAddress   string // new owner address ("" on unresolvable burn)
+	Output      string // "<txid>:<vout>" the NFT now sits at
+	OutputValue int64  // sat value of that output
+	Offset      uint64
+	Location    string // spend tx pointer (ledger convention)
+	Meltdown    bool
+}
+
+// TrackedOutput is one spendable output an aggregator currently tracks,
+// keyed by outpoint "txid:vout" in the map returned by TransferConsumer.
+type TrackedOutput struct {
+	Owner string // current owning address
+	Ref   string // aggregator-local reference (e.g. the item pin id)
+}
+
+// TransferConsumer is an optional Aggregator extension for modules that
+// track spendable outputs (NFT-style UTXO ownership). The engine collects
+// the tracked outputs to feed the chain adapter's transfer detection and
+// routes the detected spends back per confirmed block.
+type TransferConsumer interface {
+	// TrackedOutputs returns the outputs currently tracked, keyed by
+	// outpoint "txid:vout" → owning address.
+	TrackedOutputs() map[string]TrackedOutput
+
+	// HandleBlockTransfers consumes the spends detected in one confirmed
+	// block (keyed by spent outpoint). Notices for outputs this consumer
+	// does not track are ignored.
+	HandleBlockTransfers(chainName string, height int64, transfers map[string]TransferNotice)
+}
+
 // Aggregator is the interface each business module must implement.
 // The indexer calls HandleBlockPin/HandleMempoolPin for each parsed pin.
 // The HTTP layer calls RegisterRoutes to mount the module's API.
@@ -143,4 +179,16 @@ func (r *Registry) RouteMempoolPin(pin *PinInscription) []*NotifyEvent {
 		}
 	}
 	return events
+}
+
+// TransferConsumers returns the registered aggregators that implement the
+// optional TransferConsumer extension (spendable-output trackers).
+func (r *Registry) TransferConsumers() []TransferConsumer {
+	var consumers []TransferConsumer
+	for _, a := range r.aggregators {
+		if consumer, ok := a.(TransferConsumer); ok {
+			consumers = append(consumers, consumer)
+		}
+	}
+	return consumers
 }

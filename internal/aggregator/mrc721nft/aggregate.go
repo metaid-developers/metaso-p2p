@@ -458,6 +458,7 @@ func (a *Aggregator) mintCommit(collectionName string, col *Collection, mint *Pe
 	if err := a.db.PutOwnerItem(mint.OwnerAddress, collectionName, item.ItemPinId); err != nil {
 		log.Printf("WARNING: mrc721nft put owner item: %v", err)
 	}
+	a.markTrackedDirty()
 	// The new item may be exactly what a staged desc is waiting for.
 	a.drainPendingDescs(collectionName)
 	return true
@@ -512,6 +513,7 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 			log.Printf("WARNING: mrc721nft save item %s on transfer: %v", pinId, err)
 			continue
 		}
+		a.markTrackedDirty()
 		if err := a.db.SaveItemTransfer(&ItemTransfer{
 			ItemPinId:   pinId,
 			FromAddress: info.FromAddress,

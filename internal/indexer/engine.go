@@ -195,31 +195,26 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 	chainName := entry.chain.Name()
 
 	for h := fromHeight; h <= toHeight; h++ {
-		pins, txIDs, err := entry.indexer.CatchPins(h)
+		pins, _, err := entry.indexer.CatchPins(h)
 		if err != nil {
 			log.Printf("[indexer] %s block %d: CatchPins error: %v", chainName, h, err)
 			continue
 		}
 
-		if len(pins) == 0 {
-			entry.lastHeight = h
-			e.persistHeight(chainName, h)
-			continue
-		}
-
-		log.Printf("[indexer] %s block %d: %d pins parsed", chainName, h, len(pins))
-
-		// Route confirmed pins to aggregators
 		var events []*aggregator.NotifyEvent
-		for _, p := range pins {
-			evt := e.registry.RouteBlockPin(p)
-			events = append(events, evt...)
+		if len(pins) > 0 {
+			log.Printf("[indexer] %s block %d: %d pins parsed", chainName, h, len(pins))
+
+			// Route confirmed pins to aggregators
+			for _, p := range pins {
+				evt := e.registry.RouteBlockPin(p)
+				events = append(events, evt...)
+			}
 		}
 
-		// Handle transfers if we have txIDs
-		if len(txIDs) > 0 {
-			e.processTransfers(entry, txIDs)
-		}
+		// Detect spends of tracked outputs every block — a transfer block
+		// can contain no new pins at all (plain UTXO spends).
+		e.processTransfers(entry, h)
 
 		entry.lastHeight = h
 		e.persistHeight(chainName, h)
@@ -233,11 +228,44 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 	}
 }
 
-// processTransfers detects spent pins and notifies aggregators.
-func (e *Engine) processTransfers(entry *chainEntry, txIDs []string) {
-	// Build idMap from stored pins that reference these outputs
-	// In a full implementation, this queries the aggregator's Pebble DB
-	_ = txIDs
+// processTransfers feeds the block's spends of tracked outputs to the
+// TransferConsumer aggregators. The chain adapter performs the detection
+// (chain.TransferDetector, optional per chain); the tracked-output set
+// comes from the consumers themselves. Chains without a transfer detector
+// and runs without consumers are no-ops.
+func (e *Engine) processTransfers(entry *chainEntry, height int64) {
+	consumers := e.registry.TransferConsumers()
+	if len(consumers) == 0 {
+		return
+	}
+	detector, ok := entry.indexer.(chain.TransferDetector)
+	if !ok {
+		return
+	}
+	idMap := make(map[string]string)
+	for _, consumer := range consumers {
+		for outpoint, tracked := range consumer.TrackedOutputs() {
+			if tracked.Owner != "" {
+				idMap[outpoint] = tracked.Owner
+			}
+		}
+	}
+	if len(idMap) == 0 {
+		return
+	}
+	notices, err := detector.DetectTransfers(idMap)
+	if err != nil {
+		log.Printf("[indexer] %s block %d: DetectTransfers error: %v", entry.chain.Name(), height, err)
+		return
+	}
+	if len(notices) == 0 {
+		return
+	}
+	chainName := entry.chain.Name()
+	log.Printf("[indexer] %s block %d: %d tracked-output spends", chainName, height, len(notices))
+	for _, consumer := range consumers {
+		consumer.HandleBlockTransfers(chainName, height, notices)
+	}
 }
 
 // pollMempoolOnce fetches raw mempool transactions from each registered chain

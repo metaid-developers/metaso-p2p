@@ -274,6 +274,7 @@ func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats
 	if err := a.db.AppendCollectionItem(item.CollectionName, item.Number, item.ItemPinId); err != nil {
 		return err
 	}
+	a.markTrackedDirty()
 	stats.Items++
 	return nil
 }

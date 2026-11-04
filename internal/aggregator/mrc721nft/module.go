@@ -40,6 +40,12 @@ type Aggregator struct {
 	db       *nftStore
 	notifyCh chan *aggregator.NotifyEvent
 	mu       sync.Mutex // serialises ingest write paths (live + bootstrap replay)
+
+	// tracked is the lazily rebuilt outpoint → (owner, itemPinId) cache for
+	// the engine's transfer detection; invalidated by trackedDirty after
+	// every write that can change an item's outpoint or owner.
+	tracked      map[string]aggregator.TrackedOutput
+	trackedDirty bool
 }
 
 func (a *Aggregator) Name() string { return Namespace }

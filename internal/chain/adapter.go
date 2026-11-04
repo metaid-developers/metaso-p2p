@@ -75,5 +75,17 @@ type Indexer interface {
 	ZmqTopics() []string
 }
 
+// TransferDetector is an optional Indexer extension for chains whose
+// indexer can detect spends of tracked outputs within the block last
+// fetched by CatchPins. The engine uses it when TransferConsumer
+// aggregators are registered; chains that do not implement it simply skip
+// transfer detection (mirror of man-p2p's per-chain CatchTransfer).
+type TransferDetector interface {
+	// DetectTransfers scans the current block for spends of the tracked
+	// outputs. idMap maps outpoint "txid:vout" → current owner address;
+	// the result is keyed by the same outpoints.
+	DetectTransfers(idMap map[string]string) (map[string]aggregator.TransferNotice, error)
+}
+
 // ZMQHandler is called by the indexer engine when a ZMQ message arrives.
 type ZMQHandler func(topic string, data []byte, sequence uint64)
