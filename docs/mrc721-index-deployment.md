@@ -84,6 +84,14 @@ Deploy sequence (order matters):
    go run ./cmd/metaso-p2p-mrc721-nft-backfill --data-dir <pebble data dir>
    ```
 
+   **Prod lesson (2026-11-05)**: run the bootstrap AS THE SERVICE USER (or
+   `chown -R <service-user> <data-dir>/<namespace>` afterwards). A
+   root-run backfill leaves a root-owned `<data-dir>/mrc721nft/LOCK`, and
+   the daemon (non-root) then fails `Init` with `permission denied` — the
+   aggregator silently drops out of the registry and every
+   `/api/mrc721/*` route 404s until the ownership is fixed and the daemon
+   restarts.
+
 3. Start the daemon with the gate on:
 
    | Env | Default | Purpose |
