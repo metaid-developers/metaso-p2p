@@ -121,6 +121,10 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// Start ZMQ listeners
 	go e.zmqLoop(runCtx)
+
+	// Start the periodic full-mempool transfer scan (unconfirmed NFT spend
+	// visibility for TransferConsumer aggregators).
+	go e.mempoolTransferLoop(runCtx)
 }
 
 // Stop gracefully stops the engine.
@@ -265,6 +269,73 @@ func (e *Engine) processTransfers(entry *chainEntry, height int64) {
 	log.Printf("[indexer] %s block %d: %d tracked-output spends", chainName, height, len(notices))
 	for _, consumer := range consumers {
 		consumer.HandleBlockTransfers(chainName, height, notices)
+	}
+}
+
+// mempoolTransferScanInterval mirrors man-p2p's periodic full-mempool sync
+// cadence for unconfirmed NFT spend visibility.
+const mempoolTransferScanInterval = 30 * time.Second
+
+// mempoolTransferLoop periodically scans the FULL mempool of each chain
+// with a MempoolTransferDetector for spends of tracked outputs. Full-list
+// sync (not incremental) is what the consumers' reconcile correctness
+// relies on: a pending spend not observed this round is settled/dropped.
+func (e *Engine) mempoolTransferLoop(ctx context.Context) {
+	ticker := time.NewTicker(mempoolTransferScanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.processMempoolTransfers()
+		}
+	}
+}
+
+// processMempoolTransfers runs one full-mempool spend-scan round for every
+// chain with a MempoolTransferDetector. A failed mempool fetch skips the
+// chain entirely — reconcile must never run on a round whose tx list was
+// not fully observed (it would evict live pendings).
+func (e *Engine) processMempoolTransfers() {
+	consumers := e.registry.TransferConsumers()
+	if len(consumers) == 0 {
+		return
+	}
+	e.mu.RLock()
+	entries := make([]*chainEntry, 0, len(e.chains))
+	for _, entry := range e.chains {
+		entries = append(entries, entry)
+	}
+	e.mu.RUnlock()
+
+	for _, entry := range entries {
+		detector, ok := entry.indexer.(chain.MempoolTransferDetector)
+		if !ok {
+			continue
+		}
+		idMap := make(map[string]string)
+		for _, consumer := range consumers {
+			for outpoint, tracked := range consumer.TrackedOutputs() {
+				if tracked.Owner != "" {
+					idMap[outpoint] = tracked.Owner
+				}
+			}
+		}
+		txList, err := entry.chain.GetMempoolTransactionList()
+		if err != nil {
+			log.Printf("[indexer] %s mempool transfer scan: fetch error: %v", entry.chain.Name(), err)
+			continue
+		}
+		notices, err := detector.DetectMempoolSpends(idMap, txList)
+		if err != nil {
+			log.Printf("[indexer] %s mempool transfer scan: detect error: %v", entry.chain.Name(), err)
+			continue
+		}
+		chainName := entry.chain.Name()
+		for _, consumer := range consumers {
+			consumer.HandleMempoolSpends(chainName, notices)
+		}
 	}
 }
 

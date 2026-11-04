@@ -573,6 +573,37 @@ func (idx *Indexer) CatchTransfer(idMap map[string]string) (map[string]any, erro
 	return result, nil
 }
 
+// DetectMempoolSpends implements chain.MempoolTransferDetector: scan the
+// current mempool transaction list for spends of the tracked outputs
+// (mirror of man-p2p's MempoolSpends). Same derivation as the block path
+// but no meltdown evaluation — the confirmed hook decides authoritatively.
+func (idx *Indexer) DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error) {
+	notices := make(map[string]aggregator.TransferNotice)
+	if len(idMap) == 0 {
+		return notices, nil
+	}
+	for _, item := range txList {
+		tx, ok := item.(*wire.MsgTx)
+		if !ok {
+			continue
+		}
+		for _, in := range tx.TxIn {
+			id := fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+			fromAddress, ok := idMap[id]
+			if !ok {
+				continue
+			}
+			notice, err := idx.transferOwnerAddress(id, tx)
+			if err != nil || notice == nil {
+				continue
+			}
+			notice.FromAddress = fromAddress
+			notices[id] = *notice
+		}
+	}
+	return notices, nil
+}
+
 // transferOwnerAddress derives the new owner/output of a spent outpoint
 // (mirror of man-p2p's GetOWnerAddress). Location is the three-segment
 // "<ledgerTxid>:<vout>:<satOffset>" pointer and Output the spendable

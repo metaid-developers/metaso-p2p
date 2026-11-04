@@ -1,6 +1,8 @@
 package mrc721nft
 
 import (
+	"log"
+	"strings"
 	"time"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -72,4 +74,76 @@ func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transf
 	}
 	// man-p2p stamps the history rows with the processing time.
 	a.applyTransferHook(chainName, height, transferMap, pinIdByOutput, time.Now().Unix())
+}
+
+// HandleMempoolSpends consumes one full mempool-scan round: spends of
+// tracked outpoints land as advisory pending-transfer records (latest-wins
+// per item, firstSeenAt preserved when the same spend tx is re-observed),
+// then the round reconciles away pendings this round no longer observed for
+// the chain — either the tx confirmed (the block hook settles the pending)
+// or it was dropped/RBF-replaced. Meltdown is not judged here; the
+// confirmed hook is authoritative.
+func (a *Aggregator) HandleMempoolSpends(chainName string, spends map[string]aggregator.TransferNotice) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	tracked := a.trackedOutputsLocked()
+	now := time.Now().Unix()
+	seen := make(map[string]string) // itemPinId → spend txid observed this round
+	for outpoint, notice := range spends {
+		ref, ok := tracked[outpoint]
+		if !ok {
+			continue
+		}
+		// Spend txid = ledger-convention first segment of the location
+		// pointer (same source as the confirmed history's txId).
+		txId := notice.Location
+		if idx := strings.Index(txId, ":"); idx >= 0 {
+			txId = txId[:idx]
+		}
+		if txId == "" {
+			continue
+		}
+		pt := &PendingTransfer{
+			ItemPinId:     ref.Ref,
+			ChainName:     chainName,
+			SpentOutpoint: outpoint,
+			FromAddress:   notice.FromAddress,
+			ToAddress:     notice.ToAddress,
+			TxId:          txId,
+			FirstSeenAt:   now,
+		}
+		if existing, _ := a.db.GetPendingTransfer(ref.Ref); existing != nil && existing.TxId == txId {
+			// Re-scan of the same spend tx: keep the first-seen time.
+			// An RBF replacement is a new txid and resets it.
+			pt.FirstSeenAt = existing.FirstSeenAt
+		}
+		if err := a.db.SavePendingTransfer(pt); err != nil {
+			log.Printf("WARNING: mrc721nft save pending transfer %s: %v", ref.Ref, err)
+			continue
+		}
+		seen[ref.Ref] = txId
+	}
+	a.mempoolReconcileLocked(chainName, seen)
+}
+
+// mempoolReconcileLocked deletes pendings for this chain that the round no
+// longer observed. Never runs on a failed fetch — the engine skips the
+// chain entirely in that case, so live pendings cannot be evicted by a
+// partial observation.
+func (a *Aggregator) mempoolReconcileLocked(chainName string, seen map[string]string) {
+	var stale []*PendingTransfer
+	if err := a.db.IteratePendingTransfers(func(pt *PendingTransfer) bool {
+		if pt.ChainName == chainName && seen[pt.ItemPinId] != pt.TxId {
+			stale = append(stale, pt)
+		}
+		return true
+	}); err != nil {
+		log.Printf("WARNING: mrc721nft pending transfer reconcile iterate: %v", err)
+		return
+	}
+	for _, pt := range stale {
+		if err := a.db.DeletePendingTransfer(pt.ItemPinId); err != nil {
+			log.Printf("WARNING: mrc721nft pending transfer reconcile delete %s: %v", pt.ItemPinId, err)
+		}
+	}
 }

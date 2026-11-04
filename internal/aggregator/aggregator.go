@@ -95,6 +95,13 @@ type TransferConsumer interface {
 	// block (keyed by spent outpoint). Notices for outputs this consumer
 	// does not track are ignored.
 	HandleBlockTransfers(chainName string, height int64, transfers map[string]TransferNotice)
+
+	// HandleMempoolSpends consumes one full mempool-scan round (engine
+	// ticker). Each call is a complete round: the consumer records the
+	// observed unconfirmed spends (advisory pending channel) and reconciles
+	// away its pendings for this chain that the round no longer observes
+	// (confirmed → settled by the block hook; dropped/RBF → cleaned).
+	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
 }
 
 // Aggregator is the interface each business module must implement.

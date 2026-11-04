@@ -256,3 +256,38 @@ func mustLedgerTxid(t *testing.T, tx *wire.MsgTx) string {
 	}
 	return txid
 }
+
+func TestDetectMempoolSpends(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+	params := idx.chainParams
+	scriptA := p2pkhScript(t, params, 0x09)
+
+	// One mempool tx spends the tracked outpoint, another is unrelated.
+	from := outpoint(0xac, 0)
+	spendTx := buildTx([]wire.OutPoint{from}, []int64{546}, [][]byte{scriptA})
+	unrelatedTx := buildTx([]wire.OutPoint{outpoint(0xad, 2)}, []int64{546}, [][]byte{scriptA})
+
+	notices, err := idx.DetectMempoolSpends(
+		map[string]string{from.Hash.String() + ":0": "mvc1qowner"},
+		[]any{spendTx, unrelatedTx, "not-a-tx"},
+	)
+	if err != nil {
+		t.Fatalf("DetectMempoolSpends: %v", err)
+	}
+	notice, ok := notices[from.Hash.String()+":0"]
+	if !ok {
+		t.Fatalf("mempool spend not detected: %+v", notices)
+	}
+	if notice.Output != mustLedgerTxid(t, spendTx)+":0" || notice.ToAddress == "" {
+		t.Fatalf("mempool notice fields wrong: %+v", notice)
+	}
+	if notice.Meltdown {
+		t.Fatal("meltdown is not evaluated at the mempool stage")
+	}
+
+	// Empty idMap: empty result.
+	notices, err = idx.DetectMempoolSpends(nil, []any{spendTx})
+	if err != nil || len(notices) != 0 {
+		t.Fatalf("empty idMap must yield empty notices: %+v %v", notices, err)
+	}
+}

@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -25,11 +26,21 @@ func (d *detectorIndexer) DetectTransfers(idMap map[string]string) (map[string]a
 	return d.notices, nil
 }
 
+type mempoolDetectorIndexer struct {
+	mockIndexer
+	notices map[string]aggregator.TransferNotice
+}
+
+func (d *mempoolDetectorIndexer) DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error) {
+	return d.notices, nil
+}
+
 type consumerAggregator struct {
-	mu         sync.Mutex
-	tracked    map[string]aggregator.TrackedOutput
-	consumedAt []int64
-	consumed   map[string]aggregator.TransferNotice
+	mu            sync.Mutex
+	tracked       map[string]aggregator.TrackedOutput
+	consumedAt    []int64
+	consumed      map[string]aggregator.TransferNotice
+	mempoolRounds []map[string]aggregator.TransferNotice
 }
 
 func (c *consumerAggregator) Name() string                                          { return "fakeconsumer" }
@@ -57,6 +68,16 @@ func (c *consumerAggregator) HandleBlockTransfers(chainName string, height int64
 	for outpoint, notice := range transfers {
 		c.consumed[outpoint] = notice
 	}
+}
+
+func (c *consumerAggregator) HandleMempoolSpends(chainName string, spends map[string]aggregator.TransferNotice) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	round := make(map[string]aggregator.TransferNotice, len(spends))
+	for outpoint, notice := range spends {
+		round[outpoint] = notice
+	}
+	c.mempoolRounds = append(c.mempoolRounds, round)
 }
 
 func TestProcessTransfersRoutesNoticesToConsumers(t *testing.T) {
@@ -148,5 +169,60 @@ func TestScanRangeRunsTransfersOnPinlessBlocks(t *testing.T) {
 	}
 	if entry.lastHeight != 100 {
 		t.Fatalf("height not persisted: %d", entry.lastHeight)
+	}
+}
+
+func TestProcessMempoolTransfersFullListRound(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer func() { _ = store.Close() }()
+	registry := aggregator.NewRegistry(store, cache.New(store))
+
+	consumer := &consumerAggregator{tracked: map[string]aggregator.TrackedOutput{
+		"aa:0": {Owner: "mvc1qowner", Ref: "item-1"},
+	}}
+	if err := registry.Register(consumer); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	mempoolDetector := &mempoolDetectorIndexer{notices: map[string]aggregator.TransferNotice{
+		"aa:0": {FromAddress: "mvc1qowner", ToAddress: "mvc1qnew", Output: "spend:0", Location: "spendtx:0:0"},
+	}}
+	chain := &mockChain{name: "testchain", mempoolTxList: []any{"tx1", "tx2"}}
+	engine := NewEngine(store, registry)
+	engine.chains["testchain"] = &chainEntry{chain: chain, indexer: mempoolDetector}
+
+	engine.processMempoolTransfers()
+
+	if len(consumer.mempoolRounds) != 1 {
+		t.Fatalf("one full round expected: %+v", consumer.mempoolRounds)
+	}
+	notice, ok := consumer.mempoolRounds[0]["aa:0"]
+	if !ok || notice.Location != "spendtx:0:0" {
+		t.Fatalf("mempool spend not routed: %+v", consumer.mempoolRounds)
+	}
+}
+
+func TestProcessMempoolTransfersSkipsOnFetchError(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	defer func() { _ = store.Close() }()
+	registry := aggregator.NewRegistry(store, cache.New(store))
+
+	consumer := &consumerAggregator{tracked: map[string]aggregator.TrackedOutput{
+		"aa:0": {Owner: "mvc1qowner", Ref: "item-1"},
+	}}
+	if err := registry.Register(consumer); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// The mempool fetch failed: the round must not reach the consumer at
+	// all — reconcile on a partial observation would evict live pendings.
+	chain := &mockChain{name: "testchain", mempoolListErr: errors.New("rpc down")}
+	engine := NewEngine(store, registry)
+	engine.chains["testchain"] = &chainEntry{chain: chain, indexer: &mempoolDetectorIndexer{}}
+
+	engine.processMempoolTransfers()
+
+	if len(consumer.mempoolRounds) != 0 {
+		t.Fatalf("failed fetch must skip the round: %+v", consumer.mempoolRounds)
 	}
 }

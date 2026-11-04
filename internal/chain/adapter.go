@@ -87,5 +87,16 @@ type TransferDetector interface {
 	DetectTransfers(idMap map[string]string) (map[string]aggregator.TransferNotice, error)
 }
 
+// MempoolTransferDetector is an optional Indexer extension mirroring
+// man-p2p's MempoolSpends: detect spends of tracked outputs across the
+// CURRENT mempool transaction list (unconfirmed visibility only — the
+// confirmed path is TransferDetector). Meltdown is not evaluated at the
+// mempool stage; the confirmed hook decides authoritatively.
+type MempoolTransferDetector interface {
+	// DetectMempoolSpends scans txList (chain-specific items, e.g.
+	// *wire.MsgTx) for spends of the tracked outputs.
+	DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error)
+}
+
 // ZMQHandler is called by the indexer engine when a ZMQ message arrives.
 type ZMQHandler func(topic string, data []byte, sequence uint64)
