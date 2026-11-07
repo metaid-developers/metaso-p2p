@@ -12,18 +12,26 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/storage"
 )
 
-// Pebble key families of the mrc721nft namespace. The layout mirrors
-// man-p2p's pebblestore/mrc721.go one-to-one so the two aggregates stay
-// diff-able and the manapi bootstrap can key its hydrates directly:
+// Pebble key families of the mrc721nft namespace. Layout follows the
+// issuer-only protocol revision (docs/mrc721-protocol-revision-issuer-only.md):
+// an album's identity is its collectionid (the collection_desc pinid) with
+// (collectionName, issuer address) as the human-level pair — collection
+// names are NOT unique and confer no ownership, so every multi-record index
+// is keyed by the album identity, never by the name alone:
 //
-//	c:{collectionName}                             → Collection JSON (collection main table)
-//	cp:{collectionDescPinId}                       → collectionName (collectionid reverse lookup)
-//	i:{itemPinId}                                  → Item JSON (NFT main table)
-//	ci:{collectionName}{seq %020d}{itemPinId}      → empty (in-collection ingest order)
-//	oi:{ownerAddress}&{collectionName}&{itemPinId} → empty (holder index, re-keyed on transfer)
-//	th:{itemPinId}&{height %020d}{txid}            → ItemTransfer JSON (provenance)
-//	pt:{itemPinId}                                 → PendingTransfer JSON (unconfirmed spend, advisory)
-//	p:{collectionName}&{pinId}                     → PendingEntry JSON (out-of-order staging)
+//	c:{collectionName}&{createAddress}                    → Collection JSON (album main table)
+//	cp:{collectionDescPinId}                              → "{collectionName}&{createAddress}" (collectionid reverse lookup)
+//	i:{itemPinId}                                         → Item JSON (NFT main table)
+//	ci:{collectionDescPinId}{seq %020d}{itemPinId}        → empty (in-album mint order; keyed by collectionid —
+//	                                                        fixed-length hex, no separator ambiguity)
+//	oi:{ownerAddress}&{collectionDescPinId}&{itemPinId}   → empty (holder index, re-keyed on transfer)
+//	th:{itemPinId}&{height %020d}{txid}                   → ItemTransfer JSON (provenance)
+//	pt:{itemPinId}                                        → PendingTransfer JSON (unconfirmed spend, advisory)
+//	p:{collectionName}&{issuerAddress}&{pinId}            → PendingEntry JSON (out-of-order staging, per (name, issuer))
+//
+// The '&' separator inside composite keys assumes collection names never
+// contain '&' — the same assumption man-p2p's schema makes for its oi:/p:
+// families.
 const (
 	keyCollection   = "c:"
 	keyCollByPinId  = "cp:"
@@ -38,7 +46,8 @@ const (
 // Collection is the registered /nft/mrc721/{name}/collection_desc record.
 // Field names and JSON tags mirror man-p2p's Mrc721Collection exactly (the
 // odd lowercase "pinid"/"totalnum" spellings are part of the manapi wire
-// contract).
+// contract). The record is uniquely identified by (CollectionName,
+// CreateAddress); PinId (the collectionid) is the primary index key.
 type Collection struct {
 	CollectionName   string `json:"collectionName"`
 	Name             string `json:"name"`
@@ -63,12 +72,14 @@ type Collection struct {
 }
 
 // Item is one minted /nft/mrc721/{collection}/{item} entry. JSON tags mirror
-// man-p2p's Mrc721Item.
+// man-p2p's Mrc721Item. Under the issuer-only revision every indexed item is
+// minted by its album's issuer, so CreatorMinted is true by construction
+// (field kept for wire compatibility).
 type Item struct {
 	ItemPinId        string `json:"itemPinId"`
 	CollectionName   string `json:"collectionName"`
 	CollectionPinId  string `json:"collectionPinId"`
-	Number           int64  `json:"number"` // in-collection ingest number, 1-based
+	Number           int64  `json:"number"` // in-album mint number, 1-based
 	Name             string `json:"name"`
 	Desc             string `json:"desc"`
 	Cover            string `json:"cover"`
@@ -113,7 +124,10 @@ type ItemDescRef struct {
 }
 
 // PendingEntry stages a mint / item_desc / collection_desc-modify pin that
-// arrived before its collection was registered; drained on registration.
+// arrived before its (collectionName, issuer address) album was registered;
+// drained on registration. Under issuer-only attribution every staged pin
+// belongs to exactly one would-be album: the one named by the path whose
+// issuer is the pin's own author.
 type PendingEntry struct {
 	Kind   string         `json:"kind"` // "mint" | "desc" | "colmod"
 	PinId  string         `json:"pinId"`
@@ -138,8 +152,9 @@ type PendingMint struct {
 	CreateTime       int64  `json:"createTime"`
 }
 
-// PendingDesc stages an item_desc payload whose item references were parsed
-// but not all items are indexed yet.
+// PendingDesc stages the not-yet-applied item references of an item_desc
+// payload: refs whose items have not minted yet (drained as they mint). Refs
+// failing the issuer gate are dropped at apply time, never staged.
 type PendingDesc struct {
 	DescPinId string        `json:"descPinId"`
 	Items     []ItemDescRef `json:"items"`
@@ -170,8 +185,20 @@ type PendingTransfer struct {
 	FirstSeenAt   int64  `json:"firstSeenAt"`   // first-observed epoch seconds
 }
 
-func collectionKey(collectionName string) string {
-	return keyCollection + collectionName
+func collectionKey(collectionName, createAddress string) string {
+	return keyCollection + collectionName + "&" + createAddress
+}
+
+// splitCollectionComposite splits a cp: reverse-lookup value back into the
+// (collectionName, createAddress) pair. The issuer address is always the
+// last '&'-separated segment; the name may itself contain '&' (the same
+// tolerance the key schema documents).
+func splitCollectionComposite(composite string) (string, string) {
+	sep := strings.LastIndex(composite, "&")
+	if sep < 0 {
+		return composite, ""
+	}
+	return composite[:sep], composite[sep+1:]
 }
 
 func collByPinIdKey(collectionDescPinId string) string {
@@ -182,20 +209,20 @@ func itemKey(itemPinId string) string {
 	return keyItem + itemPinId
 }
 
-func collItemKey(collectionName string, seq int64, itemPinId string) string {
-	return fmt.Sprintf("%s%s%020d%s", keyCollItem, collectionName, seq, itemPinId)
+func collItemKey(collectionDescPinId string, seq int64, itemPinId string) string {
+	return fmt.Sprintf("%s%s%020d%s", keyCollItem, collectionDescPinId, seq, itemPinId)
 }
 
-func ownerItemKey(ownerAddress, collectionName, itemPinId string) string {
-	return fmt.Sprintf("%s%s&%s&%s", keyOwnerItem, ownerAddress, collectionName, itemPinId)
+func ownerItemKey(ownerAddress, collectionDescPinId, itemPinId string) string {
+	return fmt.Sprintf("%s%s&%s&%s", keyOwnerItem, ownerAddress, collectionDescPinId, itemPinId)
 }
 
 func itemTransferKey(itemPinId string, height int64, txId string) string {
 	return fmt.Sprintf("%s%s&%020d%s", keyItemTransfer, itemPinId, height, txId)
 }
 
-func pendingKey(collectionName, pinId string) string {
-	return fmt.Sprintf("%s%s&%s", keyPending, collectionName, pinId)
+func pendingKey(collectionName, issuerAddress, pinId string) string {
+	return fmt.Sprintf("%s%s&%s&%s", keyPending, collectionName, issuerAddress, pinId)
 }
 
 func pendingTransferKey(itemPinId string) string {
@@ -210,8 +237,9 @@ type errBreakScan struct{}
 
 func (errBreakScan) Error() string { return "stop iteration" }
 
-// nftStore is the storage facade over the mrc721nft namespace. Method
-// semantics mirror man-p2p's pebblestore/mrc721.go Database methods.
+// nftStore is the storage facade over the mrc721nft namespace. Key layout
+// follows the issuer-only revision; the record shapes stay manapi-wire
+// compatible.
 type nftStore struct {
 	store *storage.PebbleStore
 }
@@ -257,15 +285,17 @@ func (s *nftStore) get(key string, v any) (bool, error) {
 // ---------- collection ----------
 
 func (s *nftStore) SaveCollection(col *Collection) error {
-	if err := s.put(collectionKey(col.CollectionName), col); err != nil {
+	if err := s.put(collectionKey(col.CollectionName, col.CreateAddress), col); err != nil {
 		return err
 	}
-	return s.store.Set(Namespace, []byte(collByPinIdKey(col.PinId)), []byte(col.CollectionName))
+	return s.store.Set(Namespace, []byte(collByPinIdKey(col.PinId)), []byte(col.CollectionName+"&"+col.CreateAddress))
 }
 
-func (s *nftStore) GetCollectionByName(collectionName string) (*Collection, error) {
+// GetCollection fetches the album registered under (collectionName,
+// issuerAddress) — the mint-attribution and modify-resolution lookup.
+func (s *nftStore) GetCollection(collectionName, issuerAddress string) (*Collection, error) {
 	var col Collection
-	found, err := s.get(collectionKey(collectionName), &col)
+	found, err := s.get(collectionKey(collectionName, issuerAddress), &col)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -280,12 +310,40 @@ func (s *nftStore) GetCollectionByPinId(collectionDescPinId string) (*Collection
 	if err != nil {
 		return nil, err
 	}
-	return s.GetCollectionByName(string(raw))
+	name, address := splitCollectionComposite(string(raw))
+	return s.GetCollection(name, address)
 }
 
-// ListCollections scans the collection main table in key order
-// (lexicographic by collectionName) with offset pagination — same shape as
-// man-p2p's ListMrc721Collections, whose registry scale stays scan-friendly.
+// GetEarliestCollectionByName resolves an ambiguous collection name to the
+// earliest-created album under it (createTime, then genesis height, then
+// pinid as tie-breakers) — the deterministic fallback for name-based query
+// parameters under non-unique names.
+func (s *nftStore) GetEarliestCollectionByName(collectionName string) (*Collection, error) {
+	prefix := keyCollection + collectionName + "&"
+	var earliest *Collection
+	err := s.scan(prefix, func(_, value []byte) bool {
+		var col Collection
+		if err := json.Unmarshal(value, &col); err != nil {
+			return true // skip corrupt rows
+		}
+		if earliest == nil ||
+			col.CreateTime < earliest.CreateTime ||
+			(col.CreateTime == earliest.CreateTime && (col.GenesisHeight < earliest.GenesisHeight ||
+				(col.GenesisHeight == earliest.GenesisHeight && col.PinId < earliest.PinId))) {
+			earliest = &col
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return earliest, nil
+}
+
+// ListCollections scans the album main table in key order (lexicographic by
+// collectionName, then issuer address) with offset pagination — same shape
+// as man-p2p's ListMrc721Collections, whose registry scale stays
+// scan-friendly.
 func (s *nftStore) ListCollections(offset, limit int64) ([]*Collection, int64, error) {
 	var all []*Collection
 	err := s.store.ScanPrefix(Namespace, []byte(keyCollection), func(_, value []byte) error {
@@ -335,16 +393,17 @@ func (s *nftStore) IterateItems(fn func(item *Item) bool) error {
 	})
 }
 
-// AppendCollectionItem records an item's ingest order inside its collection.
-func (s *nftStore) AppendCollectionItem(collectionName string, seq int64, itemPinId string) error {
-	return s.store.Set(Namespace, []byte(collItemKey(collectionName, seq, itemPinId)), []byte{})
+// AppendCollectionItem records an item's mint order inside its album,
+// keyed by the collectionid.
+func (s *nftStore) AppendCollectionItem(collectionDescPinId string, seq int64, itemPinId string) error {
+	return s.store.Set(Namespace, []byte(collItemKey(collectionDescPinId, seq, itemPinId)), []byte{})
 }
 
-// IterateCollectionItems walks a collection's items in ingest order,
-// yielding (seq, itemPinId). Mirrors man-p2p's IterateMrc721CollectionItems
-// including its tolerance of malformed keys (seq parses to 0).
-func (s *nftStore) IterateCollectionItems(collectionName string, fn func(seq int64, itemPinId string) bool) error {
-	prefix := keyCollItem + collectionName
+// IterateCollectionItems walks an album's items in mint order, yielding
+// (seq, itemPinId). Mirrors man-p2p's IterateMrc721CollectionItems including
+// its tolerance of malformed keys (seq parses to 0).
+func (s *nftStore) IterateCollectionItems(collectionDescPinId string, fn func(seq int64, itemPinId string) bool) error {
+	prefix := keyCollItem + collectionDescPinId
 	return s.scan(prefix, func(key, _ []byte) bool {
 		rest := strings.TrimPrefix(string(key), prefix)
 		if len(rest) < 20 {
@@ -357,25 +416,26 @@ func (s *nftStore) IterateCollectionItems(collectionName string, fn func(seq int
 
 // ---------- owner ----------
 
-func (s *nftStore) PutOwnerItem(ownerAddress, collectionName, itemPinId string) error {
-	return s.store.Set(Namespace, []byte(ownerItemKey(ownerAddress, collectionName, itemPinId)), []byte{})
+func (s *nftStore) PutOwnerItem(ownerAddress, collectionDescPinId, itemPinId string) error {
+	return s.store.Set(Namespace, []byte(ownerItemKey(ownerAddress, collectionDescPinId, itemPinId)), []byte{})
 }
 
-func (s *nftStore) DeleteOwnerItem(ownerAddress, collectionName, itemPinId string) error {
-	return s.store.Delete(Namespace, []byte(ownerItemKey(ownerAddress, collectionName, itemPinId)))
+func (s *nftStore) DeleteOwnerItem(ownerAddress, collectionDescPinId, itemPinId string) error {
+	return s.store.Delete(Namespace, []byte(ownerItemKey(ownerAddress, collectionDescPinId, itemPinId)))
 }
 
 // IterateOwnerItems walks the items an address holds; an empty collection
-// name iterates across all collections.
-func (s *nftStore) IterateOwnerItems(ownerAddress, collectionName string, fn func(collectionName, itemPinId string) bool) error {
+// pinid iterates across all albums. The callback yields the holding album's
+// collectionid.
+func (s *nftStore) IterateOwnerItems(ownerAddress, collectionDescPinId string, fn func(collectionDescPinId, itemPinId string) bool) error {
 	prefix := keyOwnerItem + ownerAddress + "&"
-	if collectionName != "" {
-		prefix += collectionName + "&"
+	if collectionDescPinId != "" {
+		prefix += collectionDescPinId + "&"
 	}
 	return s.scan(prefix, func(key, _ []byte) bool {
 		rest := strings.TrimPrefix(string(key), prefix)
-		if collectionName != "" {
-			return fn(collectionName, rest)
+		if collectionDescPinId != "" {
+			return fn(collectionDescPinId, rest)
 		}
 		sep := strings.Index(rest, "&")
 		if sep < 0 {
@@ -416,15 +476,19 @@ func (s *nftStore) IterateItemTransfers(itemPinId string, fn func(tr *ItemTransf
 
 // ---------- pending (out-of-order self-healing) ----------
 
-func (s *nftStore) PutPending(collectionName string, entry *PendingEntry) error {
-	return s.put(pendingKey(collectionName, entry.PinId), entry)
+// PutPending stages an out-of-order pin for the (collectionName,
+// issuerAddress) album it can only ever belong to under issuer-only
+// attribution.
+func (s *nftStore) PutPending(collectionName, issuerAddress string, entry *PendingEntry) error {
+	return s.put(pendingKey(collectionName, issuerAddress, entry.PinId), entry)
 }
 
-// PopPending removes and returns all staged entries of one collection.
-func (s *nftStore) PopPending(collectionName string) ([]*PendingEntry, error) {
+// PopPending removes and returns all staged entries of one
+// (collectionName, issuerAddress) album.
+func (s *nftStore) PopPending(collectionName, issuerAddress string) ([]*PendingEntry, error) {
 	var entries []*PendingEntry
 	var keys [][]byte
-	prefix := keyPending + collectionName + "&"
+	prefix := keyPending + collectionName + "&" + issuerAddress + "&"
 	err := s.store.ScanPrefix(Namespace, []byte(prefix), func(key, value []byte) error {
 		var entry PendingEntry
 		if err := json.Unmarshal(value, &entry); err == nil {

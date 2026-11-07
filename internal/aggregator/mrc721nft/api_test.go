@@ -61,15 +61,22 @@ func decodeRows(t *testing.T, data map[string]any) []map[string]any {
 
 // seedAlbum registers a collection and mints three items (numbers 1-3) via
 // the live ingest path, so the API tests run against realistic records.
+// Under the issuer-only revision every indexed item is minted by the
+// issuer; the second and third items are then transferred to other/holder
+// so holder-view tests still see a mixed inventory.
 func seedAlbum(t *testing.T, a *Aggregator, album string) {
 	t.Helper()
 	runPins(t, a,
 		testPin(album+"-c", "/nft/mrc721/"+album+"/collection_desc", "create",
 			[]byte(`{"name":"`+album+` Name","totalSupply":100,"royaltyRate":5}`), creator),
 		testPin(album+"-i1", "/nft/mrc721/"+album+"/one", "create", []byte(`"1"`), creator),
-		testPin(album+"-i2", "/nft/mrc721/"+album+"/two", "create", []byte(`"2"`), other),
-		testPin(album+"-i3", "/nft/mrc721/"+album+"/three", "create", []byte(`"3"`), holder),
+		testPin(album+"-i2", "/nft/mrc721/"+album+"/two", "create", []byte(`"2"`), creator),
+		testPin(album+"-i3", "/nft/mrc721/"+album+"/three", "create", []byte(`"3"`), creator),
 	)
+	for item, to := range map[string]string{album + "-i2": other, album + "-i3": holder} {
+		transferMap, pinIdByOutput := transferFor(item, to, creator, "moved-"+item+":0", 546, false)
+		a.applyTransferHook("mvc", 150, transferMap, pinIdByOutput, 1700000001)
+	}
 }
 
 func TestCollectionPageListAPI(t *testing.T) {
@@ -366,8 +373,10 @@ func TestItemTransfersAPI(t *testing.T) {
 		t.Fatalf("pending array wrong: %+v", data["pending"])
 	}
 
-	// No history, no pending: list/total zero, pending [].
-	_, _, data2 := doGet(t, router, "/api/mrc721/item/transfers?pinId=TrItm-i3")
+	// No history, no pending: list/total zero, pending []. (seedAlbum moves
+	// i2/i3 via transfers, so a fresh issuer-minted item is the empty probe.)
+	runPins(t, a, testPin("TrItm-i4", "/nft/mrc721/TrItm/four", "create", []byte(`"4"`), creator))
+	_, _, data2 := doGet(t, router, "/api/mrc721/item/transfers?pinId=TrItm-i4")
 	if int(data2["total"].(float64)) != 0 || len(decodeRows(t, data2)) != 0 {
 		t.Fatalf("empty history wrong: %+v", data2)
 	}

@@ -22,6 +22,13 @@ import (
 //	GET /api/mrc721/item/transfers
 //	GET /api/mrc721/item/verify
 //
+// Under the issuer-only protocol revision
+// (docs/mrc721-protocol-revision-issuer-only.md) collection names are NOT
+// unique — the album index key is the collectionid (collection_desc pinid).
+// Every internal resolution therefore goes through the collectionid; a
+// name-based query parameter resolves to the earliest-created album under
+// that name (deterministic fallback; downstream should prefer pinId).
+//
 // Envelope (man-p2p api/respond.ApiResponse): success {"code":1,"message":
 // "ok","data":...}; parameter/service errors carry code 404; no-data
 // carries code 100 with data []. Pagination reads the legacy misspelled
@@ -73,6 +80,24 @@ func (a *Aggregator) querySize(c *gin.Context) int64 {
 		return 200
 	}
 	return n
+}
+
+// resolveCollection resolves a collection for query parameters carrying
+// both spellings. man-p2p precedence is kept (name wins when both are
+// present); under non-unique names a name resolves to the earliest-created
+// album under it — the deterministic disambiguation fallback, with the
+// collectionid (pinId) as the exact-key alternative. Reports the wire-level
+// no-data case as (nil, nil).
+func (a *Aggregator) resolveCollection(pinId, collectionName string) (*Collection, error) {
+	if collectionName != "" {
+		if col, err := a.db.GetEarliestCollectionByName(collectionName); err != nil || col != nil {
+			return col, err
+		}
+	}
+	if pinId != "" {
+		return a.db.GetCollectionByPinId(pinId)
+	}
+	return nil, nil
 }
 
 // collectionDTO field names mirror man-p2p's mrc721CollectionDTO: legacy
@@ -191,13 +216,7 @@ func (a *Aggregator) handleCollectionInfo(c *gin.Context) {
 		a.respondParamError(c)
 		return
 	}
-	var col *Collection
-	var err error
-	if name != "" {
-		col, err = a.db.GetCollectionByName(name)
-	} else {
-		col, err = a.db.GetCollectionByPinId(pinId)
-	}
+	col, err := a.resolveCollection(pinId, name)
 	if err != nil {
 		a.respondServiceError(c)
 		return
@@ -214,30 +233,33 @@ func (a *Aggregator) handleCollectionItemsPageList(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
-	// Back-compat: pinid means the collectionid (legacy MetaSo semantics);
-	// name means the collection name.
+	// Back-compat: pinid means the collectionid (the album index key);
+	// name resolves to the earliest album under that name.
 	pinId := c.Query("pinid")
 	collectionName := c.Query("name")
 	if pinId == "" && collectionName == "" {
 		a.respondParamError(c)
 		return
 	}
-	if collectionName == "" {
-		col, err := a.db.GetCollectionByPinId(pinId)
-		if err != nil {
-			a.respondServiceError(c)
-			return
-		}
-		if col == nil {
+	col, err := a.resolveCollection(pinId, collectionName)
+	if err != nil {
+		a.respondServiceError(c)
+		return
+	}
+	if col == nil {
+		if pinId != "" {
+			// Exact collectionid requested and not found: no-data error.
 			a.respondNoData(c)
 			return
 		}
-		collectionName = col.CollectionName
+		// Unknown name: success with an empty list (same as man-p2p).
+		a.respondOK(c, gin.H{"list": []gin.H{}, "total": int64(0)})
+		return
 	}
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	var pinIds []string
 	var pos int64
-	err := a.db.IterateCollectionItems(collectionName, func(seq int64, itemPinId string) bool {
+	err = a.db.IterateCollectionItems(col.PinId, func(seq int64, itemPinId string) bool {
 		if pos >= cursor+size {
 			return false
 		}
@@ -251,11 +273,6 @@ func (a *Aggregator) handleCollectionItemsPageList(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
-	col, _ := a.db.GetCollectionByName(collectionName)
-	var total int64
-	if col != nil {
-		total = col.TotalNum
-	}
 	dtos := make([]gin.H, 0, len(pinIds))
 	for _, itemPinId := range pinIds {
 		item, err := a.db.GetItem(itemPinId)
@@ -264,7 +281,7 @@ func (a *Aggregator) handleCollectionItemsPageList(c *gin.Context) {
 		}
 		dtos = append(dtos, a.itemDTO(item))
 	}
-	a.respondOK(c, gin.H{"list": dtos, "total": total})
+	a.respondOK(c, gin.H{"list": dtos, "total": col.TotalNum})
 }
 
 func (a *Aggregator) handleAddressCollection(c *gin.Context) {
@@ -277,15 +294,16 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		a.respondParamError(c)
 		return
 	}
-	// Dedup the held items into collections in first-seen order, counting
-	// the per-collection hold count (ownnum).
+	// Dedup the held items into albums (keyed by collectionid — names are
+	// not unique) in first-seen order, counting the per-album hold count
+	// (ownnum).
 	holdCounts := make(map[string]int64)
 	var order []string
-	err := a.db.IterateOwnerItems(address, "", func(collectionName, itemPinId string) bool {
-		if _, seen := holdCounts[collectionName]; !seen {
-			order = append(order, collectionName)
+	err := a.db.IterateOwnerItems(address, "", func(collectionPinId, itemPinId string) bool {
+		if _, seen := holdCounts[collectionPinId]; !seen {
+			order = append(order, collectionPinId)
 		}
-		holdCounts[collectionName]++
+		holdCounts[collectionPinId]++
 		return true
 	})
 	if err != nil {
@@ -300,13 +318,13 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		if end > total {
 			end = total
 		}
-		for _, name := range order[cursor:end] {
-			col, err := a.db.GetCollectionByName(name)
+		for _, collectionPinId := range order[cursor:end] {
+			col, err := a.db.GetCollectionByPinId(collectionPinId)
 			if err != nil || col == nil {
 				continue
 			}
 			dto := a.collectionDTO(col)
-			dto["ownnum"] = holdCounts[name]
+			dto["ownnum"] = holdCounts[collectionPinId]
 			dtos = append(dtos, dto)
 		}
 	}
@@ -323,10 +341,14 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 		a.respondParamError(c)
 		return
 	}
-	// Optional collection filter: pinId = collectionid, name = collection name.
+	// Optional album filter: pinId = collectionid (exact), name = earliest
+	// album under that name.
 	collectionFilter := c.Query("pinId")
+	if collectionFilter == "" {
+		collectionFilter = c.Query("name")
+	}
 	if collectionFilter != "" {
-		col, err := a.db.GetCollectionByPinId(collectionFilter)
+		col, err := a.resolveCollection(c.Query("pinId"), c.Query("name"))
 		if err != nil {
 			a.respondServiceError(c)
 			return
@@ -335,14 +357,12 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 			a.respondNoData(c)
 			return
 		}
-		collectionFilter = col.CollectionName
-	} else {
-		collectionFilter = c.Query("name")
+		collectionFilter = col.PinId
 	}
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	dtos := make([]gin.H, 0)
 	var total int64
-	err := a.db.IterateOwnerItems(address, collectionFilter, func(collectionName, itemPinId string) bool {
+	err := a.db.IterateOwnerItems(address, collectionFilter, func(collectionPinId, itemPinId string) bool {
 		if total < cursor || total >= cursor+size {
 			total++
 			return true
@@ -477,7 +497,7 @@ func (a *Aggregator) handleItemVerify(c *gin.Context) {
 		return
 	}
 	genesisChainName, genesisHeight, genesisTx := "", int64(0), ""
-	if col, _ := a.db.GetCollectionByName(item.CollectionName); col != nil {
+	if col, _ := a.db.GetCollectionByPinId(item.CollectionPinId); col != nil {
 		genesisChainName, genesisHeight, genesisTx = col.GenesisChainName, col.GenesisHeight, col.GenesisTx
 	}
 	a.respondOK(c, gin.H{

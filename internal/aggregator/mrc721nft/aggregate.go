@@ -11,13 +11,26 @@ import (
 	"github.com/metaid-developers/metaso-p2p/pkg/idaddress"
 )
 
-// MRC-721 NFT aggregation, ported from man-p2p's man/mrc721.go (design:
-// man-p2p MRC721_INDEXING_DESIGN.md). Protocol semantics: create pins under
-// /nft/mrc721/{collection_name}/...; collection_desc registers a collection
-// (first one wins), item_desc backfills item info (first per field wins),
-// everything else is a mint; collection_desc modify is issuer-only and forms
-// a version chain; pins arriving before their collection registers are
-// staged (pending) and replayed on registration.
+// MRC-721 NFT aggregation, ported from man-p2p's man/mrc721.go and then
+// revised per docs/mrc721-protocol-revision-issuer-only.md (the issuer-only
+// protocol upgrade agreed among the protocol authors):
+//
+//   - An album's identity is its collectionid (the collection_desc pinid);
+//     the human-level pair is (collection_name, issuer address). Names are
+//     NOT unique: a collection_desc by a different address under the same
+//     name defines a separate, independent album; per (name, issuer) only
+//     the first collection_desc counts.
+//   - Minting is issuer-only: a create pin under /nft/mrc721/{name}[/...]
+//     (any non-desc path) is attributed to the same-name album whose
+//     collection_desc author is the minter itself; pins by users without a
+//     registered album under that name are staged and only ever commit to
+//     an album registered by the same address. totalSupply thus counts the
+//     issuer's own mints only.
+//   - item_desc backfills item metadata by pinid reference (first per field
+//     wins), gated: a reference applies only when the desc author equals the
+//     referenced item's album issuer.
+//   - collection_desc modify is issuer-only and forms a version chain;
+//     transfer semantics are unchanged by the revision.
 
 // TransferInfo mirrors man-p2p's pin.PinTransferInfo: the facts of one spent
 // outpoint as derived by the chain adapter's transfer detection. Output and
@@ -135,14 +148,17 @@ func pinListSummary(body []byte) string {
 
 // ---------- collection ----------
 
+// collectionRegister applies one collection_desc create: per
+// (collection_name, issuer address) only the first counts; a desc by a
+// different address under the same name is a separate, independent album.
 func (a *Aggregator) collectionRegister(collectionName string, pin *aggregator.PinInscription) {
-	existing, err := a.db.GetCollectionByName(collectionName)
+	existing, err := a.db.GetCollection(collectionName, pin.Address)
 	if err != nil {
-		log.Printf("[mrc721nft] get collection %s: %v", collectionName, err)
+		log.Printf("[mrc721nft] get collection %s/%s: %v", collectionName, pin.Address, err)
 		return
 	}
 	if existing != nil {
-		return // first collection_desc wins
+		return // first collection_desc per (name, issuer) wins
 	}
 	content, err := parseContent(pin.ContentBody)
 	if err != nil {
@@ -191,26 +207,26 @@ func (a *Aggregator) collectionRegister(collectionName string, pin *aggregator.P
 		return
 	}
 	if err := a.db.SaveCollection(col); err != nil {
-		log.Printf("WARNING: mrc721nft save collection %s: %v", collectionName, err)
+		log.Printf("WARNING: mrc721nft save collection %s/%s: %v", collectionName, pin.Address, err)
 		return
 	}
-	// Registered: replay staged pins (mints first, then descs, then colmods
-	// in chronological order).
-	a.drainPending(collectionName)
+	// Registered: replay this issuer's staged pins (mints first, then descs,
+	// then colmods in chronological order).
+	a.drainPending(collectionName, pin.Address)
 }
 
 // ---------- collection_desc modify (issuer-only version chain) ----------
 
 func (a *Aggregator) collectionModify(collectionName string, pin *aggregator.PinInscription) {
-	col, err := a.db.GetCollectionByName(collectionName)
+	col, err := a.db.GetCollection(collectionName, pin.Address)
 	if err != nil {
-		log.Printf("[mrc721nft] get collection %s: %v", collectionName, err)
+		log.Printf("[mrc721nft] get collection %s/%s: %v", collectionName, pin.Address, err)
 		return
 	}
 	if col == nil {
-		// Collection not registered yet: stage it, replayed in time order
-		// after registration.
-		if err := a.db.PutPending(collectionName, &PendingEntry{
+		// Album not registered yet: stage it, replayed in time order after
+		// registration. Only ever replayed to the album of the same issuer.
+		if err := a.db.PutPending(collectionName, pin.Address, &PendingEntry{
 			Kind: "colmod", PinId: pin.Id,
 			ColMod: &PendingColMod{
 				ModifyPinId:   pin.Id,
@@ -299,20 +315,24 @@ func (a *Aggregator) collectionModifyCommit(collectionName string, col *Collecti
 
 // ---------- item_desc ----------
 
+// itemDescHandle applies one item_desc create. The desc's references are
+// gated: a ref applies only when the desc author equals the referenced
+// item's album issuer — nobody can describe someone else's items.
 func (a *Aggregator) itemDescHandle(collectionName string, pin *aggregator.PinInscription) {
 	refs, ok := parseItemDescRefs(pin.ContentBody)
 	if !ok {
 		return
 	}
-	col, err := a.db.GetCollectionByName(collectionName)
+	col, err := a.db.GetCollection(collectionName, pin.Address)
 	if err != nil {
-		log.Printf("[mrc721nft] get collection %s: %v", collectionName, err)
+		log.Printf("[mrc721nft] get collection %s/%s: %v", collectionName, pin.Address, err)
 		return
 	}
 	if col == nil {
-		// Collection not registered: stage the parsed refs, replayed after
-		// registration.
-		if err := a.db.PutPending(collectionName, &PendingEntry{
+		// The author's album under this name is not registered: stage the
+		// parsed refs, replayed after registration (and only ever applied to
+		// items of that same author's albums).
+		if err := a.db.PutPending(collectionName, pin.Address, &PendingEntry{
 			Kind: "desc", PinId: pin.Id,
 			Desc: &PendingDesc{DescPinId: pin.Id, Items: refs},
 		}); err != nil {
@@ -320,22 +340,17 @@ func (a *Aggregator) itemDescHandle(collectionName string, pin *aggregator.PinIn
 		}
 		return
 	}
-	if !a.applyDescRefs(refs) {
-		// Some referenced items are not indexed yet: stage it, replayed once
-		// they mint.
-		if err := a.db.PutPending(collectionName, &PendingEntry{
-			Kind: "desc", PinId: pin.Id,
-			Desc: &PendingDesc{DescPinId: pin.Id, Items: refs},
-		}); err != nil {
-			log.Printf("WARNING: mrc721nft stage desc %s: %v", pin.Id, err)
-		}
-	}
+	// Gate-passing refs whose items have not minted yet stay staged.
+	a.applyDescRefs(collectionName, pin.Id, pin.Address, refs)
 }
 
 // applyDescRefs backfills item_desc references into indexed items (first
-// per field wins). Reports whether every referenced item is indexed.
-func (a *Aggregator) applyDescRefs(refs []ItemDescRef) bool {
-	allApplied := true
+// per field wins), gated by the issuer rule: a ref applies only when the
+// desc author equals the referenced item's album issuer. Refs whose items
+// have not minted yet are staged for replay; refs failing the issuer gate
+// are dropped with a log line.
+func (a *Aggregator) applyDescRefs(collectionName, descPinId, issuerAddress string, refs []ItemDescRef) {
+	var waiting []ItemDescRef
 	for _, ref := range refs {
 		if ref.PinId == "" {
 			continue
@@ -346,7 +361,22 @@ func (a *Aggregator) applyDescRefs(refs []ItemDescRef) bool {
 			continue
 		}
 		if item == nil {
-			allApplied = false
+			waiting = append(waiting, ref)
+			continue
+		}
+		// Issuer gate: the desc author must be the referenced item's album
+		// issuer. The item's album is fixed by its collectionid.
+		itemCol, err := a.db.GetCollectionByPinId(item.CollectionPinId)
+		if err != nil {
+			log.Printf("[mrc721nft] get item collection %s: %v", item.CollectionPinId, err)
+			continue
+		}
+		if itemCol == nil {
+			log.Printf("WARNING: mrc721nft item_desc %s: item %s references missing collection %s", descPinId, ref.PinId, item.CollectionPinId)
+			continue
+		}
+		if itemCol.CreateAddress != issuerAddress {
+			log.Printf("WARNING: mrc721nft item_desc %s rejected for item %s: %s is not issuer of %s (%s)", descPinId, ref.PinId, issuerAddress, itemCol.CollectionName, itemCol.CreateAddress)
 			continue
 		}
 		changed := false
@@ -368,7 +398,14 @@ func (a *Aggregator) applyDescRefs(refs []ItemDescRef) bool {
 			}
 		}
 	}
-	return allApplied
+	if len(waiting) > 0 {
+		if err := a.db.PutPending(collectionName, issuerAddress, &PendingEntry{
+			Kind: "desc", PinId: descPinId,
+			Desc: &PendingDesc{DescPinId: descPinId, Items: waiting},
+		}); err != nil {
+			log.Printf("WARNING: mrc721nft stage desc %s: %v", descPinId, err)
+		}
+	}
 }
 
 func parseItemDescRefs(contentBody []byte) ([]ItemDescRef, bool) {
@@ -391,10 +428,13 @@ func parseItemDescRefs(contentBody []byte) ([]ItemDescRef, bool) {
 
 // ---------- mint ----------
 
+// mintHandle applies one mint create under issuer-only attribution: the pin
+// belongs to the same-name album whose issuer is the minter; a user without
+// a registered album under that name never contributes to anyone's album.
 func (a *Aggregator) mintHandle(collectionName string, pin *aggregator.PinInscription) {
-	col, err := a.db.GetCollectionByName(collectionName)
+	col, err := a.db.GetCollection(collectionName, pin.Address)
 	if err != nil {
-		log.Printf("[mrc721nft] get collection %s: %v", collectionName, err)
+		log.Printf("[mrc721nft] get collection %s/%s: %v", collectionName, pin.Address, err)
 		return
 	}
 	mint := &PendingMint{
@@ -414,8 +454,9 @@ func (a *Aggregator) mintHandle(collectionName string, pin *aggregator.PinInscri
 		CreateTime:  pin.Timestamp,
 	}
 	if col == nil {
-		// Out of order: collection not registered yet, stage for replay.
-		if err := a.db.PutPending(collectionName, &PendingEntry{
+		// Out of order: the minter's album under this name is not registered
+		// yet, stage for replay (only ever replayed to that same album).
+		if err := a.db.PutPending(collectionName, pin.Address, &PendingEntry{
 			Kind: "mint", PinId: pin.Id, Mint: mint,
 		}); err != nil {
 			log.Printf("WARNING: mrc721nft stage mint %s: %v", pin.Id, err)
@@ -426,11 +467,20 @@ func (a *Aggregator) mintHandle(collectionName string, pin *aggregator.PinInscri
 }
 
 // mintCommit indexes an item: supply gate, number allocation, main table +
-// collection order + holder index. Idempotent by itemPinId: the same pin
+// album order + holder index. Idempotent by itemPinId: the same pin
 // arriving through dual paths or a backfill replay never double-counts.
+// Under issuer-only attribution the minter is always the album issuer (the
+// album is resolved by the minter's own address), so CreatorMinted is true
+// by construction.
 func (a *Aggregator) mintCommit(collectionName string, col *Collection, mint *PendingMint) bool {
 	if existing, _ := a.db.GetItem(mint.ItemPinId); existing != nil {
 		return true
+	}
+	if mint.OwnerAddress != col.CreateAddress {
+		// Invariant guard: collection resolution is by (name, minter
+		// address), so this cannot trigger — kept as defence in depth.
+		log.Printf("WARNING: mrc721nft mint %s rejected: %s is not issuer of %s (%s)", mint.ItemPinId, mint.OwnerAddress, collectionName, col.CreateAddress)
+		return false
 	}
 	if col.TotalSupply != -1 && col.TotalNum >= col.TotalSupply {
 		log.Printf("WARNING: mrc721nft mint %s rejected: exceeds totalSupply %d", collectionName, col.TotalSupply)
@@ -463,15 +513,15 @@ func (a *Aggregator) mintCommit(collectionName string, col *Collection, mint *Pe
 		log.Printf("WARNING: mrc721nft save item: %v", err)
 		return false
 	}
-	if err := a.db.AppendCollectionItem(collectionName, item.Number, item.ItemPinId); err != nil {
+	if err := a.db.AppendCollectionItem(col.PinId, item.Number, item.ItemPinId); err != nil {
 		log.Printf("WARNING: mrc721nft append coll item: %v", err)
 	}
-	if err := a.db.PutOwnerItem(mint.OwnerAddress, collectionName, item.ItemPinId); err != nil {
+	if err := a.db.PutOwnerItem(mint.OwnerAddress, col.PinId, item.ItemPinId); err != nil {
 		log.Printf("WARNING: mrc721nft put owner item: %v", err)
 	}
 	a.markTrackedDirty()
 	// The new item may be exactly what a staged desc is waiting for.
-	a.drainPendingDescs(collectionName)
+	a.drainPendingDescs(collectionName, col.CreateAddress)
 	return true
 }
 
@@ -505,13 +555,13 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 			// history row for provenance.
 			item.Burned = true
 			if item.OwnerAddress != "" {
-				a.db.DeleteOwnerItem(item.OwnerAddress, item.CollectionName, item.ItemPinId)
+				a.db.DeleteOwnerItem(item.OwnerAddress, item.CollectionPinId, item.ItemPinId)
 			}
 		} else if item.OwnerAddress != info.Address {
 			if item.OwnerAddress != "" {
-				a.db.DeleteOwnerItem(item.OwnerAddress, item.CollectionName, item.ItemPinId)
+				a.db.DeleteOwnerItem(item.OwnerAddress, item.CollectionPinId, item.ItemPinId)
 			}
-			a.db.PutOwnerItem(info.Address, item.CollectionName, item.ItemPinId)
+			a.db.PutOwnerItem(info.Address, item.CollectionPinId, item.ItemPinId)
 			item.OwnerAddress = info.Address
 			item.OwnerMetaId = globalMetaIdByAddress(info.Address)
 		}
@@ -549,37 +599,31 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 
 // ---------- pending replay ----------
 
-// drainPending replays all staged pins after a collection registers: mints
-// commit first, descs backfill next, colmods apply last in time order.
-func (a *Aggregator) drainPending(collectionName string) {
-	col, err := a.db.GetCollectionByName(collectionName)
+// drainPending replays an issuer's staged pins after their album registers:
+// mints commit first, descs backfill next, colmods apply last in time order.
+func (a *Aggregator) drainPending(collectionName, issuerAddress string) {
+	col, err := a.db.GetCollection(collectionName, issuerAddress)
 	if err != nil || col == nil {
 		return
 	}
-	entries, err := a.db.PopPending(collectionName)
+	entries, err := a.db.PopPending(collectionName, issuerAddress)
 	if err != nil {
-		log.Printf("WARNING: mrc721nft pop pending %s: %v", collectionName, err)
+		log.Printf("WARNING: mrc721nft pop pending %s/%s: %v", collectionName, issuerAddress, err)
 		return
 	}
 	if len(entries) == 0 {
 		return
 	}
-	var descs []*PendingEntry
 	var colMods []*PendingEntry
 	for _, entry := range entries {
 		switch {
 		case entry.Kind == "mint" && entry.Mint != nil:
 			a.mintCommit(collectionName, col, entry.Mint)
 		case entry.Kind == "desc":
-			descs = append(descs, entry)
+			a.drainOneDesc(collectionName, issuerAddress, entry)
 		case entry.Kind == "colmod" && entry.ColMod != nil:
 			colMods = append(colMods, entry)
 		}
-	}
-	// Desc backfills may reference items the replayed mints just created, so
-	// they run after the mints.
-	for _, entry := range descs {
-		a.drainOneDesc(collectionName, entry)
 	}
 	// colmods replay in (timestamp, pinId) order; the last one wins.
 	sort.Slice(colMods, func(i, j int) bool {
@@ -591,7 +635,7 @@ func (a *Aggregator) drainPending(collectionName string) {
 	})
 	for _, entry := range colMods {
 		m := entry.ColMod
-		col, err := a.db.GetCollectionByName(collectionName)
+		col, err := a.db.GetCollection(collectionName, issuerAddress)
 		if err != nil || col == nil {
 			return
 		}
@@ -599,31 +643,29 @@ func (a *Aggregator) drainPending(collectionName string) {
 	}
 }
 
-// drainPendingDescs replays staged descs once their referenced items minted.
-func (a *Aggregator) drainPendingDescs(collectionName string) {
-	entries, err := a.db.PopPending(collectionName)
+// drainPendingDescs replays an issuer's staged descs once new items of their
+// album minted; non-desc staging goes back as-is.
+func (a *Aggregator) drainPendingDescs(collectionName, issuerAddress string) {
+	entries, err := a.db.PopPending(collectionName, issuerAddress)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
 		if entry.Kind == "desc" {
-			a.drainOneDesc(collectionName, entry)
+			a.drainOneDesc(collectionName, issuerAddress, entry)
 		} else {
-			// Non-desc staging goes back as-is.
-			a.db.PutPending(collectionName, entry)
+			a.db.PutPending(collectionName, issuerAddress, entry)
 		}
 	}
 }
 
-// drainOneDesc applies one staged desc; re-stages it while references remain
-// unindexed.
-func (a *Aggregator) drainOneDesc(collectionName string, entry *PendingEntry) {
+// drainOneDesc applies one staged desc under the issuer gate; refs whose
+// items are still unindexed are re-staged by applyDescRefs.
+func (a *Aggregator) drainOneDesc(collectionName, issuerAddress string, entry *PendingEntry) {
 	if entry.Desc == nil {
 		return
 	}
-	if !a.applyDescRefs(entry.Desc.Items) {
-		a.db.PutPending(collectionName, entry)
-	}
+	a.applyDescRefs(collectionName, entry.Desc.DescPinId, issuerAddress, entry.Desc.Items)
 }
 
 // ---------- content parsing (case-insensitive JSON keys, values verbatim) ----------
