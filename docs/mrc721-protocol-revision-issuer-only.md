@@ -1,9 +1,10 @@
 # MRC-721 Protocol Revision Proposal: Issuer-Only Minting and Non-Unique Collection Names
 
-Status: **proposal** — circulated for alignment among protocol authors before
-the docs.metaid.io page is updated. The MetaSo indexer implements this
-semantics on its native read model regardless; this document is the
-ecosystem-facing definition.
+Status: **agreed** (2026-11-07, aligned among the protocol authors) — the
+original docs.metaid.io page predates this revision and is being updated
+separately; any residual ambiguity there should be read against this
+document. The MetaSo indexer implements these semantics on its native read
+model (branch `feat/mrc721-issuer-only`).
 
 Date: 2026-11-07
 

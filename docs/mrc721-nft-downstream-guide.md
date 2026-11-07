@@ -8,17 +8,22 @@ manapi-compatible upstream.
 
 **TL;DR**: MetaSo-P2P now serves the full man-p2p MRC-721 read surface
 **byte-for-byte** — same paths, params, pagination, envelope codes and DTO
-field spellings. The migration is a **base-URL switch**. There is exactly
-**one deliberate value divergence** (§3: metaid fields now carry global
-metaids), which matches the IDBots requirement doc (§2/§R5: identity
-display prefers globalMetaId).
+field spellings. The migration is a **base-URL switch**. There are exactly
+**two deliberate divergences** (§3: metaid fields now carry global metaids;
+§4: the 2026-11-07 issuer-only protocol revision — album identity by
+collectionid, issuer-only minting, non-unique collection names), the first
+matching the IDBots requirement doc (§2/§R5: identity display prefers
+globalMetaId), the second the agreed protocol upgrade in
+[`docs/mrc721-protocol-revision-issuer-only.md`](mrc721-protocol-revision-issuer-only.md).
 
 ## 1. What changed upstream
 
 - MetaSo-P2P natively indexes `/nft/mrc721` pins (previously man-p2p's job)
-  with man-p2p's aggregation semantics ported 1:1: first-wins collections,
-  issuer-only `collection_desc modify` version chains, first-per-field
-  `item_desc` backfill, supply-gated mints, out-of-order self-healing.
+  with man-p2p's aggregation semantics ported 1:1 and then **revised
+  2026-11-07** (§4): albums identified by collectionid with issuer-only
+  minting attribution, issuer-only `collection_desc modify` version chains,
+  issuer-gated first-per-field `item_desc` backfill, supply-gated mints,
+  out-of-order self-healing.
 - The confirmed transfer pipeline runs every block (ledger-txid pointers,
   input-0 → output-0 ownership rule, meltdown burns) and a 30s full-mempool
   scan exposes **unconfirmed spends** through the pending channel — closing
@@ -59,7 +64,7 @@ Notes:
   `collection/search`, `address/collections-issued`) already point at
   `https://so.metaid.io` and are unchanged.
 
-## 3. The one divergence: metaid fields carry global metaids
+## 3. First divergence: metaid fields carry global metaids
 
 **man-p2p** emits `metaid` / `createMetaId` / `ownerMetaId` (and their
 lowercase aliases) as the **legacy metaid**: `sha256(address)` hex
@@ -85,9 +90,45 @@ normalize identities with).
   - Unconvertible addresses yield `""` (an improvement: empty owners no
     longer produce a junk sha256-of-empty value).
 - man-p2p has **not** made this change on its side; if you ever point the
-  base back at man-p2p, metaid fields revert to legacy hex (§6).
+  base back at man-p2p, metaid fields revert to legacy hex (§7).
 
-## 4. Contract guarantees (what did NOT change)
+## 4. Second divergence (2026-11-07): issuer-only minting, non-unique names
+
+The MRC-721 protocol semantics were revised by the protocol authors
+([`docs/mrc721-protocol-revision-issuer-only.md`](mrc721-protocol-revision-issuer-only.md))
+while on-chain NFT volume is still minimal — MetaSo implements the revised
+semantics; man-p2p still runs the original open-mint / unique-name behavior.
+
+What changed:
+
+- **Album identity = collectionid** (the `collection_desc` pinid), with
+  (collectionName, issuer address) as the human-level pair. Collection
+  names are **not unique** and confer no ownership: two albums may share a
+  name exactly like two ERC-721 contracts sharing a display name. Address
+  albums by `pinid` / `collectionPinId`, never by name.
+- **Minting is issuer-only**: an item under `/nft/mrc721/{name}` is indexed
+  only into the same-name album whose `collection_desc` author minted it.
+  Third parties can no longer consume `totalSupply` slots or insert items
+  into someone else's album. Consequently `creatorMinted` is `true` on
+  every indexed item (field kept for wire compatibility), and album item
+  numbers are dense 1..N of the issuer's mints.
+- **item_desc is issuer-gated** too: only the referenced item's album
+  issuer can backfill its name/desc/cover/metadata.
+
+API impact (wire shapes unchanged):
+
+- A `name` parameter (`collection/info`, `collection/items/pageList`,
+  `address/item` filter) resolves to the **earliest-created album** under
+  that name — deterministic, but ambiguous by design; prefer the `pinId`
+  parameter wherever possible.
+- List endpoints (`collection/pageList`, `collection/search`) can return
+  several rows with the same `collectionname` — distinct albums; key UI
+  state by `pinid`.
+- Item sets differ from man-p2p's for any album where third-party pins
+  exist under the album path (man-p2p indexes them open-mint style, MetaSo
+  does not). This is the intended divergence.
+
+## 5. Contract guarantees (what did NOT change)
 
 | Aspect | Guarantee |
 |---|---|
@@ -97,10 +138,11 @@ normalize identities with).
 | DTOs | Identical dual spellings (`collectionname`/`collectionName`, `pinid`, `totalnum`, `txOutput`/`output`, `txValue`/`outputValue`, `metaData`/`metadata`, `contentString`/`contentSummary`, …); `address`/`metaId` = current holder |
 | Outpoints | `output`/`txOutput` and history `txId` use **ledger txids** (MVC version≥10 reordered hash) — spendable on-chain references, transfer construction safe (no `[-25] Missing inputs`) |
 | Pending channel | `item/info` adds a `pending` key **only** when an unconfirmed spend exists (absent ≠ null); `item/transfers` always carries a `pending` array that is never merged into `list`/`total` |
-| Ordering | `collection/pageList` name-keyed; items in ingest order; holder views deduped with per-collection `ownnum` |
+| Ordering | `collection/pageList` keyed by (name, issuer); items in mint order (dense 1..N per album); holder views deduped per album with `ownnum` |
+| Identity keying | Albums are keyed by **collectionid** (`pinid`/`collectionPinId`); a `name` param resolves to the earliest album under the name (man-p2p's "name wins" precedence kept) — prefer `pinId` (§4) |
 | Bonus endpoints | `GET /api/tx/status?chainName=&txid=` (generic transaction status, man-p2p parity) and `GET /api/mrc721/admin/replay-pins?pinIds=` (ops repair, re-applies an entity's upstream state — semantics differ slightly from man-p2p's pin replay: unknown pin ids answer `pin not found`) |
 
-## 5. Verification checklist (run before + after the switch)
+## 6. Verification checklist (run before + after the switch)
 
 ```bash
 BASE=https://so.metaid.io/api/mrc721
@@ -124,15 +166,19 @@ disappear with a new `item/transfers` row once the block confirms.
 (MVC was in a quiet period at release time, so this channel is live but not
 yet exercised by a real transfer.)
 
-## 6. Rollback
+## 7. Rollback
 
 Point the base back at `https://manapi.metaid.io` — man-p2p keeps serving
-its copy of the same aggregate. Only caveat: metaid fields revert to legacy
-sha256 hex there, so do not mix identities across the two bases.
+its own copy of the aggregate. Caveats: metaid fields revert to legacy
+sha256 hex there, and man-p2p still runs the pre-revision open-mint /
+unique-name semantics — for albums with third-party pins under the album
+path the two bases legitimately disagree on the item sets (§4). Do not mix
+identities or item sets across the two bases.
 
-## 7. References
+## 8. References
 
 - Spec: [`docs/specs/2026-11-05-mrc721-nft-api.md`](specs/2026-11-05-mrc721-nft-api.md)
 - Deployment/ops: [`docs/mrc721-index-deployment.md`](mrc721-index-deployment.md)
 - Sell-intent spec (already live on MetaSo): [`docs/specs/2026-11-04-mrc721-sell-collection-api.md`](specs/2026-11-04-mrc721-sell-collection-api.md)
+- Protocol revision (2026-11-07): [`docs/mrc721-protocol-revision-issuer-only.md`](mrc721-protocol-revision-issuer-only.md)
 - IDBots requirement input: man-p2p `docs/IDBOTS_MRC721_REQUIREMENTS.md`
