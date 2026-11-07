@@ -1,16 +1,18 @@
 // Command metaso-p2p-mrc721-nft-backfill bootstraps the native MRC-721 NFT
 // aggregate offline from the manapi-compatible upstream (man-p2p) read views:
 //
-//   - phase 1 sweeps /api/mrc721/collection/pageList into the collection
+//   - phase 1 sweeps /api/mrc721/collection/pageList into the album
 //     records (c:/cp:),
-//   - phase 2 sweeps each collection's /api/mrc721/collection/items/pageList
+//   - phase 2 sweeps each album's /api/mrc721/collection/items/pageList
 //     into the item records plus holder index (i:/ci:/oi:),
 //   - phase 3 sweeps each item's /api/mrc721/item/transfers into the
 //     provenance history (th:).
 //
-// The hydrated aggregate is diff-identical to what man-p2p currently serves,
-// so downstream consumers can switch their base URL without seeing anything
-// change. Every phase is idempotent and independently re-runnable via
+// Under the issuer-only protocol revision
+// (docs/mrc721-protocol-revision-issuer-only.md) the hydrate is a filtered
+// projection of the upstream open-mint index: item rows not minted by their
+// album issuer are skipped and the surviving items are renumbered densely
+// per album. Every phase is idempotent and independently re-runnable via
 // --skip-*; run with the daemon stopped (same Pebble namespace).
 package main
 
@@ -93,7 +95,7 @@ func run(args []string) error {
 		return err
 	}
 
-	log.Printf("[mrc721-nft-backfill] done: collections=%d items=%d ownerMoves=%d transfers=%d skippedTransfers=%d",
-		stats.Collections, stats.Items, stats.OwnerMoves, stats.Transfers, stats.SkippedTransfers)
+	log.Printf("[mrc721-nft-backfill] done: collections=%d items=%d ownerMoves=%d transfers=%d skippedTransfers=%d skippedNonIssuer=%d",
+		stats.Collections, stats.Items, stats.OwnerMoves, stats.Transfers, stats.SkippedTransfers, stats.SkippedNonIssuer)
 	return nil
 }

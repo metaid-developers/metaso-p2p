@@ -18,8 +18,9 @@ func seedSearchAlbums(t *testing.T, a *Aggregator) {
 			[]byte(`{"name":"Boring Pics","desc":"nothing here"}`), other),
 		testPin("s3", "/nft/mrc721/Gamma Collection/collection_desc", "create",
 			[]byte(`{"name":"Gamma"}`), creator),
-		// A mint so Alpha's totalnum/mintedCount is non-zero.
-		testPin("m1", "/nft/mrc721/Alpha Collection/one", "create", []byte(`"x"`), other),
+		// A mint (by the issuer — issuer-only attribution) so Alpha's
+		// totalnum/mintedCount is non-zero.
+		testPin("m1", "/nft/mrc721/Alpha Collection/one", "create", []byte(`"x"`), creator),
 	)
 }
 

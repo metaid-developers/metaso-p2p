@@ -8,10 +8,12 @@ import (
 )
 
 // Aggregate unit tests, ported from man-p2p's man/mrc721_test.go and
-// man/mrc721_colmod_test.go: registration / first-wins / supply caps /
-// out-of-order self-healing / case handling / the full collection_desc
-// modify matrix / the transfer hook. They drive HandleBlockPin (the block
-// ingest path) and the transfer hook directly — no chain adapter needed.
+// man/mrc721_colmod_test.go, then revised per
+// docs/mrc721-protocol-revision-issuer-only.md: issuer-only minting
+// attribution, non-unique collection names with per-(name, issuer) albums,
+// the item_desc issuer gate and the (name, issuer)-scoped pending staging.
+// They drive HandleBlockPin (the block ingest path) and the transfer hook
+// directly — no chain adapter needed.
 
 func newTestAggregator(t *testing.T) *Aggregator {
 	t.Helper()
@@ -81,6 +83,17 @@ func transferFor(itemPinId, to, from, output string, value int64, meltdown bool)
 	return transferMap, pinIdByOutput
 }
 
+// mustCol fetches the album under (name, issuer), failing the test when
+// missing.
+func mustCol(t *testing.T, a *Aggregator, name, issuer string) *Collection {
+	t.Helper()
+	col, err := a.db.GetCollection(name, issuer)
+	if err != nil || col == nil {
+		t.Fatalf("collection %s/%s not registered: %v", name, issuer, err)
+	}
+	return col
+}
+
 // Test addresses are valid mainnet base58 addresses so the global-metaid
 // derivation (IDAddress) produces non-empty deterministic values.
 const (
@@ -107,20 +120,19 @@ func TestGlobalMetaIdDerivation(t *testing.T) {
 	}
 }
 
-func TestCollectionRegisterFirstWins(t *testing.T) {
+func TestCollectionRegisterPerIssuer(t *testing.T) {
 	a := newTestAggregator(t)
 
 	descA := `{"name":"My Cool Album","totalSupply":100,"royaltyRate":5,"desc":"D","website":"https://Example.COM","cover":"metafile://coverpin","metadata":{"x":1}}`
-	descB := `{"name":"Imposter Album","totalSupply":1}`
 	pinA := testPin("collA", "/nft/mrc721/TestAlbum/collection_desc", "create", []byte(descA), creator)
-	pinB := testPin("collB", "/nft/mrc721/TestAlbum/collection_desc", "create", []byte(descB), other)
+	pinA2 := testPin("collA2", "/nft/mrc721/TestAlbum/collection_desc", "create", []byte(`{"name":"Reissue"}`), creator)
+	pinB := testPin("collB", "/nft/mrc721/TestAlbum/collection_desc", "create", []byte(`{"name":"Other Issuer Album","totalSupply":1}`), other)
 
-	runPins(t, a, pinA, pinB)
+	runPins(t, a, pinA, pinA2, pinB)
 
-	col, err := a.db.GetCollectionByName("TestAlbum")
-	if err != nil || col == nil {
-		t.Fatalf("collection not registered: %v", err)
-	}
+	// First desc per (name, issuer) wins; a re-issue by the same issuer is
+	// ignored...
+	col := mustCol(t, a, "TestAlbum", creator)
 	if col.PinId != "collA" {
 		t.Fatalf("first collection_desc should win, got pinid=%s", col.PinId)
 	}
@@ -133,9 +145,27 @@ func TestCollectionRegisterFirstWins(t *testing.T) {
 	if col.CreateAddress != creator || col.CreateMetaId != globalMetaIdByAddress(creator) || col.TotalNum != 0 {
 		t.Fatalf("creator/totalnum wrong: %s %s %d", col.CreateAddress, col.CreateMetaId, col.TotalNum)
 	}
+
+	// ...while a desc by a different address under the same name is a
+	// separate, independent album (names are not unique).
+	colB := mustCol(t, a, "TestAlbum", other)
+	if colB.PinId != "collB" || colB.Name != "Other Issuer Album" || colB.TotalSupply != 1 {
+		t.Fatalf("second issuer must get an independent album: %+v", colB)
+	}
+
+	// collectionid reverse lookup for both albums.
 	byPinId, err := a.db.GetCollectionByPinId("collA")
-	if err != nil || byPinId == nil || byPinId.CollectionName != "TestAlbum" {
+	if err != nil || byPinId == nil || byPinId.CollectionName != "TestAlbum" || byPinId.CreateAddress != creator {
 		t.Fatalf("collection by pinid lookup failed: %v", err)
+	}
+	if byPinId, _ := a.db.GetCollectionByPinId("collB"); byPinId == nil || byPinId.CreateAddress != other {
+		t.Fatalf("second album pinid lookup failed: %+v", byPinId)
+	}
+
+	// Name-based fallback resolves to the earliest-created album.
+	earliest, err := a.db.GetEarliestCollectionByName("TestAlbum")
+	if err != nil || earliest == nil || earliest.PinId != "collA" {
+		t.Fatalf("earliest-by-name fallback wrong: %+v (err=%v)", earliest, err)
 	}
 }
 
@@ -147,10 +177,7 @@ func TestDefaultsAndCIReturn(t *testing.T) {
 	desc := `{"Name":"Camel Keys","TotalSupply":10}`
 	runPins(t, a, testPin("collC", "/nft/mrc721/CIAlbum/collection_desc", "create", []byte(desc), creator))
 
-	col, _ := a.db.GetCollectionByName("CIAlbum")
-	if col == nil {
-		t.Fatal("collection not registered")
-	}
+	col := mustCol(t, a, "CIAlbum", creator)
 	if col.Name != "Camel Keys" || col.TotalSupply != 10 {
 		t.Fatalf("case-insensitive keys failed: %+v", col)
 	}
@@ -159,29 +186,27 @@ func TestDefaultsAndCIReturn(t *testing.T) {
 	}
 }
 
-func TestMintSeqAndCreatorMinted(t *testing.T) {
+func TestMintIssuerOnlyAttribution(t *testing.T) {
 	a := newTestAggregator(t)
 
 	runPins(t, a,
 		testPin("c1", "/nft/mrc721/SeqAlbum/collection_desc", "create", []byte(`{"name":"S","totalSupply":-1}`), creator),
 		testPin("i1", "/nft/mrc721/SeqAlbum/item-one", "create", []byte(`"content 1"`), creator),
+		// A mint by a non-issuer under the issuer's album name is not
+		// attributed to anyone's album.
 		testPin("i2", "/nft/mrc721/SeqAlbum/item-two", "create", []byte(`"content 2"`), other),
 	)
 
-	col, _ := a.db.GetCollectionByName("SeqAlbum")
-	if col == nil || col.TotalNum != 2 {
-		t.Fatalf("totalnum wrong: %+v", col)
+	col := mustCol(t, a, "SeqAlbum", creator)
+	if col.TotalNum != 1 {
+		t.Fatalf("totalnum must count issuer mints only: %+v", col)
 	}
 	item1, _ := a.db.GetItem("i1")
-	item2, _ := a.db.GetItem("i2")
 	if item1 == nil || item1.Number != 1 || !item1.CreatorMinted {
 		t.Fatalf("item1 wrong: %+v", item1)
 	}
-	if item2 == nil || item2.Number != 2 || item2.CreatorMinted {
-		t.Fatalf("item2 wrong: %+v", item2)
-	}
-	if item2.OwnerAddress != other || item2.OwnerMetaId != globalMetaIdByAddress(other) {
-		t.Fatalf("owner wrong: %+v", item2)
+	if item2, _ := a.db.GetItem("i2"); item2 != nil {
+		t.Fatalf("non-issuer mint must not be indexed: %+v", item2)
 	}
 	if item1.CollectionPinId != "c1" {
 		t.Fatalf("collectionPinId wrong: %s", item1.CollectionPinId)
@@ -189,27 +214,42 @@ func TestMintSeqAndCreatorMinted(t *testing.T) {
 	if item1.Output != "i1:0" || item1.OutputValue != 1000 {
 		t.Fatalf("mint outpoint not recorded: %s %d", item1.Output, item1.OutputValue)
 	}
-	// In-collection ingest order.
+	// In-album mint order, keyed by the collectionid.
 	var seqs []int64
-	a.db.IterateCollectionItems("SeqAlbum", func(seq int64, itemPinId string) bool {
+	a.db.IterateCollectionItems("c1", func(seq int64, itemPinId string) bool {
 		seqs = append(seqs, seq)
 		return true
 	})
-	if len(seqs) != 2 || seqs[0] != 1 || seqs[1] != 2 {
+	if len(seqs) != 1 || seqs[0] != 1 {
 		t.Fatalf("coll item order wrong: %v", seqs)
 	}
-	// Holder index.
+	// Holder index, keyed by the collectionid.
 	ownerCount := 0
-	a.db.IterateOwnerItems(other, "SeqAlbum", func(cn, itemPinId string) bool {
+	a.db.IterateOwnerItems(creator, "c1", func(cn, itemPinId string) bool {
 		ownerCount++
 		return true
 	})
 	if ownerCount != 1 {
 		t.Fatalf("owner index count wrong: %d", ownerCount)
 	}
+
+	// The staged non-issuer mint replays into the minter's OWN album once
+	// they register one under the same name.
+	runPins(t, a, testPin("c2", "/nft/mrc721/SeqAlbum/collection_desc", "create",
+		[]byte(`{"name":"Other Same Name","totalSupply":-1}`), other))
+	item2, _ := a.db.GetItem("i2")
+	if item2 == nil || item2.CollectionPinId != "c2" || item2.Number != 1 || !item2.CreatorMinted {
+		t.Fatalf("staged mint must replay into its own issuer's album: %+v", item2)
+	}
+	if got := mustCol(t, a, "SeqAlbum", creator); got.TotalNum != 1 {
+		t.Fatalf("issuer album must be untouched by the replay: %+v", got)
+	}
+	if got := mustCol(t, a, "SeqAlbum", other); got.TotalNum != 1 {
+		t.Fatalf("other's album must count its own mint: %+v", got)
+	}
 }
 
-func TestSupplyCap(t *testing.T) {
+func TestSupplyCapIssuerScoped(t *testing.T) {
 	a := newTestAggregator(t)
 
 	runPins(t, a,
@@ -217,23 +257,28 @@ func TestSupplyCap(t *testing.T) {
 		testPin("m1", "/nft/mrc721/CapAlbum/a", "create", []byte(`"1"`), creator),
 		testPin("m2", "/nft/mrc721/CapAlbum/b", "create", []byte(`"2"`), creator),
 		testPin("m3", "/nft/mrc721/CapAlbum/c", "create", []byte(`"3"`), creator),
+		// A non-issuer's pin neither consumes supply nor gets indexed.
+		testPin("mj", "/nft/mrc721/CapAlbum/junk", "create", []byte(`"junk"`), impostor),
 	)
 
-	col, _ := a.db.GetCollectionByName("CapAlbum")
-	if col == nil || col.TotalNum != 2 {
+	col := mustCol(t, a, "CapAlbum", creator)
+	if col.TotalNum != 2 {
 		t.Fatalf("totalnum should cap at 2: %+v", col)
 	}
 	if item, _ := a.db.GetItem("m3"); item != nil {
 		t.Fatalf("m3 should be rejected beyond totalSupply")
+	}
+	if item, _ := a.db.GetItem("mj"); item != nil {
+		t.Fatalf("non-issuer mint must not be indexed")
 	}
 }
 
 func TestOutOfOrderPending(t *testing.T) {
 	a := newTestAggregator(t)
 
-	// Mint and item_desc arrive before the collection_desc.
+	// Mint and item_desc arrive before the collection_desc (same issuer).
 	runPins(t, a,
-		testPin("m1", "/nft/mrc721/OooAlbum/nft-1", "create", []byte(`"raw nft"`), other),
+		testPin("m1", "/nft/mrc721/OooAlbum/nft-1", "create", []byte(`"raw nft"`), creator),
 		testPin("d1", "/nft/mrc721/OooAlbum/item_desc", "create",
 			[]byte(`{"items":[{"pinid":"m1","name":"Named Later","cover":"metafile://x"}]}`), creator),
 	)
@@ -252,14 +297,42 @@ func TestOutOfOrderPending(t *testing.T) {
 	if item.Name != "Named Later" || item.Cover != "metafile://x" {
 		t.Fatalf("pending desc not applied: %+v", item)
 	}
-	col, _ := a.db.GetCollectionByName("OooAlbum")
-	if col == nil || col.TotalNum != 1 {
+	col := mustCol(t, a, "OooAlbum", creator)
+	if col.TotalNum != 1 {
 		t.Fatalf("totalnum after replay wrong: %+v", col)
 	}
-	// Pending drained.
-	left, _ := a.db.PopPending("OooAlbum")
+	// Pending drained (scoped to the (name, issuer) album).
+	left, _ := a.db.PopPending("OooAlbum", creator)
 	if len(left) != 0 {
 		t.Fatalf("pending should be drained, left %d", len(left))
+	}
+}
+
+func TestOutOfOrderPendingIssuerScoped(t *testing.T) {
+	a := newTestAggregator(t)
+
+	// Two issuers stage mints under the same album name before either
+	// registers; each issuer's registration replays only their own pins.
+	runPins(t, a,
+		testPin("ma1", "/nft/mrc721/Shared/nft-1", "create", []byte(`"a1"`), creator),
+		testPin("mb1", "/nft/mrc721/Shared/nft-1", "create", []byte(`"b1"`), other),
+	)
+	runPins(t, a, testPin("cb", "/nft/mrc721/Shared/collection_desc", "create",
+		[]byte(`{"name":"Shared B"}`), other))
+
+	if item, _ := a.db.GetItem("ma1"); item != nil {
+		t.Fatalf("creator's staged mint must not attach to other's album")
+	}
+	itemB, _ := a.db.GetItem("mb1")
+	if itemB == nil || itemB.CollectionPinId != "cb" {
+		t.Fatalf("other's staged mint must replay into their own album: %+v", itemB)
+	}
+	// creator's mint stays staged until creator registers.
+	runPins(t, a, testPin("ca", "/nft/mrc721/Shared/collection_desc", "create",
+		[]byte(`{"name":"Shared A"}`), creator))
+	itemA, _ := a.db.GetItem("ma1")
+	if itemA == nil || itemA.CollectionPinId != "ca" {
+		t.Fatalf("creator's staged mint must replay into their own album: %+v", itemA)
 	}
 }
 
@@ -276,7 +349,7 @@ func TestDescBeforeMint(t *testing.T) {
 	}
 
 	// Minting replays the staged desc.
-	runPins(t, a, testPin("late-1", "/nft/mrc721/DescFirstAlbum/x", "create", []byte(`"late"`), other))
+	runPins(t, a, testPin("late-1", "/nft/mrc721/DescFirstAlbum/x", "create", []byte(`"late"`), creator))
 
 	item, _ := a.db.GetItem("late-1")
 	if item == nil || item.Name != "Late Name" || item.Desc != "Late Desc" {
@@ -308,6 +381,38 @@ func TestDescFirstWinsPerField(t *testing.T) {
 	}
 }
 
+// TestItemDescIssuerGate pins the R3 rule: only the referenced item's album
+// issuer can describe it; anyone else's item_desc is dropped (including one
+// whose author runs a same-name album).
+func TestItemDescIssuerGate(t *testing.T) {
+	a := newTestAggregator(t)
+
+	runPins(t, a,
+		testPin("c1", "/nft/mrc721/GateAlbum/collection_desc", "create", []byte(`{"name":"G"}`), creator),
+		testPin("i1", "/nft/mrc721/GateAlbum/a", "create", []byte(`"x"`), creator),
+		// Impostor's item_desc referencing the issuer's item.
+		testPin("dbad", "/nft/mrc721/GateAlbum/item_desc", "create",
+			[]byte(`{"items":[{"pinid":"i1","name":"HACKED","desc":"spam"}]}`), impostor),
+		// Same-name album by another issuer, then their desc — still not the
+		// item's album issuer.
+		testPin("c2", "/nft/mrc721/GateAlbum/collection_desc", "create", []byte(`{"name":"G2"}`), other),
+		testPin("dother", "/nft/mrc721/GateAlbum/item_desc", "create",
+			[]byte(`{"items":[{"pinid":"i1","name":"STILL WRONG"}]}`), other),
+	)
+	item, _ := a.db.GetItem("i1")
+	if item.Name != "" || item.Desc != "" {
+		t.Fatalf("non-issuer descs must be dropped: %+v", item)
+	}
+
+	// The issuer's desc applies.
+	runPins(t, a, testPin("dok", "/nft/mrc721/GateAlbum/item_desc", "create",
+		[]byte(`{"items":[{"pinid":"i1","name":"Real Name","cover":"metafile://real"}]}`), creator))
+	item, _ = a.db.GetItem("i1")
+	if item.Name != "Real Name" || item.Cover != "metafile://real" {
+		t.Fatalf("issuer desc must apply: %+v", item)
+	}
+}
+
 func TestInvalidIgnored(t *testing.T) {
 	a := newTestAggregator(t)
 
@@ -333,7 +438,7 @@ func TestInvalidIgnored(t *testing.T) {
 	)
 
 	for _, name := range []string{"BadAlbum", "BadAlbum2", "BadAlbum3", "WitnessAlbum"} {
-		if col, _ := a.db.GetCollectionByName(name); col != nil {
+		if col, _ := a.db.GetCollection(name, creator); col != nil {
 			t.Fatalf("collection %s should not be registered", name)
 		}
 	}
@@ -347,8 +452,8 @@ func TestHostPrefixedPathIndexed(t *testing.T) {
 	runPins(t, a, testPin("hc1", "abcd1234:/nft/mrc721/HostAlbum/collection_desc", "create",
 		[]byte(`{"name":"Hosted"}`), creator))
 
-	col, _ := a.db.GetCollectionByName("HostAlbum")
-	if col == nil || col.Name != "Hosted" {
+	col := mustCol(t, a, "HostAlbum", creator)
+	if col.Name != "Hosted" {
 		t.Fatalf("host-prefixed path should register the collection: %+v", col)
 	}
 }
@@ -363,7 +468,7 @@ func TestMempoolPinNotAggregated(t *testing.T) {
 	if item, _ := a.db.GetItem("mp1"); item != nil {
 		t.Fatal("mempool pin must not be aggregated")
 	}
-	if pending, _ := a.db.PopPending("MemAlbum"); len(pending) != 0 {
+	if pending, _ := a.db.PopPending("MemAlbum", creator); len(pending) != 0 {
 		t.Fatalf("mempool pin must not stage pending, got %d", len(pending))
 	}
 }
@@ -375,26 +480,26 @@ func TestTransferUpdatesOwner(t *testing.T) {
 
 	runPins(t, a,
 		testPin("c1", "/nft/mrc721/TrAlbum/collection_desc", "create", []byte(`{"name":"T"}`), creator),
-		testPin("n1", "/nft/mrc721/TrAlbum/a", "create", []byte(`"nft"`), other),
+		testPin("n1", "/nft/mrc721/TrAlbum/a", "create", []byte(`"nft"`), creator),
 	)
 
-	transferMap, pinIdByOutput := transferFor("n1", creator, other, "spendtx-n1:1", 546, false)
+	transferMap, pinIdByOutput := transferFor("n1", other, creator, "spendtx-n1:1", 546, false)
 	a.applyTransferHook("mvc", 200, transferMap, pinIdByOutput, 1700000100)
 
 	item, _ := a.db.GetItem("n1")
-	if item == nil || item.OwnerAddress != creator || item.TransferCount != 1 {
+	if item == nil || item.OwnerAddress != other || item.TransferCount != 1 {
 		t.Fatalf("owner not updated: %+v", item)
 	}
-	if item.OwnerMetaId != globalMetaIdByAddress(creator) {
+	if item.OwnerMetaId != globalMetaIdByAddress(other) {
 		t.Fatalf("owner metaid wrong: %q", item.OwnerMetaId)
 	}
 	if item.Output != "spendtx-n1:1" || item.OutputValue != 546 {
 		t.Fatalf("current outpoint not updated: %s %d", item.Output, item.OutputValue)
 	}
-	// Holder index re-keyed.
+	// Holder index re-keyed (keyed by the collectionid).
 	newCount, oldCount := 0, 0
-	a.db.IterateOwnerItems(creator, "TrAlbum", func(cn, ip string) bool { newCount++; return true })
-	a.db.IterateOwnerItems(other, "TrAlbum", func(cn, ip string) bool { oldCount++; return true })
+	a.db.IterateOwnerItems(other, "c1", func(cn, ip string) bool { newCount++; return true })
+	a.db.IterateOwnerItems(creator, "c1", func(cn, ip string) bool { oldCount++; return true })
 	if newCount != 1 || oldCount != 0 {
 		t.Fatalf("owner index not swapped: new=%d old=%d", newCount, oldCount)
 	}
@@ -411,7 +516,7 @@ func TestTransferUpdatesOwner(t *testing.T) {
 	if err != nil || histories != 1 {
 		t.Fatalf("transfer history not recorded: %v %d", err, histories)
 	}
-	if first.FromAddress != other || first.ToAddress != creator || first.Height != 200 {
+	if first.FromAddress != creator || first.ToAddress != other || first.Height != 200 {
 		t.Fatalf("transfer history fields wrong: %+v", first)
 	}
 }
@@ -433,7 +538,7 @@ func TestMeltdownBurns(t *testing.T) {
 	}
 	// Removed from holder views.
 	ownerCount := 0
-	a.db.IterateOwnerItems(creator, "BurnAlbum", func(cn, ip string) bool { ownerCount++; return true })
+	a.db.IterateOwnerItems(creator, "c1", func(cn, ip string) bool { ownerCount++; return true })
 	if ownerCount != 0 {
 		t.Fatalf("burned item should leave owner view: %d", ownerCount)
 	}
@@ -493,8 +598,8 @@ func TestDoubleMintIdempotent(t *testing.T) {
 	runPins(t, a, pin1, item1, item1)
 	runPins(t, a, item1)
 
-	col, _ := a.db.GetCollectionByName("IdemAlbum")
-	if col == nil || col.TotalNum != 1 {
+	col := mustCol(t, a, "IdemAlbum", creator)
+	if col.TotalNum != 1 {
 		t.Fatalf("double mint should not double count: %+v", col)
 	}
 	item, _ := a.db.GetItem("i1")
@@ -502,7 +607,7 @@ func TestDoubleMintIdempotent(t *testing.T) {
 		t.Fatalf("item number should stay 1: %+v", item)
 	}
 	listed := 0
-	a.db.IterateCollectionItems("IdemAlbum", func(seq int64, id string) bool { listed++; return true })
+	a.db.IterateCollectionItems("c1", func(seq int64, id string) bool { listed++; return true })
 	if listed != 1 {
 		t.Fatalf("coll item list should have 1 entry: %d", listed)
 	}
@@ -546,8 +651,8 @@ func TestCollectionModifyByIssuer(t *testing.T) {
 		`{"name":"V2","desc":"new","website":"https://New.Example","cover":"metafile://newcover","metadata":"m2","totalSupply":10,"royaltyRate":5}`)
 	runPins(t, a, mod1)
 
-	col, _ := a.db.GetCollectionByName("ModAlbum")
-	if col == nil || col.Name != "V2" || col.Desc != "new" || col.Website != "https://New.Example" || col.Cover != "metafile://newcover" || col.Metadata != "m2" {
+	col := mustCol(t, a, "ModAlbum", creator)
+	if col.Name != "V2" || col.Desc != "new" || col.Website != "https://New.Example" || col.Cover != "metafile://newcover" || col.Metadata != "m2" {
 		t.Fatalf("modify fields not applied: %+v", col)
 	}
 	if col.TotalSupply != 10 || col.RoyaltyRate != 5 {
@@ -560,7 +665,7 @@ func TestCollectionModifyByIssuer(t *testing.T) {
 	// Two modifies: the latest wins.
 	mod2 := modifyPin("mm2", "ModAlbum", creator, `{"name":"V3"}`)
 	runPins(t, a, mod2)
-	col, _ = a.db.GetCollectionByName("ModAlbum")
+	col = mustCol(t, a, "ModAlbum", creator)
 	if col.Name != "V3" || col.Desc != "new" {
 		t.Fatalf("second modify should win name but keep rest: %+v", col)
 	}
@@ -576,7 +681,7 @@ func TestCollectionModifyByIssuer(t *testing.T) {
 		testPin("mi1", "/nft/mrc721/ModAlbum/a", "create", []byte(`"1"`), creator),
 		testPin("mi2", "/nft/mrc721/ModAlbum/b", "create", []byte(`"2"`), creator),
 	)
-	col, _ = a.db.GetCollectionByName("ModAlbum")
+	col = mustCol(t, a, "ModAlbum", creator)
 	if col.TotalNum != 1 {
 		t.Fatalf("lowered totalSupply should gate future mints: %+v", col)
 	}
@@ -591,11 +696,16 @@ func TestCollectionModifyPermissions(t *testing.T) {
 	runPins(t, a, testPin("mc1", "/nft/mrc721/PermAlbum/collection_desc", "create",
 		[]byte(`{"name":"V1"}`), creator))
 
-	// Non-issuer modify is ignored.
+	// Non-issuer modify is ignored against the issuer's album; it stages in
+	// the modifier's own (name, address) scope and would only ever replay
+	// onto an album the modifier registers themselves.
 	runPins(t, a, modifyPin("bad1", "PermAlbum", impostor, `{"name":"HACKED"}`))
-	col, _ := a.db.GetCollectionByName("PermAlbum")
+	col := mustCol(t, a, "PermAlbum", creator)
 	if col.Name != "V1" || len(col.ModifyHistory) != 0 {
 		t.Fatalf("non-issuer modify must be ignored: %+v", col)
+	}
+	if left, _ := a.db.PopPending("PermAlbum", impostor); len(left) != 1 {
+		t.Fatalf("non-issuer modify stages in its own scope only, got %d", len(left))
 	}
 
 	// Invalid JSON / out-of-range totalSupply / out-of-range royaltyRate are
@@ -605,7 +715,7 @@ func TestCollectionModifyPermissions(t *testing.T) {
 		modifyPin("bad3", "PermAlbum", creator, `{"name":"X","totalSupply":-5}`),
 		modifyPin("bad4", "PermAlbum", creator, `{"name":"X","royaltyRate":25}`),
 	)
-	col, _ = a.db.GetCollectionByName("PermAlbum")
+	col = mustCol(t, a, "PermAlbum", creator)
 	if col.Name != "V1" || len(col.ModifyHistory) != 0 {
 		t.Fatalf("invalid modifies must be ignored entirely: %+v", col)
 	}
@@ -621,7 +731,7 @@ func TestCollectionModifyIdempotent(t *testing.T) {
 	runPins(t, a, mod, mod)
 	runPins(t, a, mod)
 
-	col, _ := a.db.GetCollectionByName("IdemModAlbum")
+	col := mustCol(t, a, "IdemModAlbum", creator)
 	if col.Name != "V2" || len(col.ModifyHistory) != 1 || col.ModifyHistory[0] != "im1" {
 		t.Fatalf("duplicate modify ingest must be idempotent: %+v", col)
 	}
@@ -638,21 +748,21 @@ func TestCollectionModifyPendingReplay(t *testing.T) {
 	early2.Timestamp = 1700000200
 	runPins(t, a, early2, early1) // out-of-order delivery
 
-	if col, _ := a.db.GetCollectionByName("PendModAlbum"); col != nil {
+	if col, _ := a.db.GetCollection("PendModAlbum", creator); col != nil {
 		t.Fatal("collection should not exist yet")
 	}
 
 	runPins(t, a, testPin("pc1", "/nft/mrc721/PendModAlbum/collection_desc", "create",
 		[]byte(`{"name":"BASE"}`), creator))
 
-	col, _ := a.db.GetCollectionByName("PendModAlbum")
+	col := mustCol(t, a, "PendModAlbum", creator)
 	if col == nil || col.Name != "MOD2" {
 		t.Fatalf("pending modifies should replay chronologically, latest wins: %+v", col)
 	}
 	if len(col.ModifyHistory) != 2 {
 		t.Fatalf("both pending modifies should be in history: %v", col.ModifyHistory)
 	}
-	left, _ := a.db.PopPending("PendModAlbum")
+	left, _ := a.db.PopPending("PendModAlbum", creator)
 	if len(left) != 0 {
 		t.Fatalf("pending should be drained: %d", len(left))
 	}
@@ -663,20 +773,20 @@ func TestItemPathModifyIgnored(t *testing.T) {
 
 	runPins(t, a,
 		testPin("ic1", "/nft/mrc721/ItmModAlbum/collection_desc", "create", []byte(`{"name":"I"}`), creator),
-		testPin("ii1", "/nft/mrc721/ItmModAlbum/a", "create", []byte(`"x"`), other),
+		testPin("ii1", "/nft/mrc721/ItmModAlbum/a", "create", []byte(`"x"`), creator),
 	)
 	// A modify on an item path has no aggregate effect.
-	itemMod := testPin("badmod", "/nft/mrc721/ItmModAlbum/a", "modify", []byte(`"hacked"`), other)
+	itemMod := testPin("badmod", "/nft/mrc721/ItmModAlbum/a", "modify", []byte(`"hacked"`), creator)
 	runPins(t, a, itemMod)
 
 	item, _ := a.db.GetItem("ii1")
-	if item == nil || item.OwnerAddress != other || item.TransferCount != 0 {
+	if item == nil || item.OwnerAddress != creator || item.TransferCount != 0 {
 		t.Fatalf("item modify must not affect item: %+v", item)
 	}
 	// revoke has no effect under /nft/mrc721.
 	revoke := testPin("rv1", "/nft/mrc721/ItmModAlbum/collection_desc", "revoke", []byte(`{"name":"GONE"}`), creator)
 	runPins(t, a, revoke)
-	col, _ := a.db.GetCollectionByName("ItmModAlbum")
+	col := mustCol(t, a, "ItmModAlbum", creator)
 	if col == nil || col.Name != "I" {
 		t.Fatalf("revoke must be ignored: %+v", col)
 	}
@@ -699,7 +809,7 @@ func TestModifyTransferAndVerifyUntouched(t *testing.T) {
 	if item == nil || item.OwnerAddress != other || item.TransferCount != 1 {
 		t.Fatalf("transfer after modify broken: %+v", item)
 	}
-	col, _ := a.db.GetCollectionByName("TrModAlbum")
+	col := mustCol(t, a, "TrModAlbum", creator)
 	if col == nil || col.Name != "T2" || len(col.ModifyHistory) != 1 {
 		t.Fatalf("collection state after transfer should be intact: %+v", col)
 	}

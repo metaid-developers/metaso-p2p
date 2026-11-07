@@ -9,11 +9,16 @@ import (
 )
 
 // BackfillNft bootstraps the native aggregate from the manapi-compatible
-// upstream (man-p2p) read views — the historical source of truth the
-// downstream consumers currently see, so a hydrated aggregate is
-// diff-identical to what they served before the base-URL switch:
+// upstream (man-p2p) read views. Since the issuer-only protocol revision
+// (docs/mrc721-protocol-revision-issuer-only.md) the upstream mirror is no
+// longer diff-identical to this surface: upstream indexes open-mint items,
+// while the revised semantics index issuer-minted items only — so the
+// hydrate filters on the upstream rows' creatorMinted flag and renumbers
+// the surviving items densely per album (the upstream numbers count
+// open-mint slots the revised aggregate does not recognise):
 //
-//	phase 1: collection/pageList      → c:/cp: collection records
+//	phase 1: collection/pageList      → c:/cp: album records (TotalNum
+//	                                    deliberately zeroed; phase 2 rebuilds it)
 //	phase 2: collection/items/pageList → i:/ci:/oi: item state (owner,
 //	                                     output, burned, transferCount, descs)
 //	phase 3: item/transfers           → th: provenance history
@@ -28,6 +33,7 @@ type BackfillStats struct {
 	OwnerMoves       int64 // items whose holder changed vs the stored record (re-runs)
 	Transfers        int64 // upstream transfer rows applied
 	SkippedTransfers int64 // transfer rows already present (idempotent skips)
+	SkippedNonIssuer int64 // item rows dropped: not minted by the album issuer (issuer-only gate)
 }
 
 // BackfillOptions carries the run dependencies.
@@ -109,7 +115,10 @@ func (a *Aggregator) backfillCollections(ctx context.Context, client *UpstreamCl
 // collectionFromUpstream maps an upstream collection DTO row onto the native
 // record. createMetaId is always derived from the create address: the
 // upstream metaid fields carry man-p2p's legacy sha256(address) hex, while
-// this surface serves global metaids (IDAddress format).
+// this surface serves global metaids (IDAddress format). TotalNum is
+// deliberately NOT taken from the upstream row: it counts open-mint items
+// the revised issuer-only aggregate does not index, and phase 2 rebuilds
+// the count from the rows it actually applies.
 func collectionFromUpstream(row *upstreamCollection) *Collection {
 	col := &Collection{
 		CollectionName:   row.CollectionName,
@@ -126,7 +135,6 @@ func collectionFromUpstream(row *upstreamCollection) *Collection {
 		GenesisChainName: row.GenesisChainName,
 		GenesisHeight:    row.GenesisHeight,
 		GenesisTx:        row.GenesisTx,
-		TotalNum:         row.TotalNum,
 		ModifyHistory:    row.ModifyHistory,
 	}
 	if col.CreateAddress == "" {
@@ -188,14 +196,26 @@ func (a *Aggregator) backfillItems(ctx context.Context, client *UpstreamClient, 
 }
 
 // applyUpstreamItem upserts one upstream item row into the native records.
-// Freshness rule: the stored item is only overwritten when the upstream row
-// is strictly ahead on transferCount (the upstream saw transfers the local
-// live path has not processed); otherwise the live state is kept and only
-// empty desc fields get filled (mirroring the first-per-field item_desc
-// semantics). This makes re-runs safe against a stale upstream — they can
-// fill gaps but never rewind live ownership.
+// Issuer-only gate: upstream indexes open-mint items, and only rows minted
+// by the album issuer (creatorMinted) are indexable under the revised
+// semantics — the rest are counted and skipped. Freshness rule: the stored
+// item is only overwritten when the upstream row is strictly ahead on
+// transferCount (the upstream saw transfers the local live path has not
+// processed); otherwise the live state is kept and only empty desc fields
+// get filled (mirroring the first-per-field item_desc semantics). This makes
+// re-runs safe against a stale upstream — they can fill gaps but never
+// rewind live ownership.
+//
+// Numbering: upstream numbers count open-mint slots the revised aggregate
+// does not recognise, so applied items are renumbered densely per album in
+// sweep order (Number = TotalNum+1) and the album's TotalNum is maintained
+// alongside; a refresh of an already-stored item keeps its stored number.
 func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats *BackfillStats) error {
 	if row.ItemPinId == "" {
+		return nil
+	}
+	if !row.CreatorMinted {
+		stats.SkippedNonIssuer++
 		return nil
 	}
 	existing, _ := a.db.GetItem(row.ItemPinId)
@@ -225,7 +245,6 @@ func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats
 		ItemPinId:        row.ItemPinId,
 		CollectionName:   col.CollectionName,
 		CollectionPinId:  row.CollectionPinId,
-		Number:           row.Number,
 		Name:             row.Name,
 		Desc:             row.Desc,
 		Cover:            row.Cover,
@@ -253,22 +272,33 @@ func (a *Aggregator) applyUpstreamItem(col *Collection, row *upstreamItem, stats
 	// taken from the upstream row's legacy sha256 hex value.
 	item.OwnerMetaId = globalMetaIdByAddress(item.OwnerAddress)
 	if existing != nil {
-		// Upstream is strictly ahead: re-key the holder index from the
-		// stored owner to the upstream one.
+		// Upstream is strictly ahead: refresh state but keep the stored
+		// dense number; re-key the holder index from the stored owner to
+		// the upstream one.
+		item.Number = existing.Number
 		if existing.OwnerAddress != item.OwnerAddress && existing.OwnerAddress != "" {
-			a.db.DeleteOwnerItem(existing.OwnerAddress, existing.CollectionName, existing.ItemPinId)
+			a.db.DeleteOwnerItem(existing.OwnerAddress, existing.CollectionPinId, existing.ItemPinId)
 			stats.OwnerMoves++
 		}
+	} else {
+		col.TotalNum++
+		item.Number = col.TotalNum
 	}
 	if err := a.db.SaveItem(item); err != nil {
 		return err
 	}
-	if !item.Burned && item.OwnerAddress != "" {
-		if err := a.db.PutOwnerItem(item.OwnerAddress, item.CollectionName, item.ItemPinId); err != nil {
+	if existing == nil {
+		// Persist the renumber-driven TotalNum bump alongside the item.
+		if err := a.db.SaveCollection(col); err != nil {
 			return err
 		}
 	}
-	if err := a.db.AppendCollectionItem(item.CollectionName, item.Number, item.ItemPinId); err != nil {
+	if !item.Burned && item.OwnerAddress != "" {
+		if err := a.db.PutOwnerItem(item.OwnerAddress, item.CollectionPinId, item.ItemPinId); err != nil {
+			return err
+		}
+	}
+	if err := a.db.AppendCollectionItem(item.CollectionPinId, item.Number, item.ItemPinId); err != nil {
 		return err
 	}
 	a.markTrackedDirty()

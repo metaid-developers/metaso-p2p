@@ -16,7 +16,7 @@ func TestTrackedOutputsReflectsMintedItems(t *testing.T) {
 	runPins(t, a,
 		testPin("c1", "/nft/mrc721/TrkAlbum/collection_desc", "create", []byte(`{"name":"T"}`), creator),
 		testPin("n1", "/nft/mrc721/TrkAlbum/a", "create", []byte(`"nft"`), creator),
-		testPin("n2", "/nft/mrc721/TrkAlbum/b", "create", []byte(`"nft2"`), other),
+		testPin("n2", "/nft/mrc721/TrkAlbum/b", "create", []byte(`"nft2"`), creator),
 	)
 
 	tracked := a.TrackedOutputs()
@@ -69,10 +69,10 @@ func TestHandleBlockTransfersMovesOwnership(t *testing.T) {
 		t.Fatalf("history rows wrong: %d", histories)
 	}
 	// Holder index re-keyed.
-	if n := countOwnerItems(t, a, other, "CsmAlbum"); n != 1 {
+	if n := countOwnerItems(t, a, other, "c1"); n != 1 {
 		t.Fatalf("new holder index wrong: %d", n)
 	}
-	if n := countOwnerItems(t, a, creator, "CsmAlbum"); n != 0 {
+	if n := countOwnerItems(t, a, creator, "c1"); n != 0 {
 		t.Fatalf("old holder index not cleared: %d", n)
 	}
 	// The tracked cache must reflect the new outpoint for the next block.
@@ -126,7 +126,7 @@ func TestHandleBlockTransfersMeltdownBurns(t *testing.T) {
 	if item == nil || !item.Burned {
 		t.Fatalf("meltdown notice must burn the item: %+v", item)
 	}
-	if n := countOwnerItems(t, a, creator, "MltAlbum"); n != 0 {
+	if n := countOwnerItems(t, a, creator, "c1"); n != 0 {
 		t.Fatalf("burned item must leave holder views: %d", n)
 	}
 }
@@ -195,13 +195,13 @@ func TestHandleMempoolSpendsReconcileEvictsUnseen(t *testing.T) {
 	runPins(t, a,
 		testPin("c1", "/nft/mrc721/RcnAlbum/collection_desc", "create", []byte(`{"name":"R"}`), creator),
 		testPin("n1", "/nft/mrc721/RcnAlbum/a", "create", []byte(`"nft"`), creator),
-		testPin("n2", "/nft/mrc721/RcnAlbum/b", "create", []byte(`"nft2"`), other),
+		testPin("n2", "/nft/mrc721/RcnAlbum/b", "create", []byte(`"nft2"`), creator),
 	)
 
 	// Two pendings on different items.
 	a.HandleMempoolSpends("mvc", map[string]aggregator.TransferNotice{
 		"n1:0": {FromAddress: creator, ToAddress: other, Output: "tx1:1", Location: "tx1:1:0"},
-		"n2:0": {FromAddress: other, ToAddress: creator, Output: "tx2:1", Location: "tx2:1:0"},
+		"n2:0": {FromAddress: creator, ToAddress: other, Output: "tx2:1", Location: "tx2:1:0"},
 	})
 
 	// Next round observes only n1's spend: n2's pending is evicted (the tx

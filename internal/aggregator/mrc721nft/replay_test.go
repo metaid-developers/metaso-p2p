@@ -59,6 +59,7 @@ func TestReplayPinsRepairsItem(t *testing.T) {
 			"collectionPinId": "rp-coll-1", "collectionName": "RpAlbum",
 			"itemPinId": "rp-item-1", "number": 1, "name": "Pinned",
 			"ownerAddress": other, "output": "rpspend:0", "outputValue": 546,
+			"creatorMinted": true,
 			"transferCount": 1, "genesisChainName": "mvc", "genesisHeight": 701,
 			"genesisTx": "rptx1", "createTime": 1700001000,
 		}
@@ -96,7 +97,7 @@ func TestReplayPinsRepairsCollection(t *testing.T) {
 	if len(results) != 1 || !results[0].Applied || results[0].Chain != "mvc" {
 		t.Fatalf("collection replay wrong: %+v", results)
 	}
-	col, _ := a.db.GetCollectionByName("RpColl")
+	col, _ := a.db.GetCollectionByPinId("rp-coll-2")
 	if col == nil || col.PinId != "rp-coll-2" {
 		t.Fatalf("collection not repaired: %+v", col)
 	}
@@ -129,6 +130,7 @@ func TestReplayPinsNotFoundAndFreshness(t *testing.T) {
 		return map[string]any{
 			"collectionPinId": "lc1", "collectionName": "LiveAlbum",
 			"itemPinId": "li1", "number": 1, "ownerAddress": creator,
+			"creatorMinted": true,
 			"transferCount": 1, "genesisChainName": "mvc", "genesisHeight": 100,
 		}
 	}
