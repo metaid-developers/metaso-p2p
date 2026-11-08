@@ -242,6 +242,9 @@ func main() {
 		// aggregator behind METASO_P2P_MRC721_OFFER_ENABLED (default off).
 		mrc721Candidate := &mrc721.Aggregator{}
 		mrc721Candidate.SetOfferEnabled(cfg.Mrc721.Offer.Enabled)
+		// Zero-conf declaration overlay gate (R-F-4/R-F-6): mempool sell and
+		// offer pins take effect in the merged views when on.
+		mrc721Candidate.SetZeroConfTrade(cfg.Mrc721.ZeroConfTrade)
 		if err := aggRegistry.Register(mrc721Candidate); err != nil {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {
@@ -256,6 +259,10 @@ func main() {
 		// the search endpoints.
 		if cfg.Mrc721.Nft.Enabled {
 			nftCandidate := &mrc721nft.Aggregator{}
+			// Zero-confirmation gates (R-F-6): issuance and trade overlays
+			// both default on (owner directive 2026-11-08); zeroConfTrade
+			// switches trading back to confirmed-only via env + restart.
+			nftCandidate.SetZeroConfGates(cfg.Mrc721.ZeroConfIssuance, cfg.Mrc721.ZeroConfTrade)
 			if err := aggRegistry.Register(nftCandidate); err != nil {
 				log.Printf("WARNING: mrc721nft aggregator init failed: %v", err)
 			} else {
@@ -423,6 +430,7 @@ func main() {
 	if store != nil && aggRegistry != nil && cfg.BlockIndex.Enabled {
 		idxEngine = indexer.NewEngine(store, aggRegistry)
 		idxEngine.ConfigureMempoolPolling(cfg.ZMQ.MempoolPollingEnabled, cfg.ZMQ.MempoolPollInterval, cfg.ZMQ.MempoolDedupeTTL)
+		idxEngine.ConfigureMempoolFullScanInterval(cfg.ZMQ.MempoolFullScanInterval)
 		log.Printf("block index enabled chains: %s", strings.Join(enabledBlockIndexChainNames(cfg.BlockIndex), ","))
 
 		// BTC chain + indexer

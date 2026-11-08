@@ -7,6 +7,7 @@ package mrc721
 
 import (
 	"errors"
+	"sort"
 	"strings"
 )
 
@@ -75,9 +76,10 @@ func (a *Aggregator) ListOffers(filter OfferFilter, cursor string, size int) (*O
 	}
 	size = clampListSize(size)
 
-	// Exact item lookup short-circuits the index scan.
+	// Exact item lookup short-circuits the index scan (merged view: an
+	// overlay declaration wins over the confirmed record, R-F-4).
 	if filter.ItemPinId != "" {
-		rec, err := a.loadOffer(filter.ItemPinId)
+		rec, _, err := a.effectiveOffer(filter.ItemPinId)
 		if err != nil {
 			return nil, err
 		}
@@ -113,14 +115,6 @@ func (a *Aggregator) ListOffers(filter OfferFilter, cursor string, size int) (*O
 			a.deleteOfferIndexEntry(seq, itemPinId)
 			return nil
 		}
-		if filterNeedsCollection(filter) {
-			collectionPinId, _ := a.offerCollectionRef(rec.ItemPinId)
-			if !a.offerMatches(rec, filter, collectionPinId) {
-				return nil
-			}
-		} else if !a.offerMatches(rec, filter, "") {
-			return nil
-		}
 		matches = append(matches, rec)
 		return nil
 	})
@@ -128,8 +122,27 @@ func (a *Aggregator) ListOffers(filter OfferFilter, cursor string, size int) (*O
 		return nil, err
 	}
 
+	// Zero-conf merge (R-F-4): overlay declarations lead the list, covered
+	// confirmed rows drop out. Filters apply to the MERGED rows: a mempool
+	// cancellation hides the offer from an active-filtered list.
+	matches = a.mergeOfferOverlay(matches)
+	filtered := make([]*OfferRecord, 0, len(matches))
+	for _, rec := range matches {
+		if filterNeedsCollection(filter) {
+			collectionPinId, _ := a.offerCollectionRef(rec.ItemPinId)
+			if !a.offerMatches(rec, filter, collectionPinId) {
+				continue
+			}
+		} else if !a.offerMatches(rec, filter, "") {
+			continue
+		}
+		filtered = append(filtered, rec)
+	}
+	matches = filtered
+
 	// matches is newest-first; the cursor skips everything at or after the
-	// anchor row (seq >= anchor means same row or newer).
+	// anchor row (seq >= anchor means same row or newer). Overlay rows carry
+	// no write sequence (0), so a cursor page never re-serves them.
 	start := 0
 	if cursorSeq > 0 {
 		for start < len(matches) && matches[start].Seq >= cursorSeq {
@@ -159,18 +172,56 @@ func filterNeedsCollection(filter OfferFilter) bool {
 	return filter.CollectionPinId != ""
 }
 
-// OfferInfo resolves the latest offer of one item (any active state —
+// OfferInfo resolves the latest offer of one item (merged view: an overlay
+// declaration wins over the confirmed record, R-F-4; any active state —
 // cancellations stay queryable); nil means the item has no offer.
 func (a *Aggregator) OfferInfo(itemPinId string) (*OfferRecord, error) {
 	itemPinId = strings.TrimSpace(itemPinId)
 	if itemPinId == "" {
 		return nil, ErrInvalidParameter
 	}
-	rec, err := a.loadOffer(itemPinId)
-	if err != nil {
-		return nil, err
+	rec, _, err := a.effectiveOffer(itemPinId)
+	return rec, err
+}
+
+// mergeOfferOverlay folds the offer declaration overlay into a newest-first
+// confirmed match list.
+func (a *Aggregator) mergeOfferOverlay(matches []*OfferRecord) []*OfferRecord {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.zeroConfTrade || len(a.overlayDecls) == 0 {
+		return matches
 	}
-	return rec, nil
+	overlayByItem := make(map[string]*overlayDeclEntry)
+	for _, entry := range a.overlayDecls {
+		if entry.offer == nil {
+			continue
+		}
+		if prev, ok := overlayByItem[entry.offer.ItemPinId]; !ok || overlayBefore(prev, entry) {
+			overlayByItem[entry.offer.ItemPinId] = entry
+		}
+	}
+	if len(overlayByItem) == 0 {
+		return matches
+	}
+	covered := make(map[string]struct{}, len(overlayByItem))
+	overlayRecs := make([]*overlayDeclEntry, 0, len(overlayByItem))
+	for _, entry := range overlayByItem {
+		overlayRecs = append(overlayRecs, entry)
+		covered[entry.offer.ItemPinId] = struct{}{}
+	}
+	sort.Slice(overlayRecs, func(i, j int) bool { return overlayBefore(overlayRecs[j], overlayRecs[i]) })
+	out := make([]*OfferRecord, 0, len(matches)+len(overlayRecs))
+	for _, entry := range overlayRecs {
+		out = append(out, entry.offer)
+	}
+	for _, rec := range matches {
+		if _, cov := covered[rec.ItemPinId]; cov {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out
 }
 
 // offerMatches applies the remaining list filters to a record;

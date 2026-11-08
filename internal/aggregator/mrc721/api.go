@@ -47,6 +47,13 @@ func respondMrc721Error(c *gin.Context, err error) {
 	}
 }
 
+// zeroConfOnly reports the strict confirmed-only opt-out (R-F-6): every
+// MRC-721 endpoint accepts confirmedOnly=1 and then serves exactly the
+// pre-zero-conf view.
+func zeroConfOnly(c *gin.Context) bool {
+	return c.Query("confirmedOnly") == "1"
+}
+
 // sellIntentRow is the wire shape of one sell intent: camelCase keys plus
 // the lowercase duplicate spellings the IDBots client tolerates
 // (itemPinId/itempinid, ...). Both spellings always carry the same value.
@@ -98,13 +105,18 @@ type sellIntentRow struct {
 	Height    int64  `json:"height,omitempty"`
 	TxId      string `json:"txId,omitempty"`
 	Txid      string `json:"txid,omitempty"`
+
+	// Zero-conf fields (R-F-5): present only on overlay-synthesized rows —
+	// the pointer nils out on confirmed rows so their bytes stay unchanged.
+	Confirmed   *bool `json:"confirmed,omitempty"`
+	FirstSeenAt int64 `json:"firstSeenAt,omitempty"`
 }
 
 func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 	if rec == nil {
 		return nil
 	}
-	return &sellIntentRow{
+	row := &sellIntentRow{
 		ItemPinId:          rec.ItemPinId,
 		Itempinid:          rec.ItemPinId,
 		SellPinId:          rec.SellPinId,
@@ -137,6 +149,12 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		TxId:               rec.TxID,
 		Txid:               rec.TxID,
 	}
+	if rec.Overlay {
+		confirmed := false
+		row.Confirmed = &confirmed
+		row.FirstSeenAt = rec.OverlayFirstSeenAt
+	}
+	return row
 }
 
 type sellIntentListData struct {
@@ -272,7 +290,7 @@ func (a *Aggregator) handleCollectionSearch(c *gin.Context) {
 	if src := a.nativeCollectionSource(); src != nil {
 		// Native read model (mrc721nft aggregate): same wire contract, the
 		// registry serves from its own store instead of the upstream sweep.
-		rows, total, next, err := src.SearchNativeCollections(keyword, issuer, cursor, size)
+		rows, total, next, err := src.SearchNativeCollections(keyword, issuer, cursor, size, !zeroConfOnly(c))
 		if err != nil {
 			respondMrc721Error(c, err)
 			return
@@ -297,7 +315,7 @@ func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
 	address := strings.TrimSpace(c.Query("address"))
 	cursor := strings.TrimSpace(c.Query("cursor"))
 	if src := a.nativeCollectionSource(); src != nil {
-		rows, total, next, err := src.NativeCollectionsIssued(address, cursor, size)
+		rows, total, next, err := src.NativeCollectionsIssued(address, cursor, size, !zeroConfOnly(c))
 		if err != nil {
 			if errors.Is(err, mrc721nft.ErrInvalidSearch) {
 				respondMrc721Err(c, mrc721InvalidParamCode, "invalid parameter: address")

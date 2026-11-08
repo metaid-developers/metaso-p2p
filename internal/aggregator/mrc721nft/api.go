@@ -2,6 +2,7 @@ package mrc721nft
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -193,6 +194,7 @@ func (a *Aggregator) handleCollectionPageList(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
+	opts := queryViewOptions(c)
 	list, total, err := a.db.ListCollections(a.queryCursor(c), a.querySize(c))
 	if err != nil {
 		a.respondServiceError(c)
@@ -200,9 +202,36 @@ func (a *Aggregator) handleCollectionPageList(c *gin.Context) {
 	}
 	dtos := make([]gin.H, 0, len(list))
 	for _, col := range list {
+		if a.zeroConfIssuanceActive(opts) {
+			if view := a.albumViewByPair(col.CollectionName, col.CreateAddress, opts); view != nil {
+				dtos = append(dtos, a.collectionViewDTO(view, opts))
+				continue
+			}
+		}
 		dtos = append(dtos, a.collectionDTO(col))
 	}
-	a.respondOK(c, gin.H{"list": dtos, "total": total})
+	// Overlay-created albums join the page (R-F-2 acceptance: search and
+	// page surfaces include the album within one poll), ordered after the
+	// confirmed registry in provisional order.
+	if a.zeroConfIssuanceActive(opts) {
+		dtos = append(dtos, a.overlayCollectionDTOs(opts)...)
+	}
+	a.respondOK(c, gin.H{"list": dtos, "total": total + int64(len(dtos)-len(list))})
+}
+
+// overlayCollectionDTOs serializes the overlay-created albums (gate on).
+func (a *Aggregator) overlayCollectionDTOs(opts viewOptions) []gin.H {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snap := a.overlaySnapshotLocked()
+	var dtos []gin.H
+	for _, entry := range overlayAlbumsLocked(snap) {
+		view := a.albumViewByPairLocked(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, opts)
+		if view != nil {
+			dtos = append(dtos, a.collectionViewDTO(view, opts))
+		}
+	}
+	return dtos
 }
 
 func (a *Aggregator) handleCollectionInfo(c *gin.Context) {
@@ -215,6 +244,20 @@ func (a *Aggregator) handleCollectionInfo(c *gin.Context) {
 	if name == "" && pinId == "" {
 		a.respondParamError(c)
 		return
+	}
+	opts := queryViewOptions(c)
+	if a.zeroConfIssuanceActive(opts) {
+		var view *albumView
+		if name != "" {
+			view = a.albumViewByName(name, opts)
+		}
+		if view == nil && pinId != "" {
+			view = a.albumViewByPinId(pinId, opts)
+		}
+		if view != nil {
+			a.respondOK(c, a.collectionViewDTO(view, opts))
+			return
+		}
 	}
 	col, err := a.resolveCollection(pinId, name)
 	if err != nil {
@@ -239,6 +282,38 @@ func (a *Aggregator) handleCollectionItemsPageList(c *gin.Context) {
 	collectionName := c.Query("name")
 	if pinId == "" && collectionName == "" {
 		a.respondParamError(c)
+		return
+	}
+	opts := queryViewOptions(c)
+	var view *albumView
+	if a.zeroConfIssuanceActive(opts) {
+		if collectionName != "" {
+			view = a.albumViewByName(collectionName, opts)
+		}
+		if view == nil && pinId != "" {
+			view = a.albumViewByPinId(pinId, opts)
+		}
+	}
+	if view != nil {
+		// Zero-conf page: confirmed + staged + overlay items in serve order
+		// with provisional numbers; total follows the overlay-inclusive
+		// minted count (the mint precheck surface).
+		ivs := a.itemViewsForAlbum(view, opts)
+		cursor, size := a.queryCursor(c), a.querySize(c)
+		total := int64(len(ivs))
+		dtos := make([]gin.H, 0, len(ivs))
+		start := cursor
+		if start > total {
+			start = total
+		}
+		end := cursor + size
+		if end > total || end <= 0 {
+			end = total
+		}
+		for _, iv := range ivs[start:end] {
+			dtos = append(dtos, a.itemViewDTO(iv, opts))
+		}
+		a.respondOK(c, gin.H{"list": dtos, "total": total})
 		return
 	}
 	col, err := a.resolveCollection(pinId, collectionName)
@@ -310,6 +385,14 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
+	opts := queryViewOptions(c)
+	tradeActive := a.zeroConfTradeActive(opts)
+	if tradeActive {
+		// Zero-conf holder view: fold the overlay ownership — hide albums
+		// whose items all moved away, add albums holding overlay items
+		// (overlay mints / staged mints / delivered spends).
+		a.foldHolderCollections(address, &order, holdCounts, opts)
+	}
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	total := int64(len(order))
 	dtos := make([]gin.H, 0)
@@ -319,6 +402,12 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 			end = total
 		}
 		for _, collectionPinId := range order[cursor:end] {
+			if view := a.albumViewByPinId(collectionPinId, opts); view != nil && (tradeActive || a.zeroConfIssuanceActive(opts)) {
+				dto := a.collectionViewDTO(view, opts)
+				dto["ownnum"] = holdCounts[collectionPinId]
+				dtos = append(dtos, dto)
+				continue
+			}
 			col, err := a.db.GetCollectionByPinId(collectionPinId)
 			if err != nil || col == nil {
 				continue
@@ -329,6 +418,41 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		}
 	}
 	a.respondOK(c, gin.H{"list": dtos, "total": total})
+}
+
+// foldHolderCollections rewrites the holder's album list under the trade
+// overlay: confirmed albums whose items all moved away drop out, albums
+// holding overlay items join in.
+func (a *Aggregator) foldHolderCollections(address string, order *[]string, holdCounts map[string]int64, opts viewOptions) {
+	a.mu.Lock()
+	snap := a.overlaySnapshotLocked()
+	// Overlay-owned items by album: overlay mints of the address resolve
+	// through their album's collectionid (spend deliveries and staged mints
+	// join below).
+	overlayByCol := make(map[string]int64) // collection pinid → count
+	for _, entry := range snap.pins {
+		if entry.Kind == overlayEffectMint && entry.Mint != nil && entry.Mint.OwnerAddress == address {
+			view := a.albumViewByPairLocked(snap, entry.Collection, entry.Mint.OwnerAddress, opts)
+			if view != nil && view.collection != nil {
+				overlayByCol[view.collection.PinId]++
+			}
+		}
+	}
+	a.mu.Unlock()
+	staged, _ := a.db.PeekPendingAll()
+	for _, sp := range staged {
+		if sp.Entry.Kind == "mint" && sp.Entry.Mint != nil && sp.Entry.Mint.OwnerAddress == address {
+			if view := a.albumViewByPair(sp.CollectionName, sp.IssuerAddress, opts); view != nil && view.collection != nil {
+				overlayByCol[view.collection.PinId]++
+			}
+		}
+	}
+	for cid, count := range overlayByCol {
+		if _, seen := holdCounts[cid]; !seen {
+			*order = append(*order, cid)
+		}
+		holdCounts[cid] += count
+	}
 }
 
 func (a *Aggregator) handleAddressItem(c *gin.Context) {
@@ -359,6 +483,30 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 		}
 		collectionFilter = col.PinId
 	}
+	opts := queryViewOptions(c)
+	if a.zeroConfTradeActive(opts) {
+		// Zero-conf holder view: base items whose overlay owner moved away
+		// hide, overlay-owned items (fresh mints, staged mints, delivered
+		// spends) join — any chain depth (R-F-3.2/3.3).
+		pinIds, total := a.holderItemPinIds(address, collectionFilter, opts)
+		cursor, size := a.queryCursor(c), a.querySize(c)
+		dtos := make([]gin.H, 0)
+		start := cursor
+		if start > total {
+			start = total
+		}
+		end := cursor + size
+		if end > total || end <= 0 {
+			end = total
+		}
+		for _, pinId := range pinIds[start:end] {
+			if view := a.itemViewByPinId(pinId, opts); view != nil {
+				dtos = append(dtos, a.itemViewDTO(view, opts))
+			}
+		}
+		a.respondOK(c, gin.H{"list": dtos, "total": total})
+		return
+	}
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	dtos := make([]gin.H, 0)
 	var total int64
@@ -383,6 +531,92 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 	a.respondOK(c, gin.H{"list": dtos, "total": total})
 }
 
+// holderItemPinIds lists the address's visible items under the trade
+// overlay, in serve order: confirmed holdings (overlay owner still the
+// address), then overlay/staged items owned by the address.
+func (a *Aggregator) holderItemPinIds(address, collectionFilter string, opts viewOptions) ([]string, int64) {
+	a.mu.Lock()
+	snap := a.overlaySnapshotLocked()
+
+	currentOwner := func(itemPinId string) (owner string, burned bool) {
+		if item, err := a.db.GetItem(itemPinId); err == nil && item != nil {
+			iv := &itemView{item: &Item{ItemPinId: itemPinId, Output: item.Output, OwnerAddress: item.OwnerAddress}}
+			iv.applyOwnershipFold(snap)
+			return iv.item.OwnerAddress, iv.item.Burned
+		}
+		return "", false
+	}
+
+	var pinIds []string
+	seen := make(map[string]struct{})
+	_ = a.db.IterateOwnerItems(address, collectionFilter, func(collectionPinId, itemPinId string) bool {
+		owner, burned := currentOwner(itemPinId)
+		if burned || owner != address {
+			return true // moved away or melted down in the mempool: hidden
+		}
+		if collectionFilter == "" || collectionPinId == collectionFilter {
+			pinIds = append(pinIds, itemPinId)
+			seen[itemPinId] = struct{}{}
+		}
+		return true
+	})
+	a.mu.Unlock()
+
+	// Overlay deliveries to the address (chained spends land on overlay
+	// outputs): the item's projected owner must be the address.
+	a.mu.Lock()
+	delivered := make(map[string]struct{})
+	for _, sp := range snap.spends {
+		if sp.ToAddress == address && !sp.Burned {
+			delivered[sp.ItemPinId] = struct{}{}
+		}
+	}
+	a.mu.Unlock()
+	for itemPinId := range delivered {
+		if _, listed := seen[itemPinId]; listed {
+			continue
+		}
+		if view := a.itemViewByPinId(itemPinId, opts); view != nil &&
+			view.item.OwnerAddress == address && !view.item.Burned &&
+			(collectionFilter == "" || view.item.CollectionPinId == collectionFilter) {
+			pinIds = append(pinIds, itemPinId)
+			seen[itemPinId] = struct{}{}
+		}
+	}
+
+	// Overlay + staged mints owned by the address.
+	a.mu.Lock()
+	snap = a.overlaySnapshotLocked()
+	var ownedPinIds []string
+	for _, entry := range snap.pins {
+		if entry.Kind != overlayEffectMint || entry.Mint == nil || entry.Mint.OwnerAddress != address {
+			continue
+		}
+		ownedPinIds = append(ownedPinIds, entry.Mint.ItemPinId)
+	}
+	a.mu.Unlock()
+	for _, sp := range func() []StagedPin {
+		staged, _ := a.db.PeekPendingAll()
+		return staged
+	}() {
+		if sp.Entry.Kind == "mint" && sp.Entry.Mint != nil && sp.Entry.Mint.OwnerAddress == address {
+			ownedPinIds = append(ownedPinIds, sp.Entry.Mint.ItemPinId)
+		}
+	}
+	for _, itemPinId := range ownedPinIds {
+		if _, listed := seen[itemPinId]; listed {
+			continue
+		}
+		if view := a.itemViewByPinId(itemPinId, opts); view != nil &&
+			!view.overSupply && !view.item.Burned &&
+			(collectionFilter == "" || view.item.CollectionPinId == collectionFilter) {
+			pinIds = append(pinIds, itemPinId)
+			seen[itemPinId] = struct{}{}
+		}
+	}
+	return pinIds, int64(len(pinIds))
+}
+
 func (a *Aggregator) handleItemInfo(c *gin.Context) {
 	if a.db == nil {
 		a.respondServiceError(c)
@@ -392,6 +626,13 @@ func (a *Aggregator) handleItemInfo(c *gin.Context) {
 	if pinId == "" {
 		a.respondParamError(c)
 		return
+	}
+	opts := queryViewOptions(c)
+	if a.zeroConfIssuanceActive(opts) {
+		if view := a.itemViewByPinId(pinId, opts); view != nil {
+			a.respondOK(c, a.itemViewDTO(view, opts))
+			return
+		}
 	}
 	item, err := a.db.GetItem(pinId)
 	if err != nil {
@@ -422,6 +663,8 @@ func (a *Aggregator) handleItemTransfers(c *gin.Context) {
 		a.respondParamError(c)
 		return
 	}
+	opts := queryViewOptions(c)
+	tradeActive := a.zeroConfTradeActive(opts)
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	list := make([]gin.H, 0)
 	var total int64
@@ -444,14 +687,48 @@ func (a *Aggregator) handleItemTransfers(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
-	// list holds confirmed history only; unconfirmed spends are a separate
-	// pending array (not merged into list/total) so they never cause a
-	// false "no transfers" answer.
+	// Overlay provenance trails the confirmed history (ascending timeline
+	// position — these are the most recent, unconfirmed ownership moves,
+	// R-F-3.4); total includes them.
+	var overlayRows []gin.H
+	if tradeActive {
+		for _, sp := range a.overlayTransfersForItem(pinId) {
+			if total >= cursor && total < cursor+size {
+				overlayRows = append(overlayRows, overlayTransferDTO(sp))
+			}
+			total++
+		}
+		list = append(list, overlayRows...)
+	}
+	// list holds confirmed history plus (gate on) overlay rows; the
+	// separate pending array keeps its pre-zero-conf meaning so it never
+	// causes a false "no transfers" answer.
 	pendingList := make([]gin.H, 0)
 	if pt, _ := a.db.GetPendingTransfer(pinId); pt != nil {
 		pendingList = append(pendingList, a.pendingTransferDTO(pt))
 	}
 	a.respondOK(c, gin.H{"list": list, "total": total, "pending": pendingList})
+}
+
+// overlayTransfersForItem returns the item's overlay spends in provisional
+// order (timeline order).
+func (a *Aggregator) overlayTransfersForItem(itemPinId string) []*overlaySpendEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snap := a.overlaySnapshotLocked()
+	var spends []*overlaySpendEntry
+	for _, sp := range snap.spends {
+		if sp.ItemPinId == itemPinId {
+			spends = append(spends, sp)
+		}
+	}
+	sort.Slice(spends, func(i, j int) bool {
+		if spends[i].FirstSeenAt != spends[j].FirstSeenAt {
+			return spends[i].FirstSeenAt < spends[j].FirstSeenAt
+		}
+		return spends[i].TxId < spends[j].TxId
+	})
+	return spends
 }
 
 func (a *Aggregator) handleAdminReplayPins(c *gin.Context) {
@@ -484,6 +761,49 @@ func (a *Aggregator) handleItemVerify(c *gin.Context) {
 	if pinId == "" {
 		a.respondParamError(c)
 		return
+	}
+	opts := queryViewOptions(c)
+	if a.zeroConfIssuanceActive(opts) || a.zeroConfTradeActive(opts) {
+		if view := a.itemViewByPinId(pinId, opts); view != nil {
+			// Overlay facts report with confirmed:false; for an overlay
+			// item, collected:true means provisionally collected (R-F-5).
+			data := gin.H{
+				"indexed":            true,
+				"collected":          true,
+				"confirmed":          view.confirmed,
+				"pinId":              pinId,
+				"itemPinId":          pinId,
+				"collectionName":     view.item.CollectionName,
+				"collectionid":       view.item.CollectionPinId,
+				"collectionPinId":    view.item.CollectionPinId,
+				"creatorMinted":      view.item.CreatorMinted,
+				"burned":             view.item.Burned,
+				"transferCount":      view.item.TransferCount,
+				"numberFinal":        view.numberFinal,
+				"ownershipConfirmed": view.ownershipConfirmed,
+				"ownerAddress":       view.item.OwnerAddress,
+				"ownerMetaId":        view.item.OwnerMetaId,
+				"genesisChainName":   view.item.GenesisChainName,
+				"genesisHeight":      view.item.GenesisHeight,
+				"genesisTx":          view.item.GenesisTx,
+				"itemGenesis": gin.H{
+					"chainName": view.item.GenesisChainName,
+					"height":    view.item.GenesisHeight,
+					"tx":        view.item.GenesisTx,
+				},
+			}
+			if col, _ := a.db.GetCollectionByPinId(view.item.CollectionPinId); col != nil {
+				data["collectionGenesis"] = gin.H{
+					"chainName": col.GenesisChainName,
+					"height":    col.GenesisHeight,
+					"tx":        col.GenesisTx,
+				}
+			} else if view.confirmedOwnerAddress == "" {
+				data["collectionGenesis"] = gin.H{"chainName": "", "height": int64(0), "tx": ""}
+			}
+			a.respondOK(c, data)
+			return
+		}
 	}
 	item, err := a.db.GetItem(pinId)
 	if err != nil {

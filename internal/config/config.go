@@ -59,6 +59,19 @@ type Mrc721Config struct {
 	// is brand new, so enabling starts the index from the live chain feed
 	// (no historical backfill).
 	Offer Mrc721OfferConfig `json:"offer"`
+	// ZeroConfIssuance turns the MRC-721 issuance read surface
+	// zero-confirmation (R-F-2, nft-zero-conf-indexer-requirements.md):
+	// mempool collection_desc / mint / item_desc pins serve immediately
+	// through an in-memory overlay. Default true (owner directive 2026-11-08:
+	// MVC has no RBF, a fee-sufficient mempool tx confirms with near
+	// certainty).
+	ZeroConfIssuance bool `json:"zeroConfIssuance"`
+	// ZeroConfTrade turns the MRC-721 trading read surface
+	// zero-confirmation (R-F-3/R-F-4): mempool ownership moves and
+	// sell/offer declarations take effect in every read view. The owner may
+	// later move trading back to confirmed-only, so this gate switches back
+	// without a redeploy (env METASO_P2P_MRC721_ZERO_CONF_TRADE + restart).
+	ZeroConfTrade bool `json:"zeroConfTrade"`
 }
 
 // Mrc721OfferConfig gates the MRC-721 passive-offer index.
@@ -236,6 +249,11 @@ type ZMQConfig struct {
 	MempoolPollingEnabled bool          `json:"mempoolPollingEnabled"`
 	MempoolPollInterval   time.Duration `json:"mempoolPollInterval"`
 	MempoolDedupeTTL      time.Duration `json:"mempoolDedupeTTL"`
+	// MempoolFullScanInterval is the cadence of the FULL mempool spend scan
+	// (R-F-7): the incremental poll (MempoolPollInterval) detects new spends
+	// every round, the full scan stays for eviction reconcile only. Clamped
+	// 30–60s at the engine.
+	MempoolFullScanInterval time.Duration `json:"mempoolFullScanInterval"`
 	// Mempool overlay janitor for the social/block aggregators (spec
 	// 2026-10-29 §4.4b): unconfirmed /follow and simpleblock pins take
 	// effect immediately; the sweeper drops entries whose pin never
@@ -308,6 +326,7 @@ func Default() Config {
 			MempoolPollingEnabled:       true,
 			MempoolPollInterval:         10 * time.Second,
 			MempoolDedupeTTL:            30 * time.Minute,
+			MempoolFullScanInterval:     30 * time.Second,
 			MempoolOverlayExpiry:        2 * time.Hour,
 			MempoolOverlaySweepInterval: 5 * time.Minute,
 			BTC: ChainZMQConfig{
@@ -465,6 +484,8 @@ func Default() Config {
 			Offer: Mrc721OfferConfig{
 				Enabled: false,
 			},
+			ZeroConfIssuance: true,
+			ZeroConfTrade:    true,
 		},
 	}
 }
@@ -494,6 +515,7 @@ func Load() (Config, error) {
 	applyBoolEnv("METASO_P2P_ZMQ_MEMPOOL_POLLING_ENABLED", &cfg.ZMQ.MempoolPollingEnabled)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_POLL_INTERVAL", &cfg.ZMQ.MempoolPollInterval)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_DEDUPE_TTL", &cfg.ZMQ.MempoolDedupeTTL)
+	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_FULL_SCAN_INTERVAL", &cfg.ZMQ.MempoolFullScanInterval)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_OVERLAY_EXPIRY", &cfg.ZMQ.MempoolOverlayExpiry)
 	applyDurationEnv("METASO_P2P_ZMQ_MEMPOOL_OVERLAY_SWEEP_INTERVAL", &cfg.ZMQ.MempoolOverlaySweepInterval)
 	applyBoolEnv("METASO_P2P_ZMQ_BTC_ENABLED", &cfg.ZMQ.BTC.Enabled)
@@ -618,6 +640,8 @@ func Load() (Config, error) {
 	applyStringEnv("METASO_P2P_MRC721_NFT_MANAPI_BASE_URL", &cfg.Mrc721.Nft.MANAPIBaseURL)
 
 	applyBoolEnv("METASO_P2P_MRC721_OFFER_ENABLED", &cfg.Mrc721.Offer.Enabled)
+	applyBoolEnv("METASO_P2P_MRC721_ZERO_CONF_ISSUANCE", &cfg.Mrc721.ZeroConfIssuance)
+	applyBoolEnv("METASO_P2P_MRC721_ZERO_CONF_TRADE", &cfg.Mrc721.ZeroConfTrade)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

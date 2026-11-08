@@ -107,6 +107,13 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 	blockHash, merkleRoot string, txIndex int) []*aggregator.PinInscription {
 
 	txHash := tx.TxHash().String()
+	// Previous-output pointers of this tx, shared by every pin it carries —
+	// the zero-conf overlay derives tx ancestry (numberFinal, R-F-5) from
+	// them.
+	inputs := make([]string, 0, len(tx.TxIn))
+	for _, in := range tx.TxIn {
+		inputs = append(inputs, fmt.Sprintf("%s:%d", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index))
+	}
 	var pins []*aggregator.PinInscription
 
 	// Check OP_RETURN and nonstandard outputs first
@@ -127,6 +134,9 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			pin.ChainName = "mvc"
 			pin.GenesisTransaction = pinHash
 			pin.GenesisHeight = height
+			pin.TxIndex = int64(txIndex)
+			pin.Inputs = inputs
+			pin.WireHash = txHash
 			pin.Timestamp = timestamp
 			pin.Address = address
 			pin.CreateAddress = address
@@ -161,6 +171,8 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 		if err != nil || pin == nil {
 			continue
 		}
+		pin.Inputs = inputs
+		pin.WireHash = txHash
 		pins = append(pins, pin)
 	}
 
@@ -481,6 +493,7 @@ func parseMetaIDWitness(tx *wire.MsgTx, outIdx int, height int64, timestamp int6
 		ChainName:          "mvc",
 		GenesisTransaction: txHash,
 		GenesisHeight:      height,
+		TxIndex:            int64(txIndex),
 		Timestamp:          timestamp,
 		Address:            creatorAddr,
 		CreateAddress:      creatorAddr,

@@ -165,3 +165,63 @@ Notes:
 - man-p2p needs no change: an offer pin is an ordinary pin there.
 - The index is an advertisement, not a source of truth: a taken offer's pin
   stays on-chain and indexed; clients re-verify chain state before taking.
+
+## 9. Zero-confirmation indexing (R-F) and the defect-repair migration
+
+Spec: `docs/specs/2026-11-09-mrc721-zero-conf-api.md`. Every MRC-721 read
+surface (issuance AND trading, sell/offer declarations included) serves
+mempool facts immediately through an in-memory overlay; `confirmedOnly=1`
+on any endpoint restores the strict confirmed-only bytes.
+
+Gates (defaults ON since this release — owner directive 2026-11-08):
+
+| Env (`[mrc721]` key) | Default | Purpose |
+|---|---|---|
+| `METASO_P2P_MRC721_ZERO_CONF_ISSUANCE` (`zeroConfIssuance`) | `true` | Mempool collection_desc / mint / item_desc pins serve immediately (R-F-2). |
+| `METASO_P2P_MRC721_ZERO_CONF_TRADE` (`zeroConfTrade`) | `true` | Mempool ownership moves + sell/offer declarations take effect (R-F-3/R-F-4). Set `false` + restart to move trading back to confirmed-only. |
+| `METASO_P2P_ZMQ_MEMPOOL_FULL_SCAN_INTERVAL` | `30s` | Full-mempool scan cadence (eviction reconcile only — spends are detected on every 10s poll). Clamped 30–60s (R-F-7). |
+
+### 9.1 One-time repair migration (R-F-10 / R-F-11) — run on every
+environment that already indexed MRC-721 data BEFORE this release
+
+The pre-R-F binary had two confirmed-path defects: staged
+(mint-before-register) mints drained in pinId key order instead of chain
+order (wrong numbers + wrong supply cut on every multi-item IDBots album),
+and `item_desc` pins with object-typed `metadata` were dropped whole
+(empty display fields). Both repair offline; no on-chain writes.
+
+Run with the daemon STOPPED, as the service user (the root-owned-LOCK
+lesson of §7 applies):
+
+```bash
+# 1) Renumber: dry-run first — prints the plan and the affected collectionids
+go run ./cmd/metaso-p2p-mrc721-renumber --data-dir <pebble data dir>
+#    Publish the affected collectionids to IDBots.
+# 2) Apply:
+go run ./cmd/metaso-p2p-mrc721-renumber --data-dir <pebble data dir> --apply
+# 3) Replay item_desc pins previously dropped (the known prod casualty is
+#    5eef07fc2218afb188fa078e4ccaccd383c2875295b7ba8127a286be8ca29001i0):
+go run ./cmd/metaso-p2p-mrc721-replay --data-dir <pebble data dir> \
+    --pinIds <comma-separated pin ids>
+# 4) Restart the daemon, verify:
+#    - pixel-sun-test items serve #1..#5 in mint order (was #2/#4/#1/#5/#3)
+#    - the 5 items serve name/desc/cover + metadata JSON text
+curl -s "$BASE/api/mrc721/collection/items/pageList?pinid=4687fb9b4a349fe9832927a6676776c96d1c1cf7dd3a8b0607e4ffdb3400a1cei0"
+curl -s "$BASE/api/mrc721/item/info?pinId=a205961de87f1a3b33133b75f0c54bbf3700f91da33cb3d7dc7474712ac0da68i0"
+```
+
+Both tools are idempotent — a second run is a no-op ("no album needs
+renumbering"). Fresh deployments (empty `mrc721nft` namespace) skip the
+migration entirely.
+
+### 9.2 Zero-conf verification (after the gates are on)
+
+```bash
+BASE=http://127.0.0.1:8080
+# Broadcast a mint (or replay Appendix A on staging) and within ~10-20s:
+curl -s "$BASE/api/mrc721/collection/info?pinId=<collectionid>"      # confirmed:false, mintedCount includes overlay
+curl -s "$BASE/api/mrc721/collection/items/pageList?pinid=<cid>"     # overlay items, confirmed:false, numberFinal
+curl -s "$BASE/api/mrc721/item/info?pinId=<itemPinId>"               # overlay mint / ownership fields
+curl -s "$BASE/api/mrc721/item/info?pinId=<itemPinId>&confirmedOnly=1"  # strict confirmed-only bytes
+# After the block: identical numbers with confirmed:true.
+```

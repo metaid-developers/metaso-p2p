@@ -47,6 +47,10 @@ type OfferRecord struct {
 	UpdatedAt int64  `json:"updatedAt,omitempty"` // chain time, unix seconds
 
 	Seq uint64 `json:"seq"`
+
+	// Zero-conf projection markers (R-F-4), never persisted.
+	Overlay            bool  `json:"-"`
+	OverlayFirstSeenAt int64 `json:"-"`
 }
 
 // offerPayload is the validated view of one /protocols/mrc721offer pin

@@ -29,7 +29,7 @@ func TestSearchNativeCollectionsKeyword(t *testing.T) {
 	seedSearchAlbums(t, a)
 
 	// Keyword substring over name.
-	rows, total, next, err := a.SearchNativeCollections("pixels", "", "", 20)
+	rows, total, next, err := a.SearchNativeCollections("pixels", "", "", 20, false)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -44,19 +44,19 @@ func TestSearchNativeCollectionsKeyword(t *testing.T) {
 	}
 
 	// Keyword over desc; case-insensitive.
-	rows, total, _, _ = a.SearchNativeCollections("NOTHING", "", "", 20)
+	rows, total, _, _ = a.SearchNativeCollections("NOTHING", "", "", 20, false)
 	if total != 1 || rows[0].CollectionName != "Beta Collection" {
 		t.Fatalf("desc keyword wrong: %+v", rows)
 	}
 
 	// Exact case-insensitive pinid alternative.
-	rows, total, _, _ = a.SearchNativeCollections("S3", "", "", 20)
+	rows, total, _, _ = a.SearchNativeCollections("S3", "", "", 20, false)
 	if total != 1 || rows[0].CollectionName != "Gamma Collection" {
 		t.Fatalf("pinid keyword wrong: %+v", rows)
 	}
 
 	// No match → empty page.
-	rows, total, next, _ = a.SearchNativeCollections("zzz", "", "", 20)
+	rows, total, next, _ = a.SearchNativeCollections("zzz", "", "", 20, false)
 	if total != 0 || len(rows) != 0 || next != "" {
 		t.Fatalf("no-match wrong: %+v %+v", rows, next)
 	}
@@ -67,7 +67,7 @@ func TestSearchNativeCollectionsIssuerAndPaging(t *testing.T) {
 	seedSearchAlbums(t, a)
 
 	// Issuer by createAddress (exact).
-	rows, total, _, err := a.SearchNativeCollections("", creator, "", 20)
+	rows, total, _, err := a.SearchNativeCollections("", creator, "", 20, false)
 	if err != nil {
 		t.Fatalf("issuer search: %v", err)
 	}
@@ -76,23 +76,23 @@ func TestSearchNativeCollectionsIssuerAndPaging(t *testing.T) {
 	}
 
 	// Issuer by createMetaId (case-insensitive).
-	rows, total, _, _ = a.SearchNativeCollections("", globalMetaIdByAddress(creator), "", 20)
+	rows, total, _, _ = a.SearchNativeCollections("", globalMetaIdByAddress(creator), "", 20, false)
 	if total != 2 {
 		t.Fatalf("metaId issuer wrong: %d", total)
 	}
 
 	// Conjunctive filters.
-	_, total, _, _ = a.SearchNativeCollections("gamma", creator, "", 20)
+	_, total, _, _ = a.SearchNativeCollections("gamma", creator, "", 20, false)
 	if total != 1 {
 		t.Fatalf("conjunctive filters wrong: %d", total)
 	}
 
 	// Offset paging with the shared cursor format.
-	rows, total, next, _ := a.SearchNativeCollections("", creator, "", 1)
+	rows, total, next, _ := a.SearchNativeCollections("", creator, "", 1, false)
 	if total != 2 || len(rows) != 1 || next == "" {
 		t.Fatalf("page 1 wrong: total=%d next=%q", total, next)
 	}
-	rows2, total2, next2, err := a.SearchNativeCollections("", creator, next, 1)
+	rows2, total2, next2, err := a.SearchNativeCollections("", creator, next, 1, false)
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
@@ -101,10 +101,10 @@ func TestSearchNativeCollectionsIssuerAndPaging(t *testing.T) {
 	}
 
 	// Invalid cursor and empty filters are client errors.
-	if _, _, _, err := a.SearchNativeCollections("", "", "!!!", 20); err == nil {
+	if _, _, _, err := a.SearchNativeCollections("", "", "!!!", 20, false); err == nil {
 		t.Fatal("invalid cursor must error")
 	}
-	if _, _, _, err := a.SearchNativeCollections("", "", "", 20); err == nil {
+	if _, _, _, err := a.SearchNativeCollections("", "", "", 20, false); err == nil {
 		t.Fatal("empty filters must error")
 	}
 }
@@ -113,7 +113,7 @@ func TestNativeCollectionsIssued(t *testing.T) {
 	a := newTestAggregator(t)
 	seedSearchAlbums(t, a)
 
-	rows, total, _, err := a.NativeCollectionsIssued(creator, "", 20)
+	rows, total, _, err := a.NativeCollectionsIssued(creator, "", 20, false)
 	if err != nil {
 		t.Fatalf("issued: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestNativeCollectionsIssued(t *testing.T) {
 	}
 
 	// Empty address is a client error.
-	if _, _, _, err := a.NativeCollectionsIssued("", "", 20); err == nil {
+	if _, _, _, err := a.NativeCollectionsIssued("", "", 20, false); err == nil {
 		t.Fatal("empty address must error")
 	}
 }

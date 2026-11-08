@@ -53,6 +53,10 @@ type offerRow struct {
 	Height    int64  `json:"height,omitempty"`
 	TxId      string `json:"txId,omitempty"`
 	Txid      string `json:"txid,omitempty"`
+
+	// Zero-conf fields (R-F-5): present only on overlay-synthesized rows.
+	Confirmed   *bool `json:"confirmed,omitempty"`
+	FirstSeenAt int64 `json:"firstSeenAt,omitempty"`
 }
 
 // offerRowFrom shapes one record; the collection join fields are filled
@@ -61,7 +65,7 @@ func offerRowFrom(rec *OfferRecord, collectionPinId, collectionName string) *off
 	if rec == nil {
 		return nil
 	}
-	return &offerRow{
+	row := &offerRow{
 		ItemPinId:       rec.ItemPinId,
 		Itempinid:       rec.ItemPinId,
 		OfferPinId:      rec.OfferPinId,
@@ -87,6 +91,12 @@ func offerRowFrom(rec *OfferRecord, collectionPinId, collectionName string) *off
 		TxId:            rec.TxID,
 		Txid:            rec.TxID,
 	}
+	if rec.Overlay {
+		confirmed := false
+		row.Confirmed = &confirmed
+		row.FirstSeenAt = rec.OverlayFirstSeenAt
+	}
+	return row
 }
 
 type offerListData struct {

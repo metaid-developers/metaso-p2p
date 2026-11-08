@@ -1,6 +1,9 @@
 package mrc721nft
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -845,5 +848,225 @@ func TestListCollectionsPagination(t *testing.T) {
 	empty, total3, err := a.db.ListCollections(10, 2)
 	if err != nil || total3 != 3 || len(empty) != 0 {
 		t.Fatalf("offset beyond end wrong: total=%d len=%d err=%v", total3, len(empty), err)
+	}
+}
+
+func TestItemDescObjectMetadataAppliedPerRef(t *testing.T) {
+	// R-F-11 reproduction (pixel-sun-test): IDBots writes item_desc with
+	// object-typed metadata. Before the tolerant decode, one non-string
+	// metadata failed the whole []ItemDescRef unmarshal and the entire pin
+	// was dropped — all items served empty display fields.
+	a := newTestAggregator(t)
+
+	runPins(t, a,
+		testPin("c1", "/nft/mrc721/PixelAlbum/collection_desc", "create", []byte(`{"name":"PX"}`), creator),
+		testPin("f1", "/nft/mrc721/PixelAlbum/frame-1", "create", []byte(`"f1"`), creator),
+		testPin("f2", "/nft/mrc721/PixelAlbum/frame-2", "create", []byte(`"f2"`), creator),
+		testPin("d1", "/nft/mrc721/PixelAlbum/item_desc", "create",
+			[]byte(`{"items":[`+
+				`{"pinid":"f1","name":"Frame 1","desc":"Sun part 1","cover":"metafile://c1","metadata":{"contentType":"image/jpeg","generator":"Seedream 4.5"}},`+
+				`{"pinid":"f2","name":"Frame 2","desc":"Sun part 2","cover":"metafile://c2","metadata":{"contentType":"image/png","generator":"Seedream 4.5"}}`+
+				`]}`), creator),
+	)
+
+	item1, _ := a.db.GetItem("f1")
+	if item1 == nil || item1.Name != "Frame 1" || item1.Desc != "Sun part 1" || item1.Cover != "metafile://c1" {
+		t.Fatalf("ref 1 not applied: %+v", item1)
+	}
+	// Object metadata is stored as its compact JSON text (same rule as
+	// collection metadata via stringField).
+	wantMeta := `{"contentType":"image/jpeg","generator":"Seedream 4.5"}`
+	if item1.Metadata != wantMeta {
+		t.Fatalf("object metadata not stored as compact text: %q", item1.Metadata)
+	}
+	item2, _ := a.db.GetItem("f2")
+	if item2 == nil || item2.Name != "Frame 2" {
+		t.Fatalf("ref 2 not applied: %+v", item2)
+	}
+	if item2.Metadata != `{"contentType":"image/png","generator":"Seedream 4.5"}` {
+		t.Fatalf("ref 2 metadata wrong: %q", item2.Metadata)
+	}
+}
+
+func TestItemDescBadRefSkippedOthersKept(t *testing.T) {
+	// One malformed ref (wrong-typed scalar field) is skipped with a log
+	// line; the surviving refs still apply.
+	a := newTestAggregator(t)
+
+	runPins(t, a,
+		testPin("c1", "/nft/mrc721/MixedAlbum/collection_desc", "create", []byte(`{"name":"MX"}`), creator),
+		testPin("g1", "/nft/mrc721/MixedAlbum/a", "create", []byte(`"g1"`), creator),
+		testPin("g2", "/nft/mrc721/MixedAlbum/b", "create", []byte(`"g2"`), creator),
+		testPin("d1", "/nft/mrc721/MixedAlbum/item_desc", "create",
+			[]byte(`{"items":[`+
+				`{"pinid":"g1","name":123},`+ // malformed: name is not a string
+				`"not-an-object",`+ // malformed: ref is not an object at all
+				`{"pinid":"g2","name":"Good Two","metadata":"plain string"}`+ // string metadata stays verbatim
+				`]}`), creator),
+	)
+
+	if item, _ := a.db.GetItem("g1"); item != nil && item.Name != "" {
+		t.Fatalf("malformed ref must not apply: %+v", item)
+	}
+	item2, _ := a.db.GetItem("g2")
+	if item2 == nil || item2.Name != "Good Two" {
+		t.Fatalf("surviving ref not applied: %+v", item2)
+	}
+	if item2.Metadata != "plain string" {
+		t.Fatalf("string metadata must stay verbatim: %q", item2.Metadata)
+	}
+}
+
+func TestItemDescMetadataVariants(t *testing.T) {
+	// null / absent / array / number metadata behave per the stringField
+	// convention: strings verbatim, other values as compact JSON text, null
+	// and absent as empty.
+	a := newTestAggregator(t)
+	runPins(t, a,
+		testPin("c1", "/nft/mrc721/VarAlbum/collection_desc", "create", []byte(`{"name":"V"}`), creator),
+		testPin("v1", "/nft/mrc721/VarAlbum/a", "create", []byte(`"v1"`), creator),
+		testPin("v2", "/nft/mrc721/VarAlbum/b", "create", []byte(`"v2"`), creator),
+		testPin("d1", "/nft/mrc721/VarAlbum/item_desc", "create",
+			[]byte(`{"items":[`+
+				`{"pinid":"v1","name":"One","metadata":null},`+
+				`{"pinid":"v2","name":"Two","metadata":["x",1]}`+
+				`]}`), creator),
+	)
+	item1, _ := a.db.GetItem("v1")
+	if item1 == nil || item1.Metadata != "" {
+		t.Fatalf("null metadata must store empty: %+v", item1)
+	}
+	item2, _ := a.db.GetItem("v2")
+	if item2 == nil || item2.Metadata != `["x",1]` {
+		t.Fatalf("array metadata must store compact text: %+v", item2)
+	}
+}
+
+func TestItemDescRefMetadataTextUnit(t *testing.T) {
+	ref := ItemDescRef{}
+	if ref.MetadataText() != "" {
+		t.Fatal("absent metadata must yield empty")
+	}
+	ref.Metadata = json.RawMessage("null")
+	if ref.MetadataText() != "" {
+		t.Fatal("null metadata must yield empty")
+	}
+	ref.Metadata = json.RawMessage(`{ "a" : 1 }`)
+	if ref.MetadataText() != `{"a":1}` {
+		t.Fatalf("object metadata must compact: %q", ref.MetadataText())
+	}
+	ref.Metadata = json.RawMessage("true")
+	if ref.MetadataText() != "true" {
+		t.Fatalf("scalar metadata must store its text: %q", ref.MetadataText())
+	}
+	ref.Metadata = json.RawMessage("{broken")
+	if ref.MetadataText() != "" {
+		t.Fatalf("undecodable metadata must yield empty: %q", ref.MetadataText())
+	}
+}
+
+func TestStagedMintsDrainInChainOrder(t *testing.T) {
+	// R-F-10 reproduction (pixel-sun-test): mints staged before their album
+	// registers must drain in chain order (height, txIndex, output index),
+	// not Pebble's lexicographic pinId key order. The pin ids here sort in
+	// the WRONG order lexicographically on purpose — before the fix the
+	// numbers followed the pin ids.
+	a := newTestAggregator(t)
+
+	pinIds := make(map[string]string) // logical name → actual pin id
+	stage := func(name string, height int64, txIndex int64, outIdx int64) {
+		pin := testPin(name, "/nft/mrc721/OrderAlbum/frame", "create", []byte(`"x"`), creator)
+		pin.GenesisHeight = height
+		pin.TxIndex = txIndex
+		pin.Id = fmt.Sprintf("%064xi%d", strings.Repeat("ab", 32), outIdx)
+		pin.GenesisTransaction = pin.Id[:64]
+		pinIds[name] = pin.Id
+		runPins(t, a, pin)
+	}
+	// Mint order 1..5 with the chain positions deliberately conflicting
+	// with the pinId lexicographic order that drove the old bug.
+	stage("m-e", 200, 3, 5) // chain #5
+	stage("m-c", 200, 2, 3) // chain #3
+	stage("m-a", 200, 1, 1) // chain #2 (lowest outIdx → lexicographic first)
+	stage("m-d", 200, 3, 4) // chain #4 (same tx as m-e, lower outIdx)
+	stage("m-b", 199, 9, 2) // chain #1 (earlier block wins over everything)
+
+	runPins(t, a, testPin("c1", "/nft/mrc721/OrderAlbum/collection_desc", "create",
+		[]byte(`{"name":"ORD","totalSupply":10}`), creator))
+
+	for _, want := range []struct {
+		name   string
+		number int64
+	}{
+		{"m-b", 1}, {"m-a", 2}, {"m-c", 3}, {"m-d", 4}, {"m-e", 5},
+	} {
+		item, _ := a.db.GetItem(pinIds[want.name])
+		if item == nil || item.Number != want.number {
+			t.Fatalf("mint %s should be #%d, got %+v", want.name, want.number, item)
+		}
+	}
+	col := mustCol(t, a, "OrderAlbum", creator)
+	if col.TotalNum != 5 {
+		t.Fatalf("totalnum wrong: %+v", col)
+	}
+}
+
+func TestStagedMintsSupplyCutFollowsChainOrder(t *testing.T) {
+	// The supply cut follows the chain order too: the earliest-created
+	// mints survive, the latest-created are dropped (R-F-10).
+	a := newTestAggregator(t)
+
+	pinIds := make(map[string]string) // logical name → actual pin id
+	stage := func(name string, height int64, txIndex int64, outIdx int64) {
+		pin := testPin(name, "/nft/mrc721/CutAlbum/frame", "create", []byte(`"x"`), creator)
+		pin.GenesisHeight = height
+		pin.TxIndex = txIndex
+		pin.Id = fmt.Sprintf("%064xi%d", strings.Repeat("cd", 32), outIdx)
+		pin.GenesisTransaction = pin.Id[:64]
+		pinIds[name] = pin.Id
+		runPins(t, a, pin)
+	}
+	// totalSupply=2: the chain-first two survive, the later ones are cut
+	// regardless of how their pin ids sort.
+	stage("k-1", 200, 2, 1) // chain #3 → cut
+	stage("k-2", 200, 1, 7) // chain #2 (same tx as k-4, higher outIdx) → #2
+	stage("k-3", 200, 2, 9) // chain #4 → cut
+	stage("k-4", 200, 1, 2) // chain #1 → #1
+
+	runPins(t, a, testPin("c1", "/nft/mrc721/CutAlbum/collection_desc", "create",
+		[]byte(`{"name":"CUT","totalSupply":2}`), creator))
+
+	if item, _ := a.db.GetItem(pinIds["k-4"]); item == nil || item.Number != 1 {
+		t.Fatalf("k-4 should be #1: %+v", item)
+	}
+	if item, _ := a.db.GetItem(pinIds["k-2"]); item == nil || item.Number != 2 {
+		t.Fatalf("k-2 should be #2: %+v", item)
+	}
+	for _, cut := range []string{"k-1", "k-3"} {
+		if item, _ := a.db.GetItem(pinIds[cut]); item != nil {
+			t.Fatalf("%s must be cut by the supply gate: %+v", cut, item)
+		}
+	}
+	col := mustCol(t, a, "CutAlbum", creator)
+	if col.TotalNum != 2 {
+		t.Fatalf("totalnum must follow the supply cut: %+v", col)
+	}
+}
+
+func TestPinOutputIndex(t *testing.T) {
+	if got := pinOutputIndex("a205961de87f1a3b33133b75f0c54bbf3700f91da33cb3d7dc7474712ac0da68i0"); got != 0 {
+		t.Fatalf("vout 0 wrong: %d", got)
+	}
+	if got := pinOutputIndex("4687fb9b4a349fe9832927a6676776c96d1c1cf7dd3a8b0607e4ffdb3400a1cei0"); got != 0 {
+		t.Fatalf("vout 0 wrong: %d", got)
+	}
+	if got := pinOutputIndex("abcidef123i37"); got != 37 {
+		t.Fatalf("vout 37 wrong: %d", got)
+	}
+	if got := pinOutputIndex("no-suffix"); got != 0 {
+		t.Fatalf("unknown shape must yield 0: %d", got)
+	}
+	if got := pinOutputIndex("trailingi"); got != 0 {
+		t.Fatalf("empty suffix must yield 0: %d", got)
 	}
 }

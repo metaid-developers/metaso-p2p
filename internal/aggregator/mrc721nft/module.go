@@ -47,6 +47,16 @@ type Aggregator struct {
 	tracked      map[string]aggregator.TrackedOutput
 	trackedDirty bool
 
+	// Zero-confirmation overlay state (R-F-1): in-memory only, guarded by
+	// a.mu, rebuilt from the node mempool after a restart within one poll
+	// plus one full scan. Never persisted, never replayed by backfill.
+	zeroConfIssuance bool
+	zeroConfTrade    bool
+	overlayPins      map[string]*overlayPinEntry   // pinId → entry
+	overlaySpends    map[string]*overlaySpendEntry // spent outpoint → entry
+	overlayTxids     map[string]int64              // live overlay txid → firstSeenAt
+	overlayCap       int
+
 	// replayClient is the upstream client the admin replay-pins endpoint
 	// repairs entities from (set at startup, nil disables the endpoint).
 	replayClient *UpstreamClient
@@ -69,6 +79,10 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	}
 	a.db = &nftStore{store: store}
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 16)
+	a.overlayPins = make(map[string]*overlayPinEntry)
+	a.overlaySpends = make(map[string]*overlaySpendEntry)
+	a.overlayTxids = make(map[string]int64)
+	a.overlayCap = overlayDefaultCap
 	return nil
 }
 
@@ -78,19 +92,26 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 
 // HandleBlockPin folds a confirmed pin into the NFT aggregate. Pins from
 // other paths are ignored; malformed or invalid protocol pins are logged
-// and skipped so they never fail the block pipeline.
+// and skipped so they never fail the block pipeline. Confirmation handoff
+// (R-F-8.1): once the confirmed facts are folded, the pin's overlay entries
+// go — same critical section, so no read observes a gap or a duplicate.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ingestNftPin(pin)
+	if pin != nil {
+		a.dropOverlayForTxLocked(txidOfPin(pin))
+	}
 	return nil, nil
 }
 
-// HandleMempoolPin is a deliberate no-op, mirroring man-p2p: only confirmed
-// pins fold into the aggregate (unconfirmed mints/descs wait for their
-// block; unconfirmed transfer visibility comes through the mempool pending
-// channel, not through pin ingestion).
+// HandleMempoolPin records the pin's zero-conf overlay effect (R-F-1) when
+// the issuance gate is on; the confirmed aggregate stays untouched until
+// the block folds the pin in.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.recordMempoolPinLocked(pin)
 	return nil, nil
 }
 

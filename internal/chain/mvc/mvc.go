@@ -149,6 +149,27 @@ func (c *Chain) BroadcastTx(txRaw string) (string, error) {
 	return hash.String(), nil
 }
 
+// MempoolTxIDs implements chain.MempoolTxIDLister: the ledger txid
+// (mvcMetaIDTxHash — the identity pin ids build on) of every transaction in
+// the list, falling back to the wire hash when the ledger derivation fails.
+// This is the observed-txid set the engine hands to zero-conf overlay
+// consumers for eviction reconcile (R-F-1).
+func (c *Chain) MempoolTxIDs(txList []any) []string {
+	txIDs := make([]string, 0, len(txList))
+	for _, item := range txList {
+		tx, ok := item.(*wire.MsgTx)
+		if !ok {
+			continue
+		}
+		if ledger, err := mvcMetaIDTxHash(tx); err == nil {
+			txIDs = append(txIDs, ledger)
+		} else {
+			txIDs = append(txIDs, tx.TxHash().String())
+		}
+	}
+	return txIDs
+}
+
 // NetParams returns the MVC network parameters.
 // MVC is a Bitcoin fork and uses the same address prefixes.
 func NetParams(testNet string) *chaincfg.Params {

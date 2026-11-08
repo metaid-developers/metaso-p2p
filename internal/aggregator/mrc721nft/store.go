@@ -1,6 +1,7 @@
 package mrc721nft
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,12 +93,17 @@ type Item struct {
 	ContentSummary   string `json:"contentSummary"`
 	GenesisChainName string `json:"genesisChainName"`
 	GenesisHeight    int64  `json:"genesisHeight"`
-	GenesisTx        string `json:"genesisTx"`
-	GenesisFee       int64  `json:"genesisFee"`
-	Output           string `json:"output"`
-	OutputValue      int64  `json:"outputValue"`
-	CreateTime       int64  `json:"createTime"`
-	TransferCount    int64  `json:"transferCount"`
+	// TxIndex is the mint tx's position within its block — the chain-order
+	// fact the renumber migration (R-F-10) re-derives album numbering from;
+	// items minted before the field existed carry 0 and the migration falls
+	// back to the block refetch.
+	TxIndex       int64  `json:"txIndex,omitempty"`
+	GenesisTx     string `json:"genesisTx"`
+	GenesisFee    int64  `json:"genesisFee"`
+	Output        string `json:"output"`
+	OutputValue   int64  `json:"outputValue"`
+	CreateTime    int64  `json:"createTime"`
+	TransferCount int64  `json:"transferCount"`
 }
 
 // ItemTransfer is one confirmed ownership change of an item. JSON tags
@@ -114,13 +120,39 @@ type ItemTransfer struct {
 
 // ItemDescRef is one item reference inside an item_desc payload. The
 // lowercase "pinid" tag mirrors man-p2p's Mrc721ItemDescRef (the bootstrap
-// replay feeds these structs straight from upstream JSON).
+// replay feeds these structs straight from upstream JSON). Metadata decodes
+// tolerantly (R-F-11): the protocol defines it as arbitrary data, so the
+// raw JSON is kept as-is and rendered through MetadataText — a typed string
+// here made one object-typed metadata value fail the whole payload decode
+// and drop the entire pin.
 type ItemDescRef struct {
-	PinId    string `json:"pinid"`
-	Name     string `json:"name"`
-	Desc     string `json:"desc"`
-	Cover    string `json:"cover"`
-	Metadata string `json:"metadata"`
+	PinId    string          `json:"pinid"`
+	Name     string          `json:"name"`
+	Desc     string          `json:"desc"`
+	Cover    string          `json:"cover"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// MetadataText renders the ref's metadata in its stored string form: a JSON
+// string verbatim, any other JSON value as its compact JSON text — the same
+// rule stringField applies to collection metadata. Absent, null, or
+// undecodable values yield "".
+func (r ItemDescRef) MetadataText() string {
+	if len(r.Metadata) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(r.Metadata, &s); err == nil {
+		return s
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, r.Metadata); err != nil {
+		return ""
+	}
+	if text := buf.String(); text != "null" {
+		return text
+	}
+	return ""
 }
 
 // PendingEntry stages a mint / item_desc / collection_desc-modify pin that
@@ -137,6 +169,11 @@ type PendingEntry struct {
 }
 
 // PendingMint carries everything needed to rebuild an item on drain.
+// TxIndex/OutputIndex record the pin's chain position (block tx index, pin
+// output index) so drainPending can commit staged mints in true chain order
+// (R-F-10) instead of Pebble's lexicographic pinId key order; entries staged
+// before this field existed sort with TxIndex/OutputIndex 0 and fall back to
+// the pinId-derived output index.
 type PendingMint struct {
 	ItemPinId        string `json:"itemPinId"`
 	OwnerAddress     string `json:"ownerAddress"`
@@ -145,11 +182,18 @@ type PendingMint struct {
 	ContentSummary   string `json:"contentSummary"`
 	GenesisChainName string `json:"genesisChainName"`
 	GenesisHeight    int64  `json:"genesisHeight"`
+	TxIndex          int64  `json:"txIndex,omitempty"`
+	OutputIndex      int64  `json:"outputIndex,omitempty"`
 	GenesisTx        string `json:"genesisTx"`
 	GenesisFee       int64  `json:"genesisFee"`
 	Output           string `json:"output"`
 	OutputValue      int64  `json:"outputValue"`
 	CreateTime       int64  `json:"createTime"`
+	// Inputs carries the mint tx's previous-output pointers (overlay mints
+	// only) — the ancestry facts behind numberFinal (R-F-5). Staged
+	// confirmed mints leave it empty: their order is chain-final by
+	// definition.
+	Inputs []string `json:"inputs,omitempty"`
 }
 
 // PendingDesc stages the not-yet-applied item references of an item_desc
@@ -507,6 +551,39 @@ func (s *nftStore) PopPending(collectionName, issuerAddress string) ([]*PendingE
 		}
 	}
 	return entries, nil
+}
+
+// StagedPin is one read-only staged entry with its would-be album key (the
+// zero-conf projections surface staged mints/descs before their album
+// registers; the drain path uses PopPending, which deletes).
+type StagedPin struct {
+	CollectionName string
+	IssuerAddress  string
+	Entry          *PendingEntry
+}
+
+// PeekPendingAll walks every staged entry read-only (projection input;
+// scale = pins staged before their album registers).
+func (s *nftStore) PeekPendingAll() ([]StagedPin, error) {
+	var out []StagedPin
+	err := s.store.ScanPrefix(Namespace, []byte(keyPending), func(key, value []byte) error {
+		// p:{collectionName}&{issuerAddress}&{pinId} — issuer is the last
+		// '&'-separated segment before the pinId segment.
+		rest := strings.TrimPrefix(string(key), keyPending)
+		segments := strings.Split(rest, "&")
+		if len(segments) < 3 {
+			return nil
+		}
+		issuer := segments[len(segments)-2]
+		name := strings.Join(segments[:len(segments)-2], "&")
+		var entry PendingEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return nil // skip corrupt rows
+		}
+		out = append(out, StagedPin{CollectionName: name, IssuerAddress: issuer, Entry: &entry})
+		return nil
+	})
+	return out, err
 }
 
 // ---------- pending transfer (mempool unconfirmed spend, advisory) ----------

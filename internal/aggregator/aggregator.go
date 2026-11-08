@@ -27,12 +27,26 @@ type PinInscription struct {
 	ChainName          string `json:"chainName"`
 	GenesisTransaction string `json:"genesisTransaction"`
 	GenesisHeight      int64  `json:"genesisHeight"`
-	Timestamp          int64  `json:"timestamp"`
-	Output             string `json:"output"`
-	OutputValue        int64  `json:"outputValue,omitempty"`
-	IsTransfered       bool   `json:"isTransfered"`
-	OriginalId         string `json:"originalId,omitempty"`
-	Host               string `json:"host"`
+	// TxIndex is the transaction's position within its block (0 = coinbase),
+	// carried so out-of-order staging can replay mints in true chain order
+	// (R-F-10). Mempool pins carry a fetch-order index that has no chain
+	// meaning; their GenesisHeight is -1 and they never stage.
+	TxIndex int64 `json:"txIndex,omitempty"`
+	// Inputs lists the transaction's previous-output pointers ("txid:vout"),
+	// one per input. Zero-conf consumers derive tx ancestry from it (the
+	// parent→child mint chains behind numberFinal, R-F-5); the txids here
+	// are the wire-hash convention of the raw transaction layer.
+	Inputs []string `json:"inputs,omitempty"`
+	// WireHash is the raw transaction hash (tx.TxHash) — for MVC version>=10
+	// txs it differs from the ledger hash in GenesisTransaction, and overlay
+	// ancestry resolution matches Inputs' wire hashes against it.
+	WireHash     string `json:"wireHash,omitempty"`
+	Timestamp    int64  `json:"timestamp"`
+	Output       string `json:"output"`
+	OutputValue  int64  `json:"outputValue,omitempty"`
+	IsTransfered bool   `json:"isTransfered"`
+	OriginalId   string `json:"originalId,omitempty"`
+	Host         string `json:"host"`
 	// IsOpReturn marks pins parsed from an MVC OP_RETURN output. The MVC
 	// witness envelope is a separate parse path that man-p2p's MVC adapter
 	// never feeds into its pin store, so the mrc721nft aggregate consumes
@@ -102,6 +116,27 @@ type TransferConsumer interface {
 	// away its pendings for this chain that the round no longer observes
 	// (confirmed → settled by the block hook; dropped/RBF → cleaned).
 	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
+}
+
+// MempoolSpendIncrementalConsumer is an optional TransferConsumer extension
+// for zero-confirmation ownership surfaces (R-F-3/R-F-7): the engine feeds
+// the incremental mempool rounds' spend notices on every poll (no reconcile
+// — a partial observation must never evict overlay state).
+type MempoolSpendIncrementalConsumer interface {
+	// HandleMempoolSpendsIncremental consumes the spends detected in one
+	// incremental mempool poll over the freshly fetched transactions.
+	HandleMempoolSpendsIncremental(chainName string, spends map[string]TransferNotice)
+}
+
+// MempoolOverlayReconciler is an optional Aggregator extension for
+// zero-confirmation read surfaces (R-F-1/R-F-4): each full mempool round
+// hands the observed txid set (ledger convention) to the overlay, so
+// entries whose transaction left the mempool without confirming are
+// dropped (recomputed, never mutated — a dropped tx's effects vanish,
+// revealing the confirmed state beneath). Consumers only ever receive sets
+// from complete fetches; a failed fetch reconciles nothing.
+type MempoolOverlayReconciler interface {
+	ReconcileMempoolRound(chainName string, observedTxIDs []string)
 }
 
 // Aggregator is the interface each business module must implement.
@@ -198,4 +233,16 @@ func (r *Registry) TransferConsumers() []TransferConsumer {
 		}
 	}
 	return consumers
+}
+
+// OverlayReconcilers returns the registered aggregators that implement the
+// optional MempoolOverlayReconciler extension (zero-conf overlay eviction).
+func (r *Registry) OverlayReconcilers() []MempoolOverlayReconciler {
+	var reconcilers []MempoolOverlayReconciler
+	for _, a := range r.aggregators {
+		if rec, ok := a.(MempoolOverlayReconciler); ok {
+			reconcilers = append(reconcilers, rec)
+		}
+	}
+	return reconcilers
 }
