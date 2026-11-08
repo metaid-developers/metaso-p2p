@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	"os"
 	"fmt"
 	"log"
 	"sort"
@@ -46,7 +47,7 @@ func run() error {
 	dataDir := fs.String("data-dir", cfg.Pebble.DataDir, "Pebble data directory of the metaso-p2p daemon")
 	apply := fs.Bool("apply", false, "execute the repair (default is a dry-run plan)")
 	noRPC := fs.Bool("no-rpc", false, "skip the MVC node hydration of missing tx indexes (their order falls back to the pin output index)")
-	if err := fs.Parse(flag.Args()); err != nil {
+	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 

@@ -14,6 +14,7 @@ package main
 
 import (
 	"flag"
+	"os"
 	"fmt"
 	"log"
 	"strings"
@@ -40,7 +41,7 @@ func run() error {
 	fs := flag.NewFlagSet("metaso-p2p-mrc721-replay", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", cfg.Pebble.DataDir, "Pebble data directory of the metaso-p2p daemon")
 	pinIds := fs.String("pinIds", "", "comma-separated pin ids to replay (confirmed pins only)")
-	if err := fs.Parse(flag.Args()); err != nil {
+	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 	var ids []string
