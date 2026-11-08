@@ -31,8 +31,13 @@ type PinInscription struct {
 	// carried so out-of-order staging can replay mints in true chain order
 	// (R-F-10). Mempool pins carry a fetch-order index that has no chain
 	// meaning; their GenesisHeight is -1 and they never stage.
-	TxIndex      int64  `json:"txIndex,omitempty"`
-	Timestamp    int64  `json:"timestamp"`
+	TxIndex int64 `json:"txIndex,omitempty"`
+	// Inputs lists the transaction's previous-output pointers ("txid:vout"),
+	// one per input. Zero-conf consumers derive tx ancestry from it (the
+	// parent→child mint chains behind numberFinal, R-F-5); the txids here
+	// are the wire-hash convention of the raw transaction layer.
+	Inputs    []string `json:"inputs,omitempty"`
+	Timestamp int64    `json:"timestamp"`
 	Output       string `json:"output"`
 	OutputValue  int64  `json:"outputValue,omitempty"`
 	IsTransfered bool   `json:"isTransfered"`
@@ -107,6 +112,24 @@ type TransferConsumer interface {
 	// away its pendings for this chain that the round no longer observes
 	// (confirmed → settled by the block hook; dropped/RBF → cleaned).
 	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
+}
+
+// MempoolOverlayConsumer is an optional TransferConsumer extension for
+// zero-confirmation read surfaces (R-F): the engine feeds incremental
+// mempool rounds' spend notices on every poll (no reconcile — a partial
+// observation must never evict overlay state), and hands each full round's
+// observed txid set to the overlay so entries whose transaction left the
+// mempool without confirming are dropped (recomputed, never mutated — a
+// dropped tx's effects vanish, revealing the confirmed state beneath).
+type MempoolOverlayConsumer interface {
+	// HandleMempoolSpendsIncremental consumes the spends detected in one
+	// incremental mempool poll over the freshly fetched transactions.
+	HandleMempoolSpendsIncremental(chainName string, spends map[string]TransferNotice)
+
+	// ReconcileMempoolRound consumes one fully observed mempool round's
+	// txid set (ledger convention). Overlay entries whose txid is absent
+	// are evicted; consumers only ever receive sets from complete fetches.
+	ReconcileMempoolRound(chainName string, observedTxIDs []string)
 }
 
 // Aggregator is the interface each business module must implement.

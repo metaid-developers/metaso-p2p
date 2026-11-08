@@ -189,6 +189,11 @@ type PendingMint struct {
 	Output           string `json:"output"`
 	OutputValue      int64  `json:"outputValue"`
 	CreateTime       int64  `json:"createTime"`
+	// Inputs carries the mint tx's previous-output pointers (overlay mints
+	// only) — the ancestry facts behind numberFinal (R-F-5). Staged
+	// confirmed mints leave it empty: their order is chain-final by
+	// definition.
+	Inputs []string `json:"inputs,omitempty"`
 }
 
 // PendingDesc stages the not-yet-applied item references of an item_desc

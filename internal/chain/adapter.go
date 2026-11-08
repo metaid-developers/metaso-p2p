@@ -48,6 +48,16 @@ type IncrementalMempoolChain interface {
 	GetMempoolTransactions(txIDs []string) (map[string]any, error)
 }
 
+// MempoolTxIDLister is an optional Chain extension that extracts the stable
+// transaction ids — the chain's ledger convention, the identity pin ids are
+// built on — from a mempool transaction list. The engine uses it to hand
+// full-mempool rounds' observed txid sets to MempoolOverlayConsumer
+// aggregators for overlay eviction (R-F-1): a transaction missing from a
+// fully observed round has its overlay effects dropped.
+type MempoolTxIDLister interface {
+	MempoolTxIDs(txList []any) []string
+}
+
 // Indexer parses chain-specific raw data into structured PinInscriptions.
 type Indexer interface {
 	// Name returns the chain identifier.

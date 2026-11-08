@@ -24,19 +24,20 @@ import (
 
 // Engine is the top-level indexing engine.
 type Engine struct {
-	mu                    sync.RWMutex
-	chains                map[string]*chainEntry
-	registry              *aggregator.Registry
-	store                 *storage.PebbleStore
-	scanInterval          time.Duration
-	mempoolPollingEnabled bool
-	mempoolPollInterval   time.Duration
-	mempoolDedupeTTL      time.Duration
-	mempoolSeen           map[string]time.Time
-	mempoolTxSeen         map[string]time.Time
-	mempoolMu             sync.Mutex
-	running               bool
-	cancel                context.CancelFunc
+	mu                      sync.RWMutex
+	chains                  map[string]*chainEntry
+	registry                *aggregator.Registry
+	store                   *storage.PebbleStore
+	scanInterval            time.Duration
+	mempoolPollingEnabled   bool
+	mempoolPollInterval     time.Duration
+	mempoolDedupeTTL        time.Duration
+	mempoolFullScanInterval time.Duration
+	mempoolSeen             map[string]time.Time
+	mempoolTxSeen           map[string]time.Time
+	mempoolMu               sync.Mutex
+	running                 bool
+	cancel                  context.CancelFunc
 }
 
 type chainEntry struct {
@@ -48,15 +49,16 @@ type chainEntry struct {
 // NewEngine creates a new indexing engine.
 func NewEngine(store *storage.PebbleStore, registry *aggregator.Registry) *Engine {
 	return &Engine{
-		chains:                make(map[string]*chainEntry),
-		registry:              registry,
-		store:                 store,
-		scanInterval:          10 * time.Second,
-		mempoolPollingEnabled: true,
-		mempoolPollInterval:   10 * time.Second,
-		mempoolDedupeTTL:      30 * time.Minute,
-		mempoolSeen:           make(map[string]time.Time),
-		mempoolTxSeen:         make(map[string]time.Time),
+		chains:                  make(map[string]*chainEntry),
+		registry:                registry,
+		store:                   store,
+		scanInterval:            10 * time.Second,
+		mempoolPollingEnabled:   true,
+		mempoolPollInterval:     10 * time.Second,
+		mempoolDedupeTTL:        30 * time.Minute,
+		mempoolFullScanInterval: mempoolFullScanIntervalDefault,
+		mempoolSeen:             make(map[string]time.Time),
+		mempoolTxSeen:           make(map[string]time.Time),
 	}
 }
 
@@ -272,16 +274,47 @@ func (e *Engine) processTransfers(entry *chainEntry, height int64) {
 	}
 }
 
-// mempoolTransferScanInterval mirrors man-p2p's periodic full-mempool sync
-// cadence for unconfirmed NFT spend visibility.
-const mempoolTransferScanInterval = 30 * time.Second
+// mempoolFullScanIntervalDefault mirrors man-p2p's periodic full-mempool
+// sync cadence for unconfirmed NFT spend visibility. Since the incremental
+// mempool poll also runs spend detection (R-F-7), the full scan stays for
+// eviction reconcile only; the interval is configurable, clamped 30–60s.
+const (
+	mempoolFullScanIntervalDefault = 30 * time.Second
+	mempoolFullScanIntervalMin     = 30 * time.Second
+	mempoolFullScanIntervalMax     = 60 * time.Second
+)
+
+// ConfigureMempoolFullScanInterval sets the full-mempool spend-scan cadence,
+// clamped to [30s, 60s] (R-F-7).
+func (e *Engine) ConfigureMempoolFullScanInterval(interval time.Duration) {
+	if interval <= 0 {
+		interval = mempoolFullScanIntervalDefault
+	}
+	if interval < mempoolFullScanIntervalMin {
+		interval = mempoolFullScanIntervalMin
+	}
+	if interval > mempoolFullScanIntervalMax {
+		interval = mempoolFullScanIntervalMax
+	}
+	e.mu.Lock()
+	e.mempoolFullScanInterval = interval
+	e.mu.Unlock()
+}
 
 // mempoolTransferLoop periodically scans the FULL mempool of each chain
 // with a MempoolTransferDetector for spends of tracked outputs. Full-list
 // sync (not incremental) is what the consumers' reconcile correctness
 // relies on: a pending spend not observed this round is settled/dropped.
+// New spends are caught by the incremental poll's spend detection; this
+// loop's remaining job is the reconcile that evicts dropped transactions.
 func (e *Engine) mempoolTransferLoop(ctx context.Context) {
-	ticker := time.NewTicker(mempoolTransferScanInterval)
+	e.mu.RLock()
+	interval := e.mempoolFullScanInterval
+	e.mu.RUnlock()
+	if interval <= 0 {
+		interval = mempoolFullScanIntervalDefault
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -301,6 +334,12 @@ func (e *Engine) processMempoolTransfers() {
 	consumers := e.registry.TransferConsumers()
 	if len(consumers) == 0 {
 		return
+	}
+	var overlayConsumers []aggregator.MempoolOverlayConsumer
+	for _, consumer := range consumers {
+		if oc, ok := consumer.(aggregator.MempoolOverlayConsumer); ok {
+			overlayConsumers = append(overlayConsumers, oc)
+		}
 	}
 	e.mu.RLock()
 	entries := make([]*chainEntry, 0, len(e.chains))
@@ -335,6 +374,17 @@ func (e *Engine) processMempoolTransfers() {
 		chainName := entry.chain.Name()
 		for _, consumer := range consumers {
 			consumer.HandleMempoolSpends(chainName, notices)
+		}
+		if len(overlayConsumers) > 0 {
+			// Complete round: hand the observed txid set (ledger convention)
+			// to the overlay consumers for eviction reconcile.
+			var txIDs []string
+			if lister, ok := entry.chain.(chain.MempoolTxIDLister); ok {
+				txIDs = lister.MempoolTxIDs(txList)
+			}
+			for _, consumer := range overlayConsumers {
+				consumer.ReconcileMempoolRound(chainName, txIDs)
+			}
 		}
 	}
 }
@@ -371,7 +421,64 @@ func (e *Engine) pollMempoolOnce() {
 		for _, pin := range pins {
 			e.registry.RouteMempoolPin(pin)
 		}
+		// Incremental spend detection (R-F-7): every poll scans the freshly
+		// fetched transactions for spends of tracked outputs, so an
+		// ownership change surfaces within one poll instead of waiting for
+		// the full-scan cadence. No reconcile here — an incremental round is
+		// a partial observation. The loop chains spends: each applied notice
+		// can surface new overlay-tracked outputs (mint → list → buy →
+		// resell, all unconfirmed) that later transactions in the same batch
+		// spend, so detection repeats until it stops finding new ones.
+		e.detectIncrementalMempoolSpends(entry, txList)
 		e.markMempoolTxIDsSeen(chainName, fetchedTxIDs, now)
+	}
+}
+
+// detectIncrementalMempoolSpends runs the incremental spend detection for
+// one poll round, chaining until no new notices surface (max depth cap).
+func (e *Engine) detectIncrementalMempoolSpends(entry *chainEntry, txList []any) {
+	consumers := e.registry.TransferConsumers()
+	if len(consumers) == 0 || len(txList) == 0 {
+		return
+	}
+	detector, ok := entry.indexer.(chain.MempoolTransferDetector)
+	if !ok {
+		return
+	}
+	chainName := entry.chain.Name()
+	notified := make(map[string]struct{}) // spent outpoints already handed over
+	const maxChainDepth = 8
+	for round := 0; round < maxChainDepth; round++ {
+		idMap := make(map[string]string)
+		for _, consumer := range consumers {
+			for outpoint, tracked := range consumer.TrackedOutputs() {
+				if tracked.Owner != "" {
+					idMap[outpoint] = tracked.Owner
+				}
+			}
+		}
+		notices, err := detector.DetectMempoolSpends(idMap, txList)
+		if err != nil {
+			log.Printf("[indexer] %s mempool incremental spend scan: detect error: %v", chainName, err)
+			return
+		}
+		fresh := make(map[string]aggregator.TransferNotice, len(notices))
+		for outpoint, notice := range notices {
+			if _, done := notified[outpoint]; !done {
+				fresh[outpoint] = notice
+			}
+		}
+		if len(fresh) == 0 {
+			return
+		}
+		for outpoint := range fresh {
+			notified[outpoint] = struct{}{}
+		}
+		for _, consumer := range consumers {
+			if oc, ok := consumer.(aggregator.MempoolOverlayConsumer); ok {
+				oc.HandleMempoolSpendsIncremental(chainName, fresh)
+			}
+		}
 	}
 }
 
