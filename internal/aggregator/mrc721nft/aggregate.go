@@ -389,8 +389,9 @@ func (a *Aggregator) applyDescRefs(collectionName, descPinId, issuerAddress stri
 		if item.Cover == "" && ref.Cover != "" {
 			item.Cover, changed = ref.Cover, true
 		}
-		if item.Metadata == "" && ref.Metadata != "" {
-			item.Metadata, changed = ref.Metadata, true
+		refMetadata := ref.MetadataText()
+		if item.Metadata == "" && refMetadata != "" {
+			item.Metadata, changed = refMetadata, true
 		}
 		if changed {
 			if err := a.db.SaveItem(item); err != nil {
@@ -408,6 +409,12 @@ func (a *Aggregator) applyDescRefs(collectionName, descPinId, issuerAddress stri
 	}
 }
 
+// parseItemDescRefs decodes one item_desc payload ref by ref (R-F-11): the
+// protocol defines metadata as arbitrary data, so one non-string metadata
+// value must not erase the whole pin. The payload is rejected (ok=false)
+// only when it is unreadable as a whole (invalid JSON or a non-array items
+// field); a malformed individual ref is logged and skipped, the surviving
+// refs are kept.
 func parseItemDescRefs(contentBody []byte) ([]ItemDescRef, bool) {
 	content, err := parseContent(contentBody)
 	if err != nil {
@@ -418,10 +425,19 @@ func parseItemDescRefs(contentBody []byte) ([]ItemDescRef, bool) {
 	if !ok {
 		return nil, true
 	}
-	var refs []ItemDescRef
-	if err := json.Unmarshal(raw, &refs); err != nil {
-		log.Printf("WARNING: mrc721nft item_desc invalid items: %v", err)
+	var rawRefs []json.RawMessage
+	if err := json.Unmarshal(raw, &rawRefs); err != nil {
+		log.Printf("WARNING: mrc721nft item_desc invalid items array: %v", err)
 		return nil, false
+	}
+	refs := make([]ItemDescRef, 0, len(rawRefs))
+	for i, rawRef := range rawRefs {
+		var ref ItemDescRef
+		if err := json.Unmarshal(rawRef, &ref); err != nil {
+			log.Printf("WARNING: mrc721nft item_desc ref %d skipped (malformed): %v", i, err)
+			continue
+		}
+		refs = append(refs, ref)
 	}
 	return refs, true
 }

@@ -1,6 +1,7 @@
 package mrc721nft
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,13 +115,39 @@ type ItemTransfer struct {
 
 // ItemDescRef is one item reference inside an item_desc payload. The
 // lowercase "pinid" tag mirrors man-p2p's Mrc721ItemDescRef (the bootstrap
-// replay feeds these structs straight from upstream JSON).
+// replay feeds these structs straight from upstream JSON). Metadata decodes
+// tolerantly (R-F-11): the protocol defines it as arbitrary data, so the
+// raw JSON is kept as-is and rendered through MetadataText — a typed string
+// here made one object-typed metadata value fail the whole payload decode
+// and drop the entire pin.
 type ItemDescRef struct {
-	PinId    string `json:"pinid"`
-	Name     string `json:"name"`
-	Desc     string `json:"desc"`
-	Cover    string `json:"cover"`
-	Metadata string `json:"metadata"`
+	PinId    string          `json:"pinid"`
+	Name     string          `json:"name"`
+	Desc     string          `json:"desc"`
+	Cover    string          `json:"cover"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// MetadataText renders the ref's metadata in its stored string form: a JSON
+// string verbatim, any other JSON value as its compact JSON text — the same
+// rule stringField applies to collection metadata. Absent, null, or
+// undecodable values yield "".
+func (r ItemDescRef) MetadataText() string {
+	if len(r.Metadata) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(r.Metadata, &s); err == nil {
+		return s
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, r.Metadata); err != nil {
+		return ""
+	}
+	if text := buf.String(); text != "null" {
+		return text
+	}
+	return ""
 }
 
 // PendingEntry stages a mint / item_desc / collection_desc-modify pin that
