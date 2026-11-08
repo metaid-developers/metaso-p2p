@@ -149,6 +149,41 @@ func (c *Chain) BroadcastTx(txRaw string) (string, error) {
 	return hash.String(), nil
 }
 
+// MetaIDTxHash computes the MVC ledger txid (the identity pin ids build on;
+// wire-hash for version<10 txs, the reordered hash for version>=10).
+func MetaIDTxHash(tx *wire.MsgTx) (string, error) {
+	return mvcMetaIDTxHash(tx)
+}
+
+// BlockTxWireHashes returns the block's transaction wire hashes in chain
+// order via the JSON block fetch — no script-size parsing limits (a
+// MsgBlock decode fails on blocks containing >4MB-script txs).
+func (c *Chain) BlockTxWireHashes(height int64) ([]string, error) {
+	hash, err := c.client.GetBlockHash(height)
+	if err != nil {
+		return nil, fmt.Errorf("get block hash %d: %w", height, err)
+	}
+	verbose, err := c.client.GetBlockVerbose(hash)
+	if err != nil {
+		return nil, fmt.Errorf("get block verbose %s: %w", hash, err)
+	}
+	return verbose.Tx, nil
+}
+
+// RawTx fetches and decodes one transaction. Oversized-script txs fail the
+// wire decode — callers skip them.
+func (c *Chain) RawTx(txid string) (*wire.MsgTx, error) {
+	hash, err := chainhash.NewHashFromStr(txid)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := c.client.GetRawTransaction(hash)
+	if err != nil {
+		return nil, err
+	}
+	return tx.MsgTx(), nil
+}
+
 // MempoolTxIDs implements chain.MempoolTxIDLister: the ledger txid
 // (mvcMetaIDTxHash — the identity pin ids build on) of every transaction in
 // the list, falling back to the wire hash when the ledger derivation fails.

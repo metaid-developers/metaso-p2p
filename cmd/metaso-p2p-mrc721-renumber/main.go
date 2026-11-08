@@ -71,7 +71,7 @@ func run() error {
 		if err := chain.Init(); err != nil {
 			log.Printf("WARNING: mvc rpc unavailable (%v); missing tx indexes stay approximate", err)
 		} else {
-			hydration = newTxIndexHydrator(mvc.NewIndexer(chain, mvc.NetParams("")))
+			hydration = newTxIndexHydrator(chain)
 		}
 	}
 
@@ -261,48 +261,61 @@ func pinOutputIndex(pinId string) int64 {
 }
 
 // txIndexHydrator fills Item.TxIndex for items minted before the field was
-// recorded, from the block's parsed pins (one CatchPins call per height,
-// cached). Pin ids are ledger-hash based, exactly what CatchPins produces.
+// recorded. It reads the block's transaction order from the JSON block
+// fetch (wire hashes in chain order — no script-size parsing limits) and
+// maps each item pin id's LEDGER txid prefix onto its tx position: the
+// ledger hash is recomputed per raw tx with mvc.MetaIDTxHash, since the
+// wire and ledger hashes diverge on MVC version>=10 txs.
 type txIndexHydrator struct {
-	indexer *mvc.Indexer
-	cache   map[int64]map[string]int64 // height → pinId → txIndex
+	chain *mvc.Chain
+	cache map[int64]map[string]int64 // height → ledgerTxid → txIndex
 }
 
-func newTxIndexHydrator(indexer *mvc.Indexer) *txIndexHydrator {
-	return &txIndexHydrator{indexer: indexer, cache: make(map[int64]map[string]int64)}
+func newTxIndexHydrator(chain *mvc.Chain) *txIndexHydrator {
+	return &txIndexHydrator{chain: chain, cache: make(map[int64]map[string]int64)}
 }
 
 func (h *txIndexHydrator) fill(items []*albumItem) error {
 	for _, ai := range items {
-		if ai.item.TxIndex != 0 || ai.item.GenesisHeight <= 0 {
+		if ai.item.TxIndex != 0 || ai.item.GenesisHeight <= 0 || len(ai.item.ItemPinId) < 64 {
 			continue
 		}
-		byPinId, err := h.blockPinIndexes(ai.item.GenesisHeight)
+		byLedger, err := h.blockLedgerIndexes(ai.item.GenesisHeight)
 		if err != nil {
 			log.Printf("WARNING: hydrate tx index for %s from block %d: %v", ai.item.ItemPinId, ai.item.GenesisHeight, err)
 			continue
 		}
-		if txIndex, ok := byPinId[ai.item.ItemPinId]; ok {
+		if txIndex, ok := byLedger[ai.item.ItemPinId[:64]]; ok {
 			ai.item.TxIndex = txIndex
+		} else {
+			log.Printf("WARNING: tx %s not resolved in block %d (likely an oversized-script tx); item %s keeps the pin-output-index fallback", ai.item.ItemPinId[:64], ai.item.GenesisHeight, ai.item.ItemPinId)
 		}
 	}
 	return nil
 }
 
-func (h *txIndexHydrator) blockPinIndexes(height int64) (map[string]int64, error) {
-	if byPinId, ok := h.cache[height]; ok {
-		return byPinId, nil
+func (h *txIndexHydrator) blockLedgerIndexes(height int64) (map[string]int64, error) {
+	if byLedger, ok := h.cache[height]; ok {
+		return byLedger, nil
 	}
-	pins, _, err := h.indexer.CatchPins(height)
+	wireHashes, err := h.chain.BlockTxWireHashes(height)
 	if err != nil {
 		return nil, err
 	}
-	byPinId := make(map[string]int64, len(pins))
-	for _, pin := range pins {
-		if pin != nil {
-			byPinId[pin.Id] = pin.TxIndex
+	byLedger := make(map[string]int64, len(wireHashes))
+	for i, wire := range wireHashes {
+		tx, err := h.chain.RawTx(wire)
+		if err != nil {
+			log.Printf("WARNING: block %d tx %d (%s): raw tx fetch failed: %v", height, i, wire, err)
+			continue
 		}
+		ledger, err := mvc.MetaIDTxHash(tx)
+		if err != nil {
+			log.Printf("WARNING: block %d tx %d (%s): ledger hash failed: %v", height, i, wire, err)
+			continue
+		}
+		byLedger[ledger] = int64(i)
 	}
-	h.cache[height] = byPinId
-	return byPinId, nil
+	h.cache[height] = byLedger
+	return byLedger, nil
 }
