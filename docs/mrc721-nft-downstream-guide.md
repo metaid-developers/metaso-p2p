@@ -166,7 +166,40 @@ disappear with a new `item/transfers` row once the block confirms.
 (MVC was in a quiet period at release time, so this channel is live but not
 yet exercised by a real transfer.)
 
-## 7. Rollback
+## 7. Zero-confirmation reads (R-F, live since 2026-11-09)
+
+Every MRC-721 read surface now serves mempool facts immediately (issuance
+AND trading): a fresh mint, the album registration, an item_desc batch, a
+transfer, an atomic-swap settlement, a sell/offer declaration — all become
+visible within one mempool poll (~10s) instead of one block. Spec:
+[`docs/specs/2026-11-09-mrc721-zero-conf-api.md`](specs/2026-11-09-mrc721-zero-conf-api.md).
+
+What IDBots should read (all fields additive; absent = fully confirmed):
+
+- `confirmed:false` → show the pending badge on cards (row produced or
+  changed by a mempool pin/spend; `firstSeenAt` carries first arrival).
+- `numberFinal:false` → the provisional `number` may still reorder
+  (parallel-funded mints); parent→child mint chains are `true` immediately.
+- `ownershipConfirmed:false` → the item's owner/output reflect an
+  unconfirmed spend; `confirmedOwnerAddress` is the last confirmed owner.
+  Treat the item as in-flight, not spendable-by-the-buyer-yet on OTHER
+  indexers' terms — this service's `output` IS the overlay spend target, so
+  chained unconfirmed transfers/resales work against it at any depth.
+- `mintedCount` (collection) → confirmed + staged + overlay mints; this is
+  the mint supply precheck surface (`confirmedMintedCount` is the
+  confirmed-only count).
+- `descConfirmed:false` → a display field was filled by an unconfirmed
+  item_desc.
+- Sell intents / offers carry the same `confirmed` flag; a mempool
+  cancellation hides the intent from `active=true` lists immediately and
+  evicting that cancellation restores it — safe to offer re-declares.
+- `overSupply:true` rows appear only with `includeOverSupply=1` (they sit
+  past `totalSupply`; the chain's final order is expected to agree).
+
+Strict confirmed-only audits/accounting: append `confirmedOnly=1` to ANY
+endpoint — the response is byte-identical to the pre-R-F service.
+
+## 8. Rollback
 
 Point the base back at `https://manapi.metaid.io` — man-p2p keeps serving
 its own copy of the aggregate. Caveats: metaid fields revert to legacy
@@ -175,10 +208,11 @@ unique-name semantics — for albums with third-party pins under the album
 path the two bases legitimately disagree on the item sets (§4). Do not mix
 identities or item sets across the two bases.
 
-## 8. References
+## 9. References
 
 - Spec: [`docs/specs/2026-11-05-mrc721-nft-api.md`](specs/2026-11-05-mrc721-nft-api.md)
 - Deployment/ops: [`docs/mrc721-index-deployment.md`](mrc721-index-deployment.md)
 - Sell-intent spec (already live on MetaSo): [`docs/specs/2026-11-04-mrc721-sell-collection-api.md`](specs/2026-11-04-mrc721-sell-collection-api.md)
 - Protocol revision (2026-11-07): [`docs/mrc721-protocol-revision-issuer-only.md`](mrc721-protocol-revision-issuer-only.md)
+- Zero-conf spec (2026-11-09): [`docs/specs/2026-11-09-mrc721-zero-conf-api.md`](specs/2026-11-09-mrc721-zero-conf-api.md)
 - IDBots requirement input: man-p2p `docs/IDBOTS_MRC721_REQUIREMENTS.md`
