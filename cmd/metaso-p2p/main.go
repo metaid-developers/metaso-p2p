@@ -242,6 +242,9 @@ func main() {
 		// aggregator behind METASO_P2P_MRC721_OFFER_ENABLED (default off).
 		mrc721Candidate := &mrc721.Aggregator{}
 		mrc721Candidate.SetOfferEnabled(cfg.Mrc721.Offer.Enabled)
+		// Zero-conf declaration overlay gate (R-F-4/R-F-6): mempool sell and
+		// offer pins take effect in the merged views when on.
+		mrc721Candidate.SetZeroConfTrade(cfg.Mrc721.ZeroConfTrade)
 		if err := aggRegistry.Register(mrc721Candidate); err != nil {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {

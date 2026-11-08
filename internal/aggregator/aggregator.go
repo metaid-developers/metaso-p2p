@@ -40,8 +40,8 @@ type PinInscription struct {
 	// WireHash is the raw transaction hash (tx.TxHash) — for MVC version>=10
 	// txs it differs from the ledger hash in GenesisTransaction, and overlay
 	// ancestry resolution matches Inputs' wire hashes against it.
-	WireHash  string `json:"wireHash,omitempty"`
-	Timestamp int64  `json:"timestamp"`
+	WireHash     string `json:"wireHash,omitempty"`
+	Timestamp    int64  `json:"timestamp"`
 	Output       string `json:"output"`
 	OutputValue  int64  `json:"outputValue,omitempty"`
 	IsTransfered bool   `json:"isTransfered"`
@@ -118,21 +118,24 @@ type TransferConsumer interface {
 	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
 }
 
-// MempoolOverlayConsumer is an optional TransferConsumer extension for
-// zero-confirmation read surfaces (R-F): the engine feeds incremental
-// mempool rounds' spend notices on every poll (no reconcile — a partial
-// observation must never evict overlay state), and hands each full round's
-// observed txid set to the overlay so entries whose transaction left the
-// mempool without confirming are dropped (recomputed, never mutated — a
-// dropped tx's effects vanish, revealing the confirmed state beneath).
-type MempoolOverlayConsumer interface {
+// MempoolSpendIncrementalConsumer is an optional TransferConsumer extension
+// for zero-confirmation ownership surfaces (R-F-3/R-F-7): the engine feeds
+// the incremental mempool rounds' spend notices on every poll (no reconcile
+// — a partial observation must never evict overlay state).
+type MempoolSpendIncrementalConsumer interface {
 	// HandleMempoolSpendsIncremental consumes the spends detected in one
 	// incremental mempool poll over the freshly fetched transactions.
 	HandleMempoolSpendsIncremental(chainName string, spends map[string]TransferNotice)
+}
 
-	// ReconcileMempoolRound consumes one fully observed mempool round's
-	// txid set (ledger convention). Overlay entries whose txid is absent
-	// are evicted; consumers only ever receive sets from complete fetches.
+// MempoolOverlayReconciler is an optional Aggregator extension for
+// zero-confirmation read surfaces (R-F-1/R-F-4): each full mempool round
+// hands the observed txid set (ledger convention) to the overlay, so
+// entries whose transaction left the mempool without confirming are
+// dropped (recomputed, never mutated — a dropped tx's effects vanish,
+// revealing the confirmed state beneath). Consumers only ever receive sets
+// from complete fetches; a failed fetch reconciles nothing.
+type MempoolOverlayReconciler interface {
 	ReconcileMempoolRound(chainName string, observedTxIDs []string)
 }
 
@@ -230,4 +233,16 @@ func (r *Registry) TransferConsumers() []TransferConsumer {
 		}
 	}
 	return consumers
+}
+
+// OverlayReconcilers returns the registered aggregators that implement the
+// optional MempoolOverlayReconciler extension (zero-conf overlay eviction).
+func (r *Registry) OverlayReconcilers() []MempoolOverlayReconciler {
+	var reconcilers []MempoolOverlayReconciler
+	for _, a := range r.aggregators {
+		if rec, ok := a.(MempoolOverlayReconciler); ok {
+			reconcilers = append(reconcilers, rec)
+		}
+	}
+	return reconcilers
 }

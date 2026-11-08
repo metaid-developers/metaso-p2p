@@ -327,19 +327,16 @@ func (e *Engine) mempoolTransferLoop(ctx context.Context) {
 }
 
 // processMempoolTransfers runs one full-mempool spend-scan round for every
-// chain with a MempoolTransferDetector. A failed mempool fetch skips the
-// chain entirely — reconcile must never run on a round whose tx list was
-// not fully observed (it would evict live pendings).
+// chain with a MempoolTransferDetector, and hands every fully observed
+// round's txid set to the MempoolOverlayReconciler aggregators (zero-conf
+// overlay eviction — R-F-1/R-F-4). A failed mempool fetch skips the chain
+// entirely — reconcile must never run on a round whose tx list was not
+// fully observed (it would evict live pendings and overlay entries).
 func (e *Engine) processMempoolTransfers() {
 	consumers := e.registry.TransferConsumers()
-	if len(consumers) == 0 {
+	reconcilers := e.registry.OverlayReconcilers()
+	if len(consumers) == 0 && len(reconcilers) == 0 {
 		return
-	}
-	var overlayConsumers []aggregator.MempoolOverlayConsumer
-	for _, consumer := range consumers {
-		if oc, ok := consumer.(aggregator.MempoolOverlayConsumer); ok {
-			overlayConsumers = append(overlayConsumers, oc)
-		}
 	}
 	e.mu.RLock()
 	entries := make([]*chainEntry, 0, len(e.chains))
@@ -349,10 +346,7 @@ func (e *Engine) processMempoolTransfers() {
 	e.mu.RUnlock()
 
 	for _, entry := range entries {
-		detector, ok := entry.indexer.(chain.MempoolTransferDetector)
-		if !ok {
-			continue
-		}
+		detector, hasDetector := entry.indexer.(chain.MempoolTransferDetector)
 		idMap := make(map[string]string)
 		for _, consumer := range consumers {
 			for outpoint, tracked := range consumer.TrackedOutputs() {
@@ -366,24 +360,26 @@ func (e *Engine) processMempoolTransfers() {
 			log.Printf("[indexer] %s mempool transfer scan: fetch error: %v", entry.chain.Name(), err)
 			continue
 		}
-		notices, err := detector.DetectMempoolSpends(idMap, txList)
-		if err != nil {
-			log.Printf("[indexer] %s mempool transfer scan: detect error: %v", entry.chain.Name(), err)
-			continue
-		}
 		chainName := entry.chain.Name()
-		for _, consumer := range consumers {
-			consumer.HandleMempoolSpends(chainName, notices)
+		if hasDetector && len(consumers) > 0 {
+			notices, err := detector.DetectMempoolSpends(idMap, txList)
+			if err != nil {
+				log.Printf("[indexer] %s mempool transfer scan: detect error: %v", chainName, err)
+			} else {
+				for _, consumer := range consumers {
+					consumer.HandleMempoolSpends(chainName, notices)
+				}
+			}
 		}
-		if len(overlayConsumers) > 0 {
+		if len(reconcilers) > 0 {
 			// Complete round: hand the observed txid set (ledger convention)
-			// to the overlay consumers for eviction reconcile.
+			// to the overlay reconcilers for eviction.
 			var txIDs []string
 			if lister, ok := entry.chain.(chain.MempoolTxIDLister); ok {
 				txIDs = lister.MempoolTxIDs(txList)
 			}
-			for _, consumer := range overlayConsumers {
-				consumer.ReconcileMempoolRound(chainName, txIDs)
+			for _, reconciler := range reconcilers {
+				reconciler.ReconcileMempoolRound(chainName, txIDs)
 			}
 		}
 	}
@@ -475,7 +471,7 @@ func (e *Engine) detectIncrementalMempoolSpends(entry *chainEntry, txList []any)
 			notified[outpoint] = struct{}{}
 		}
 		for _, consumer := range consumers {
-			if oc, ok := consumer.(aggregator.MempoolOverlayConsumer); ok {
+			if oc, ok := consumer.(aggregator.MempoolSpendIncrementalConsumer); ok {
 				oc.HandleMempoolSpendsIncremental(chainName, fresh)
 			}
 		}

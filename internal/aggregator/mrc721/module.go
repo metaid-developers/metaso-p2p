@@ -91,6 +91,12 @@ type SellIntentRecord struct {
 	UpdatedAt int64  `json:"updatedAt,omitempty"` // chain time, unix seconds
 
 	Seq uint64 `json:"seq"`
+
+	// Zero-conf projection markers (R-F-4): set on overlay-synthesized
+	// records only, never persisted (the confirmed records keep their
+	// stored JSON bytes unchanged).
+	Overlay            bool  `json:"-"`
+	OverlayFirstSeenAt int64 `json:"-"`
 }
 
 // Aggregator is the mrc721 business-index module. It never produces socket
@@ -116,6 +122,12 @@ type Aggregator struct {
 	// (ingest + routes); set at startup from METASO_P2P_MRC721_OFFER_ENABLED
 	// before Register, default off.
 	offerIndexEnabled bool
+
+	// Zero-confirmation declaration overlay state (R-F-4): in-memory only,
+	// guarded by a.mu, rebuilt from the node mempool after a restart.
+	zeroConfTrade bool
+	overlayDecls  map[string]*overlayDeclEntry // pinId → entry
+	overlayTxids  map[string]int64             // live overlay txid → firstSeenAt
 }
 
 // NativeCollectionSource abstracts the native mrc721nft collection read
@@ -165,6 +177,8 @@ func (a *Aggregator) Name() string { return Namespace }
 func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.CacheProvider) error {
 	a.store = store
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 16)
+	a.overlayDecls = make(map[string]*overlayDeclEntry)
+	a.overlayTxids = make(map[string]int64)
 	return nil
 }
 
@@ -185,16 +199,27 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	if _, err := a.ingestOfferPin(pin); err != nil {
 		return nil, err
 	}
+	if pin != nil {
+		a.dropOverlayForTxLocked(txIdOfPinId(pin.Id))
+	}
 	return nil, nil
 }
 
-// HandleMempoolPin is a deliberate no-op. The sell and offer protocols are
-// append-only declaration logs whose semantics are "latest pin by chain
-// order wins"; folding unconfirmed pins into a latest-wins record would let
-// a mempool re-declare overwrite a confirmed cancellation with no recovery
-// path. Confirmed ingestion keeps the indexes honest; latency is one
-// confirmation.
+// HandleBlockPin folds a confirmed pin into the sell-intent index and, when
+// the offer gate is on, the passive-offer index — then drops the pin's
+// declaration overlay entries (R-F-4 confirmation handoff, same critical
+// section: no read observes a gap and a dropped re-declaration's effects
+// never survive its own confirmation).
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	// Zero-conf declaration overlay (R-F-4): with the trade gate on,
+	// mempool sell/offer pins take effect in the merged views immediately;
+	// the confirmed latest-wins records stay untouched until the block.
+	// The overlay is recomputed, so a mempool re-declare can no longer
+	// "overwrite a confirmed cancellation with no recovery path" — evicting
+	// the re-declaration restores the confirmed record.
+	a.mu.Lock()
+	a.recordMempoolDeclarationLocked(pin)
+	a.mu.Unlock()
 	return nil, nil
 }
 

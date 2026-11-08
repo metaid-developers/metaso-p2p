@@ -105,13 +105,18 @@ type sellIntentRow struct {
 	Height    int64  `json:"height,omitempty"`
 	TxId      string `json:"txId,omitempty"`
 	Txid      string `json:"txid,omitempty"`
+
+	// Zero-conf fields (R-F-5): present only on overlay-synthesized rows —
+	// the pointer nils out on confirmed rows so their bytes stay unchanged.
+	Confirmed   *bool `json:"confirmed,omitempty"`
+	FirstSeenAt int64 `json:"firstSeenAt,omitempty"`
 }
 
 func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 	if rec == nil {
 		return nil
 	}
-	return &sellIntentRow{
+	row := &sellIntentRow{
 		ItemPinId:          rec.ItemPinId,
 		Itempinid:          rec.ItemPinId,
 		SellPinId:          rec.SellPinId,
@@ -144,6 +149,12 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		TxId:               rec.TxID,
 		Txid:               rec.TxID,
 	}
+	if rec.Overlay {
+		confirmed := false
+		row.Confirmed = &confirmed
+		row.FirstSeenAt = rec.OverlayFirstSeenAt
+	}
+	return row
 }
 
 type sellIntentListData struct {
