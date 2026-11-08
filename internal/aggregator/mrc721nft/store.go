@@ -93,12 +93,17 @@ type Item struct {
 	ContentSummary   string `json:"contentSummary"`
 	GenesisChainName string `json:"genesisChainName"`
 	GenesisHeight    int64  `json:"genesisHeight"`
-	GenesisTx        string `json:"genesisTx"`
-	GenesisFee       int64  `json:"genesisFee"`
-	Output           string `json:"output"`
-	OutputValue      int64  `json:"outputValue"`
-	CreateTime       int64  `json:"createTime"`
-	TransferCount    int64  `json:"transferCount"`
+	// TxIndex is the mint tx's position within its block — the chain-order
+	// fact the renumber migration (R-F-10) re-derives album numbering from;
+	// items minted before the field existed carry 0 and the migration falls
+	// back to the block refetch.
+	TxIndex       int64  `json:"txIndex,omitempty"`
+	GenesisTx     string `json:"genesisTx"`
+	GenesisFee    int64  `json:"genesisFee"`
+	Output        string `json:"output"`
+	OutputValue   int64  `json:"outputValue"`
+	CreateTime    int64  `json:"createTime"`
+	TransferCount int64  `json:"transferCount"`
 }
 
 // ItemTransfer is one confirmed ownership change of an item. JSON tags
@@ -164,6 +169,11 @@ type PendingEntry struct {
 }
 
 // PendingMint carries everything needed to rebuild an item on drain.
+// TxIndex/OutputIndex record the pin's chain position (block tx index, pin
+// output index) so drainPending can commit staged mints in true chain order
+// (R-F-10) instead of Pebble's lexicographic pinId key order; entries staged
+// before this field existed sort with TxIndex/OutputIndex 0 and fall back to
+// the pinId-derived output index.
 type PendingMint struct {
 	ItemPinId        string `json:"itemPinId"`
 	OwnerAddress     string `json:"ownerAddress"`
@@ -172,6 +182,8 @@ type PendingMint struct {
 	ContentSummary   string `json:"contentSummary"`
 	GenesisChainName string `json:"genesisChainName"`
 	GenesisHeight    int64  `json:"genesisHeight"`
+	TxIndex          int64  `json:"txIndex,omitempty"`
+	OutputIndex      int64  `json:"outputIndex,omitempty"`
 	GenesisTx        string `json:"genesisTx"`
 	GenesisFee       int64  `json:"genesisFee"`
 	Output           string `json:"output"`

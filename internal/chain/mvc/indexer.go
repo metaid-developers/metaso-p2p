@@ -127,6 +127,7 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			pin.ChainName = "mvc"
 			pin.GenesisTransaction = pinHash
 			pin.GenesisHeight = height
+			pin.TxIndex = int64(txIndex)
 			pin.Timestamp = timestamp
 			pin.Address = address
 			pin.CreateAddress = address
@@ -481,6 +482,7 @@ func parseMetaIDWitness(tx *wire.MsgTx, outIdx int, height int64, timestamp int6
 		ChainName:          "mvc",
 		GenesisTransaction: txHash,
 		GenesisHeight:      height,
+		TxIndex:            int64(txIndex),
 		Timestamp:          timestamp,
 		Address:            creatorAddr,
 		CreateAddress:      creatorAddr,

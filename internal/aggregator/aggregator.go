@@ -27,7 +27,12 @@ type PinInscription struct {
 	ChainName          string `json:"chainName"`
 	GenesisTransaction string `json:"genesisTransaction"`
 	GenesisHeight      int64  `json:"genesisHeight"`
-	Timestamp          int64  `json:"timestamp"`
+	// TxIndex is the transaction's position within its block (0 = coinbase),
+	// carried so out-of-order staging can replay mints in true chain order
+	// (R-F-10). Mempool pins carry a fetch-order index that has no chain
+	// meaning; their GenesisHeight is -1 and they never stage.
+	TxIndex   int64 `json:"txIndex,omitempty"`
+	Timestamp int64 `json:"timestamp"`
 	Output             string `json:"output"`
 	OutputValue        int64  `json:"outputValue,omitempty"`
 	IsTransfered       bool   `json:"isTransfered"`

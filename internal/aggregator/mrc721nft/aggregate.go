@@ -461,6 +461,8 @@ func (a *Aggregator) mintHandle(collectionName string, pin *aggregator.PinInscri
 		ContentSummary:   pinListSummary(pin.ContentBody),
 		GenesisChainName: nftChainName(pin),
 		GenesisHeight:    pin.GenesisHeight,
+		TxIndex:          pin.TxIndex,
+		OutputIndex:      pinOutputIndex(pin.Id),
 		GenesisTx:        pin.GenesisTransaction,
 		// MetaSo's PinInscription carries no genesis fee; the field exists in
 		// the record shape for manapi parity and is never served.
@@ -515,6 +517,7 @@ func (a *Aggregator) mintCommit(collectionName string, col *Collection, mint *Pe
 		ContentSummary:   mint.ContentSummary,
 		GenesisChainName: mint.GenesisChainName,
 		GenesisHeight:    mint.GenesisHeight,
+		TxIndex:          mint.TxIndex,
 		GenesisTx:        mint.GenesisTx,
 		GenesisFee:       mint.GenesisFee,
 		Output:           mint.Output,
@@ -617,6 +620,10 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 
 // drainPending replays an issuer's staged pins after their album registers:
 // mints commit first, descs backfill next, colmods apply last in time order.
+// The staged mints sort into true chain order (height, block tx index, pin
+// output index — R-F-10) before committing, so both the numbering and the
+// supply cut follow creation order instead of Pebble's lexicographic pinId
+// key order; the zero-conf overlay numbering (R-F-2.3) reuses the same rule.
 func (a *Aggregator) drainPending(collectionName, issuerAddress string) {
 	col, err := a.db.GetCollection(collectionName, issuerAddress)
 	if err != nil || col == nil {
@@ -631,15 +638,22 @@ func (a *Aggregator) drainPending(collectionName, issuerAddress string) {
 		return
 	}
 	var colMods []*PendingEntry
+	var mints []*PendingEntry
 	for _, entry := range entries {
 		switch {
 		case entry.Kind == "mint" && entry.Mint != nil:
-			a.mintCommit(collectionName, col, entry.Mint)
+			mints = append(mints, entry)
 		case entry.Kind == "desc":
 			a.drainOneDesc(collectionName, issuerAddress, entry)
 		case entry.Kind == "colmod" && entry.ColMod != nil:
 			colMods = append(colMods, entry)
 		}
+	}
+	sort.Slice(mints, func(i, j int) bool {
+		return stagedMintChainBefore(mints[i].Mint, mints[j].Mint)
+	})
+	for _, entry := range mints {
+		a.mintCommit(collectionName, col, entry.Mint)
 	}
 	// colmods replay in (timestamp, pinId) order; the last one wins.
 	sort.Slice(colMods, func(i, j int) bool {
@@ -657,6 +671,46 @@ func (a *Aggregator) drainPending(collectionName, issuerAddress string) {
 		}
 		a.collectionModifyCommit(collectionName, col, m.ModifyPinId, m.ModifyAddress, []byte(m.Content))
 	}
+}
+
+// stagedMintChainBefore orders two staged mints the way the chain committed
+// them: block height first, then the transaction index within the block,
+// then the pin output index (R-F-10). Entries staged before the chain
+// position was carried carry 0 for both new fields; the output index then
+// falls back to the pinId suffix, and a still-undecidable pair falls back to
+// the pin id so the order stays deterministic.
+func stagedMintChainBefore(x, y *PendingMint) bool {
+	if x.GenesisHeight != y.GenesisHeight {
+		return x.GenesisHeight < y.GenesisHeight
+	}
+	if x.TxIndex != y.TxIndex {
+		return x.TxIndex < y.TxIndex
+	}
+	xOut, yOut := x.OutputIndex, y.OutputIndex
+	if xOut == 0 {
+		xOut = pinOutputIndex(x.ItemPinId)
+	}
+	if yOut == 0 {
+		yOut = pinOutputIndex(y.ItemPinId)
+	}
+	if xOut != yOut {
+		return xOut < yOut
+	}
+	return x.ItemPinId < y.ItemPinId
+}
+
+// pinOutputIndex extracts the output index from a "<ledgerTxid>i<vout>" pin
+// id (the trailing digit run); unknown shapes yield 0.
+func pinOutputIndex(pinId string) int64 {
+	idx := strings.LastIndex(pinId, "i")
+	if idx < 0 || idx == len(pinId)-1 {
+		return 0
+	}
+	v, err := strconv.ParseInt(pinId[idx+1:], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // drainPendingDescs replays an issuer's staged descs once new items of their
