@@ -1,6 +1,7 @@
 package mvc
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -289,5 +290,173 @@ func TestDetectMempoolSpends(t *testing.T) {
 	notices, err = idx.DetectMempoolSpends(nil, []any{spendTx})
 	if err != nil || len(notices) != 0 {
 		t.Fatalf("empty idMap must yield empty notices: %+v %v", notices, err)
+	}
+}
+
+// ---------- R-E-3: the passive-offer settlement delivery layout ----------
+
+// offerSettlementTx builds the R-E-3 layout: the item UTXO (546 sats) at
+// input0, the signed price payment at output0, the delivery output (546
+// sats) at output1, optionally followed by buyer change.
+func offerSettlementTx(t *testing.T, itemValue, priceSats, deliveryValue int64, withChange bool) (*wire.MsgTx, wire.OutPoint, []byte, []byte) {
+	t.Helper()
+	params := NetParams("")
+	scriptSeller := p2pkhScript(t, params, 0x21)
+	scriptBuyer := p2pkhScript(t, params, 0x22)
+
+	item := outpoint(0xda, 0)
+	funding := outpoint(0xdb, 1)
+	outputValues := []int64{priceSats, deliveryValue}
+	outputScripts := [][]byte{scriptSeller, scriptBuyer}
+	if withChange {
+		outputValues = append(outputValues, 12345)
+		outputScripts = append(outputScripts, p2pkhScript(t, params, 0x23))
+	}
+	return buildTx([]wire.OutPoint{item, funding}, outputValues, outputScripts), item, scriptSeller, scriptBuyer
+}
+
+func offerSettlementValues(item wire.OutPoint) func(txid string, vout int) (int64, error) {
+	return func(txid string, vout int) (int64, error) {
+		if txid == item.Hash.String() && vout == 0 {
+			return 546, nil
+		}
+		return 100000, nil // buyer funding
+	}
+}
+
+func TestDetectTransfersOfferSettlementLayout(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// The exact settlement layout: input0 = item (546), output0 = price
+	// (30000 → seller), output1 = delivery (546 → buyer).
+	tx, item, _, scriptBuyer := offerSettlementTx(t, 546, 30000, 546, false)
+	idx.block = &wire.MsgBlock{Transactions: []*wire.MsgTx{tx}}
+	idx.valueOfSpent = offerSettlementValues(item)
+
+	spent := item.Hash.String() + ":0"
+	notices, err := idx.DetectTransfers(map[string]string{spent: "mvc1qowner"})
+	if err != nil {
+		t.Fatalf("DetectTransfers: %v", err)
+	}
+	notice, ok := notices[spent]
+	if !ok {
+		t.Fatalf("settlement spend not detected: %+v", notices)
+	}
+	ledger := mustLedgerTxid(t, tx)
+	if notice.Output != ledger+":1" {
+		t.Fatalf("delivery must be read from output1: %+v", notice)
+	}
+	if notice.Location != ledger+":1:0" {
+		t.Fatalf("delivery location wrong: %+v", notice)
+	}
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(scriptBuyer, idx.chainParams)
+	if notice.ToAddress != addresses[0].String() {
+		t.Fatalf("new owner must be the buyer: %+v", notice)
+	}
+	if notice.OutputValue != 546 || notice.FromAddress != "mvc1qowner" || notice.Meltdown {
+		t.Fatalf("notice fields wrong: %+v", notice)
+	}
+}
+
+func TestDetectTransfersOfferSettlementWithChange(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// Buyer change outputs after the delivery output must not disturb the
+	// rule: delivery stays output1.
+	tx, item, _, scriptBuyer := offerSettlementTx(t, 546, 30000, 546, true)
+	idx.block = &wire.MsgBlock{Transactions: []*wire.MsgTx{tx}}
+	idx.valueOfSpent = offerSettlementValues(item)
+
+	spent := item.Hash.String() + ":0"
+	notices, _ := idx.DetectTransfers(map[string]string{spent: "mvc1qowner"})
+	notice, ok := notices[spent]
+	if !ok || notice.Output != mustLedgerTxid(t, tx)+":1" {
+		t.Fatalf("delivery must stay output1 with change outputs: %+v", notice)
+	}
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(scriptBuyer, idx.chainParams)
+	if notice.ToAddress != addresses[0].String() {
+		t.Fatalf("new owner must be the buyer: %+v", notice)
+	}
+}
+
+func TestDetectTransfersOfferAmbiguousShapeKeepsLegacy(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// output1 does NOT carry the item value: the shape is not an offer
+	// settlement — the legacy output-0 read applies.
+	tx, item, scriptSeller, _ := offerSettlementTx(t, 546, 30000, 600, false)
+	idx.block = &wire.MsgBlock{Transactions: []*wire.MsgTx{tx}}
+	idx.valueOfSpent = offerSettlementValues(item)
+
+	spent := item.Hash.String() + ":0"
+	notices, _ := idx.DetectTransfers(map[string]string{spent: "mvc1qowner"})
+	notice, ok := notices[spent]
+	if !ok || notice.Output != mustLedgerTxid(t, tx)+":0" {
+		t.Fatalf("ambiguous shape must keep the legacy output0 read: %+v", notice)
+	}
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(scriptSeller, idx.chainParams)
+	if notice.ToAddress != addresses[0].String() {
+		t.Fatalf("legacy read must resolve output0: %+v", notice)
+	}
+}
+
+func TestDetectTransfersOfferValueLookupFailureKeepsLegacy(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// Spent-value lookup failure: fall back to the legacy read (no
+	// behaviour change on RPC hiccups).
+	tx, item, _, _ := offerSettlementTx(t, 546, 30000, 546, false)
+	idx.block = &wire.MsgBlock{Transactions: []*wire.MsgTx{tx}}
+	idx.valueOfSpent = func(txid string, vout int) (int64, error) {
+		return 0, errors.New("rpc down")
+	}
+
+	spent := item.Hash.String() + ":0"
+	notices, _ := idx.DetectTransfers(map[string]string{spent: "mvc1qowner"})
+	notice, ok := notices[spent]
+	if !ok || notice.Output != mustLedgerTxid(t, tx)+":0" {
+		t.Fatalf("lookup failure must keep the legacy output0 read: %+v", notice)
+	}
+}
+
+func TestDetectTransfersPlainTransferStaysOutputZero(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// Plain transfer with the item value at output0: no diversion even with
+	// a successful value lookup (output0 IS the delivery output).
+	item := outpoint(0xdc, 0)
+	funding := outpoint(0xdd, 1)
+	scriptBuyer := p2pkhScript(t, idx.chainParams, 0x22)
+	tx := buildTx([]wire.OutPoint{item, funding}, []int64{546, 100000}, [][]byte{scriptBuyer, scriptBuyer})
+	idx.block = &wire.MsgBlock{Transactions: []*wire.MsgTx{tx}}
+	idx.valueOfSpent = offerSettlementValues(item)
+
+	spent := item.Hash.String() + ":0"
+	notices, _ := idx.DetectTransfers(map[string]string{spent: "mvc1qowner"})
+	notice, ok := notices[spent]
+	if !ok || notice.Output != mustLedgerTxid(t, tx)+":0" {
+		t.Fatalf("plain transfer must stay on output0: %+v", notice)
+	}
+}
+
+func TestDetectMempoolSpendsOfferSettlementLayout(t *testing.T) {
+	idx := newTransferTestIndexer(t)
+
+	// The same rule drives the advisory mempool pendings.
+	tx, item, _, scriptBuyer := offerSettlementTx(t, 546, 30000, 546, false)
+	idx.valueOfSpent = offerSettlementValues(item)
+
+	spent := item.Hash.String() + ":0"
+	notices, err := idx.DetectMempoolSpends(map[string]string{spent: "mvc1qowner"}, []any{tx})
+	if err != nil {
+		t.Fatalf("DetectMempoolSpends: %v", err)
+	}
+	notice, ok := notices[spent]
+	if !ok || notice.Output != mustLedgerTxid(t, tx)+":1" {
+		t.Fatalf("mempool settlement must read output1: %+v", notice)
+	}
+	_, addresses, _, _ := txscript.ExtractPkScriptAddrs(scriptBuyer, idx.chainParams)
+	if notice.ToAddress != addresses[0].String() {
+		t.Fatalf("mempool new owner must be the buyer: %+v", notice)
 	}
 }
