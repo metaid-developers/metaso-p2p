@@ -153,7 +153,7 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	}
 
 	sellPinId := strings.TrimSpace(pin.Id)
-	payload, err := parseSellIntentPayload(sellPayloadBytes(pin))
+	payload, err := parseSellIntentPayload(pinPayloadBytes(pin))
 	if err != nil {
 		log.Printf("WARNING: mrc721 sell pin %s skipped: %v", sellPinId, err)
 		return false, nil
@@ -229,9 +229,10 @@ func chainOrderNewer(curHeight, curTime int64, curPinId string, newHeight, newTi
 	return newPinId > curPinId
 }
 
-// sellPayloadBytes prefers the parsed content body and falls back to the
+// pinPayloadBytes prefers the parsed content body and falls back to the
 // content summary (single-line payloads are summarised there verbatim).
-func sellPayloadBytes(pin *aggregator.PinInscription) []byte {
+// Shared by the sell-intent and offer ingest paths.
+func pinPayloadBytes(pin *aggregator.PinInscription) []byte {
 	if pin == nil {
 		return nil
 	}

@@ -52,6 +52,18 @@ type Mrc721Config struct {
 	// disabled until the historical bootstrap has run: the read models are
 	// empty and the collection search keeps its manapi-refreshed source.
 	Nft Mrc721NftConfig `json:"nft"`
+	// Offer enables the /protocols/mrc721offer passive-offer index (R-E,
+	// docs/nft-offer-protocol.md): ingest of the offer declaration log plus
+	// the GET /api/mrc721/offers and GET /api/mrc721/offer/info read
+	// endpoints. Disabled by default until acceptance passes; the protocol
+	// is brand new, so enabling starts the index from the live chain feed
+	// (no historical backfill).
+	Offer Mrc721OfferConfig `json:"offer"`
+}
+
+// Mrc721OfferConfig gates the MRC-721 passive-offer index.
+type Mrc721OfferConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 // Mrc721NftConfig configures the native /nft/mrc721 NFT aggregate.
@@ -450,6 +462,9 @@ func Default() Config {
 				Enabled:       false,
 				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
+			Offer: Mrc721OfferConfig{
+				Enabled: false,
+			},
 		},
 	}
 }
@@ -601,6 +616,8 @@ func Load() (Config, error) {
 
 	applyBoolEnv("METASO_P2P_MRC721_NFT_ENABLED", &cfg.Mrc721.Nft.Enabled)
 	applyStringEnv("METASO_P2P_MRC721_NFT_MANAPI_BASE_URL", &cfg.Mrc721.Nft.MANAPIBaseURL)
+
+	applyBoolEnv("METASO_P2P_MRC721_OFFER_ENABLED", &cfg.Mrc721.Offer.Enabled)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
