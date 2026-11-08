@@ -238,7 +238,10 @@ func main() {
 		// the manapi-refreshed collection read model behind
 		// /api/mrc721/collection/search and /api/mrc721/address/
 		// collections-issued (docs/specs/2026-11-04-mrc721-sell-collection-api.md).
+		// The /protocols/mrc721offer passive-offer index joins the same
+		// aggregator behind METASO_P2P_MRC721_OFFER_ENABLED (default off).
 		mrc721Candidate := &mrc721.Aggregator{}
+		mrc721Candidate.SetOfferEnabled(cfg.Mrc721.Offer.Enabled)
 		if err := aggRegistry.Register(mrc721Candidate); err != nil {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {
@@ -263,6 +266,9 @@ func main() {
 				// offline bootstrap has run — the operator enables the gate.
 				if mrc721Agg != nil {
 					mrc721Agg.SetNativeCollectionSource(nftCandidate)
+					// The native item read model also backs the offer rows'
+					// item → collection join (best-effort).
+					mrc721Agg.SetItemCollectionSource(nftCandidate)
 				}
 			}
 		}

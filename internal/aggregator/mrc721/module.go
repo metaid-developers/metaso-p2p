@@ -9,6 +9,10 @@
 //     manapi-compatible MRC-721 collection page list, serving
 //     GET /api/mrc721/collection/search and
 //     GET /api/mrc721/address/collections-issued.
+//   - R-E passive-offer index (flag-gated): ingests the /protocols/
+//     mrc721offer declaration log (create-only, latest pin per itemPinId
+//     wins, offerTx stored verbatim) from the live chain feed and serves
+//     GET /api/mrc721/offers and GET /api/mrc721/offer/info.
 //
 // man-p2p stays a pure raw-pin indexer; this package consumes pins through
 // the same aggregator / MANAPI-source patterns every other metaso feature
@@ -90,7 +94,7 @@ type SellIntentRecord struct {
 }
 
 // Aggregator is the mrc721 business-index module. It never produces socket
-// notifications: both read models are pure query surfaces.
+// notifications: all read models are pure query surfaces.
 type Aggregator struct {
 	store    *storage.PebbleStore
 	notifyCh chan *aggregator.NotifyEvent
@@ -102,6 +106,16 @@ type Aggregator struct {
 	// enabled (i.e. its store has been bootstrapped); the wire contract is
 	// unchanged either way.
 	nativeSource NativeCollectionSource
+
+	// itemCollectionSrc, when set, is the mrc721nft item read model the
+	// offer rows join through for their item → collection identity
+	// (best-effort; nil keeps the rows collection-free).
+	itemCollectionSrc ItemCollectionSource
+
+	// offerIndexEnabled gates the /protocols/mrc721offer passive-offer index
+	// (ingest + routes); set at startup from METASO_P2P_MRC721_OFFER_ENABLED
+	// before Register, default off.
+	offerIndexEnabled bool
 }
 
 // NativeCollectionSource abstracts the native mrc721nft collection read
@@ -128,6 +142,15 @@ func (a *Aggregator) nativeCollectionSource() NativeCollectionSource {
 	return a.nativeSource
 }
 
+// SetOfferEnabled turns the /protocols/mrc721offer passive-offer index on
+// or off (called from the daemon startup before Register; default off —
+// both the ingest and the routes obey the gate).
+func (a *Aggregator) SetOfferEnabled(enabled bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.offerIndexEnabled = enabled
+}
+
 // nativeCollectionListData is the native-source variant of
 // collectionListData (identical JSON shape; rows come pre-shaped from
 // mrc721nft).
@@ -149,35 +172,48 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 	return a.notifyCh
 }
 
-// HandleBlockPin folds a confirmed pin into the sell-intent index. Pins from
-// other paths are ignored; the registration runs in chain order, which is
-// what the latest-pin-wins rule consumes.
+// HandleBlockPin folds a confirmed pin into the sell-intent index and, when
+// the offer gate is on, the passive-offer index. Pins from other paths are
+// ignored; the registration runs in chain order, which is what the
+// latest-pin-wins rules consume.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, err := a.ingestSellPin(pin); err != nil {
 		return nil, err
 	}
+	if _, err := a.ingestOfferPin(pin); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
-// HandleMempoolPin is a deliberate no-op. The sell protocol is an
-// append-only declaration log whose semantics are "latest pin by chain order
-// wins"; folding unconfirmed pins into the latest-wins record would let a
-// mempool re-declare overwrite a confirmed cancellation with no recovery
-// path. Confirmed ingestion plus the MANAPI replay keep the index honest;
-// latency is one confirmation.
+// HandleMempoolPin is a deliberate no-op. The sell and offer protocols are
+// append-only declaration logs whose semantics are "latest pin by chain
+// order wins"; folding unconfirmed pins into a latest-wins record would let
+// a mempool re-declare overwrite a confirmed cancellation with no recovery
+// path. Confirmed ingestion keeps the indexes honest; latency is one
+// confirmation.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	return nil, nil
 }
 
 // RegisterRoutes mounts the mrc721 query API on the given group (the /api
-// group in the daemon router; /api prefix included by the caller).
+// group in the daemon router; /api prefix included by the caller). The
+// passive-offer routes mount only when the offer gate is on. The gate is
+// written once at startup (SetOfferEnabled before Register) and never
+// mutated afterwards, so direct field reads are safe everywhere — the
+// ingest callers already hold a.mu, and a locked getter here would
+// dead-lock against them.
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/mrc721/sell/intents", a.handleSellIntents)
 	router.GET("/mrc721/sell/intent/info", a.handleSellIntentInfo)
 	router.GET("/mrc721/collection/search", a.handleCollectionSearch)
 	router.GET("/mrc721/address/collections-issued", a.handleAddressCollectionsIssued)
+	if a.offerIndexEnabled {
+		router.GET("/mrc721/offers", a.handleOffers)
+		router.GET("/mrc721/offer/info", a.handleOfferInfo)
+	}
 }
 
 // normalisedPinPath lowercases and strips the version suffix (@pinId) and

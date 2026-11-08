@@ -22,6 +22,7 @@ backfill tools (`cmd/metaso-p2p-mrc721-backfill` for sell history,
 | `METASO_P2P_HTTP_ADDR` | `:8080` | HTTP listen address — the four `/api/mrc721/*` endpoints are served here. |
 | MRC-721 collection sync block (`mrc721Collection` in config.toml / `METASO_P2P_MRC721_COLLECTION_*` envs) | disabled | Enables the collection read model (search + collections-issued). Set `ENABLED=true` and point `MANAPI_BASE_URL` at the production manapi-compatible source (default `https://manapi.metaid.io`). Refresh loop defaults to 10 min. |
 | MRC-721 sell backfill block (`mrc721SellBackfill` / `METASO_P2P_MRC721_SELL_BACKFILL_*` envs) | disabled | Optional daemon-startup backfill of `/protocols/mrc721sell` history from the manapi pin-path source. Live ingestion (block loop) always runs. |
+| `METASO_P2P_MRC721_OFFER_ENABLED` (`mrc721.offer.enabled`) | `false` | Gates the passive-offer index (`/protocols/mrc721offer`): live ingest plus `GET /api/mrc721/offers` and `GET /api/mrc721/offer/info`. Keep off until acceptance passes; no backfill needed (the protocol is new — see §8). |
 
 Notes:
 
@@ -118,3 +119,49 @@ Notes:
   carries man-p2p's no-auth posture.
 - Mempool pending visibility costs one full mempool RPC sweep per 30s
   (man-p2p's cadence).
+
+## 8. Passive-offer index (`/protocols/mrc721offer`)
+
+The MRC-721 hard-listing index (R-E,
+`docs/specs/2026-11-08-mrc721-offer-index-api.md`): ingests the offer
+declaration log (create-only, latest-pin-wins per itemPinId, `offerTx`
+stored verbatim) and serves the market-discovery reads IDBots
+(`mrc721_offers_market`) consumes. Same sell-intent semantics: mempool pins
+are NOT indexed (one-confirmation latency is the trade for honest
+latest-wins).
+
+Deploy sequence:
+
+1. Ship with `METASO_P2P_MRC721_OFFER_ENABLED` unset (default off) —
+   nothing changes; the offer routes 404 and offer pins are ignored.
+2. After the acceptance pass (including the live E2E with the IDBots dev
+   build: publish → list → take → item owner resolves to the buyer), start
+   the daemon with `METASO_P2P_MRC721_OFFER_ENABLED=true`.
+3. NO backfill: the protocol is brand new, the index starts empty from the
+   live feed.
+
+Verify the endpoints (curl style of §4):
+
+```bash
+BASE=http://127.0.0.1:8080
+# Open offers, newest first (active defaults to true; rows carry offerTx verbatim)
+curl -s "$BASE/api/mrc721/offers?size=5"                          # expect {"code":1,...,data:{list:[...],total,cursor}}
+curl -s "$BASE/api/mrc721/offers?sellerMetaId=<metaId>&size=5"    # one seller's open offers
+curl -s "$BASE/api/mrc721/offers?collectionPinId=<pinid>&size=5"  # join through the item → collection relation (empty page when the native NFT aggregate is off)
+curl -s "$BASE/api/mrc721/offers?active=false"                    # cancellation declarations (kept queryable)
+curl -s "$BASE/api/mrc721/offers?itemPinId=<itemPinId>"           # exact-item short circuit
+
+# Latest offer for one item (key is itemPinId, NOT the offer pinId; miss = {"code":40400})
+curl -s "$BASE/api/mrc721/offer/info?itemPinId=<itemPinId>"
+
+# Settlement check (R-E-3): after a take confirms, the item owner must resolve to the buyer
+curl -s "$BASE/api/mrc721/item/info?pinId=<itemPinId>"
+```
+
+Notes:
+
+- After a deploy restart the pebble WAL replay delays the API port (~2 min
+  of 502 behind Caddy) — poll, do not roll back (house rule).
+- man-p2p needs no change: an offer pin is an ordinary pin there.
+- The index is an advertisement, not a source of truth: a taken offer's pin
+  stays on-chain and indexed; clients re-verify chain state before taking.

@@ -184,3 +184,19 @@ func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRo
 	}
 	return page, total, next, nil
 }
+
+// ItemCollectionRef resolves the collection identity of one indexed item
+// for the sibling mrc721 package's offer-row joins (the mrc721.ItemCollectionSource
+// implementation): empty strings when the item is unknown to this aggregate.
+func (a *Aggregator) ItemCollectionRef(itemPinId string) (string, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.db == nil {
+		return "", ""
+	}
+	item, err := a.db.GetItem(itemPinId)
+	if err != nil || item == nil {
+		return "", ""
+	}
+	return item.CollectionPinId, item.CollectionName
+}

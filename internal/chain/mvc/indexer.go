@@ -519,6 +519,9 @@ func extractCreatorAddress(tx *wire.MsgTx, params *chaincfg.Params) string {
 //   - the NFT lands at output 0 when the spent outpoint is input 0 (or the
 //     tx is single-input), otherwise a cumulative input-value walk locates
 //     the carrying output,
+//   - the passive-offer settlement layout (R-E-3) diverts to output 1 when
+//     input0's output0 is the signed price payment (value differs) and
+//     output1 carries exactly the item value — see offerDeliveryOutput,
 //   - all pointers use the ledger txid (mvcMetaIDTxHash) — sha256d pointers
 //     are unresolvable on-chain for version>=10 txs and break downstream
 //     transfer construction with [-25] Missing inputs.
@@ -616,8 +619,23 @@ func (idx *Indexer) transferOwnerAddress(inputId string, tx *wire.MsgTx) (*aggre
 	notice := &aggregator.TransferNotice{}
 	firstInputId := fmt.Sprintf("%s:%d", tx.TxIn[0].PreviousOutPoint.Hash, tx.TxIn[0].PreviousOutPoint.Index)
 	// Fast path: single-input txs or the tracked outpoint IS input 0 — the
-	// NFT lands at output 0.
+	// NFT lands at output 0, unless the tx is a passive-offer settlement
+	// (R-E-3): output0 is then the signed PRICE payment and the delivery
+	// output sits at index 1.
 	if len(tx.TxIn) == 1 || firstInputId == inputId {
+		if delivery := idx.offerDeliveryOutput(inputId, tx); delivery != nil {
+			class, addresses, _, _ := txscript.ExtractPkScriptAddrs(delivery.PkScript, idx.chainParams)
+			if len(addresses) > 0 {
+				notice.ToAddress = addresses[0].String()
+			} else if class.String() == "nulldata" {
+				notice.ToAddress = hex.EncodeToString(delivery.PkScript)
+			}
+			notice.Location = fmt.Sprintf("%s:%d:%d", ledgerTxid, 1, 0)
+			notice.Offset = 0
+			notice.Output = fmt.Sprintf("%s:%d", ledgerTxid, 1)
+			notice.OutputValue = delivery.Value
+			return notice, nil
+		}
 		class, addresses, _, _ := txscript.ExtractPkScriptAddrs(tx.TxOut[0].PkScript, idx.chainParams)
 		if len(addresses) > 0 {
 			notice.ToAddress = addresses[0].String()
@@ -670,6 +688,35 @@ func (idx *Indexer) transferOwnerAddress(inputId string, tx *wire.MsgTx) (*aggre
 		}
 	}
 	return notice, nil
+}
+
+// offerDeliveryOutput applies the passive-offer delivery layout rule (R-E-3,
+// docs/nft-offer-protocol.md §5 / nft-offer-indexer-requirements.md R-E-3):
+// when the tracked item UTXO is input0 and output0 is NOT its delivery
+// output — its value differs from the spent item's value, i.e. it is the
+// price payment — the delivery output is output1. The client guarantees
+// output1 carries exactly the item value (standard P2PKH), so the value
+// double-check keeps every other shape (plain transfers, ambiguous layouts)
+// on the legacy output-0 read, as does a spent-value lookup failure.
+func (idx *Indexer) offerDeliveryOutput(inputId string, tx *wire.MsgTx) *wire.TxOut {
+	if len(tx.TxOut) < 2 || len(tx.TxIn) == 0 {
+		return nil
+	}
+	firstInputId := fmt.Sprintf("%s:%d", tx.TxIn[0].PreviousOutPoint.Hash, tx.TxIn[0].PreviousOutPoint.Index)
+	if firstInputId != inputId {
+		return nil
+	}
+	itemValue, err := idx.spentOutputValue(tx.TxIn[0].PreviousOutPoint.Hash.String(), int(tx.TxIn[0].PreviousOutPoint.Index))
+	if err != nil || itemValue <= 0 {
+		return nil
+	}
+	if tx.TxOut[0].Value == itemValue {
+		return nil // output0 is the delivery output (plain transfer layout)
+	}
+	if tx.TxOut[1].Value != itemValue {
+		return nil // ambiguous shape; keep the legacy output-0 read
+	}
+	return tx.TxOut[1]
 }
 
 // isMeltdownTransaction mirrors man-p2p's IsMeltdownTransaction: ≥3 tracked
