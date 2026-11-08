@@ -53,6 +53,8 @@ type overlayPinEntry struct {
 	FirstSeenAt int64
 	Collection  string
 	Kind        string // overlayEffect*
+	Author      string // pin author address (the desc issuer-gate subject)
+	WireHash    string // raw tx hash (ancestry resolution; ledger hash ≠ wire hash on MVC v10+)
 	Mint        *PendingMint
 	ColCreate   *Collection
 	ColModify   *PendingColMod
@@ -167,6 +169,8 @@ func (a *Aggregator) recordMempoolPinLocked(pin *aggregator.PinInscription) {
 		FirstSeenAt: time.Now().Unix(),
 		Collection:  collectionName,
 		Kind:        effect,
+		Author:      pin.Address,
+		WireHash:    pin.WireHash,
 	}
 	switch effect {
 	case overlayEffectMint:

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,6 +31,11 @@ type SearchRow struct {
 	Cover            string `json:"cover,omitempty"`
 	GenesisChainName string `json:"genesisChainName,omitempty"`
 	MintedCount      int64  `json:"mintedCount,omitempty"`
+
+	// Zero-conf fields (R-F-5): present only on overlay-created rows (the
+	// pointer nils out on confirmed rows so their bytes stay unchanged).
+	Confirmed   *bool `json:"confirmed,omitempty"`
+	FirstSeenAt int64 `json:"firstSeenAt,omitempty"`
 }
 
 func searchRowFrom(col *Collection) *SearchRow {
@@ -106,7 +112,7 @@ func encodeSearchCursor(offset int64) string {
 // name / desc with an exact (case-insensitive) pinid alternative, issuer
 // createAddress-exact or createMetaId-case-insensitive, both filters
 // optional and conjunctive, at least one required.
-func (a *Aggregator) SearchNativeCollections(keyword, issuer, cursor string, size int) ([]*SearchRow, int, string, error) {
+func (a *Aggregator) SearchNativeCollections(keyword, issuer, cursor string, size int, zeroConf bool) ([]*SearchRow, int, string, error) {
 	offset, err := decodeSearchCursor(cursor)
 	if err != nil {
 		return nil, 0, "", err
@@ -124,13 +130,13 @@ func (a *Aggregator) SearchNativeCollections(keyword, issuer, cursor string, siz
 			return false
 		}
 		return true
-	})
+	}, zeroConf)
 	return rows, total, next, err
 }
 
 // NativeCollectionsIssued serves the collections-issued contract over the
 // native store: rows whose createAddress equals the requested address.
-func (a *Aggregator) NativeCollectionsIssued(address, cursor string, size int) ([]*SearchRow, int, string, error) {
+func (a *Aggregator) NativeCollectionsIssued(address, cursor string, size int, zeroConf bool) ([]*SearchRow, int, string, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
 		return nil, 0, "", ErrInvalidSearch
@@ -141,13 +147,13 @@ func (a *Aggregator) NativeCollectionsIssued(address, cursor string, size int) (
 	}
 	return a.nativeRows(offset, size, func(row *SearchRow) bool {
 		return row.CreateAddress == address
-	})
+	}, zeroConf)
 }
 
 // nativeRows materializes the matching name-ordered rows, applies offset
 // pagination with the shared cursor format and clamps size (default 20,
 // max 100 — same clamps as the mrc721 handlers).
-func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRow) bool) ([]*SearchRow, int, string, error) {
+func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRow) bool, zeroConf bool) ([]*SearchRow, int, string, error) {
 	if size <= 0 {
 		size = 20
 	}
@@ -169,6 +175,22 @@ func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRo
 	if err != nil {
 		return nil, 0, "", err
 	}
+	// Overlay-created albums join the search surface (R-F-2 acceptance) in
+	// the same (collectionName, issuer) key order as the confirmed rows.
+	if zeroConf {
+		overlay := a.overlaySearchRows()
+		for _, row := range overlay {
+			if predicate(row) {
+				matches = append(matches, row)
+			}
+		}
+		sort.SliceStable(matches, func(i, j int) bool {
+			if matches[i].CollectionName != matches[j].CollectionName {
+				return matches[i].CollectionName < matches[j].CollectionName
+			}
+			return matches[i].CreateAddress < matches[j].CreateAddress
+		})
+	}
 	total := len(matches)
 	if offset >= int64(total) {
 		return []*SearchRow{}, total, "", nil
@@ -183,6 +205,30 @@ func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRo
 		next = encodeSearchCursor(end)
 	}
 	return page, total, next, nil
+}
+
+// overlaySearchRows serializes the overlay-created albums for the search
+// surfaces (gate on): MintedCount carries the staged + overlay mint count,
+// Confirmed=false marks the row provisional.
+func (a *Aggregator) overlaySearchRows() []*SearchRow {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	snap := a.overlaySnapshotLocked()
+	rows := make([]*SearchRow, 0)
+	for _, entry := range overlayAlbumsLocked(snap) {
+		view := a.albumViewByPairLocked(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, viewOptions{})
+		if view == nil || view.collection == nil {
+			continue
+		}
+		row := searchRowFrom(view.collection)
+		row.Totalnum = 0
+		row.MintedCount = view.stagedMintCount + view.overlayMintCount
+		confirmed := false
+		row.Confirmed = &confirmed
+		row.FirstSeenAt = view.firstSeenAt
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // ItemCollectionRef resolves the collection identity of one indexed item

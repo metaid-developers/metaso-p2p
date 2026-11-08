@@ -136,6 +136,7 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			pin.GenesisHeight = height
 			pin.TxIndex = int64(txIndex)
 			pin.Inputs = inputs
+			pin.WireHash = txHash
 			pin.Timestamp = timestamp
 			pin.Address = address
 			pin.CreateAddress = address
@@ -171,6 +172,7 @@ func (idx *Indexer) catchPinsByTx(tx *wire.MsgTx, height int64, timestamp int64,
 			continue
 		}
 		pin.Inputs = inputs
+		pin.WireHash = txHash
 		pins = append(pins, pin)
 	}
 

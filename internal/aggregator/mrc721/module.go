@@ -122,8 +122,8 @@ type Aggregator struct {
 // model for the search / issuer endpoints. Rows carry the collectionRow
 // wire shape.
 type NativeCollectionSource interface {
-	SearchNativeCollections(keyword, issuer, cursor string, size int) ([]*mrc721nft.SearchRow, int, string, error)
-	NativeCollectionsIssued(address, cursor string, size int) ([]*mrc721nft.SearchRow, int, string, error)
+	SearchNativeCollections(keyword, issuer, cursor string, size int, zeroConf bool) ([]*mrc721nft.SearchRow, int, string, error)
+	NativeCollectionsIssued(address, cursor string, size int, zeroConf bool) ([]*mrc721nft.SearchRow, int, string, error)
 }
 
 // SetNativeCollectionSource hands the search / issuer endpoints to the

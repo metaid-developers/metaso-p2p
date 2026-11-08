@@ -553,6 +553,39 @@ func (s *nftStore) PopPending(collectionName, issuerAddress string) ([]*PendingE
 	return entries, nil
 }
 
+// StagedPin is one read-only staged entry with its would-be album key (the
+// zero-conf projections surface staged mints/descs before their album
+// registers; the drain path uses PopPending, which deletes).
+type StagedPin struct {
+	CollectionName string
+	IssuerAddress  string
+	Entry          *PendingEntry
+}
+
+// PeekPendingAll walks every staged entry read-only (projection input;
+// scale = pins staged before their album registers).
+func (s *nftStore) PeekPendingAll() ([]StagedPin, error) {
+	var out []StagedPin
+	err := s.store.ScanPrefix(Namespace, []byte(keyPending), func(key, value []byte) error {
+		// p:{collectionName}&{issuerAddress}&{pinId} — issuer is the last
+		// '&'-separated segment before the pinId segment.
+		rest := strings.TrimPrefix(string(key), keyPending)
+		segments := strings.Split(rest, "&")
+		if len(segments) < 3 {
+			return nil
+		}
+		issuer := segments[len(segments)-2]
+		name := strings.Join(segments[:len(segments)-2], "&")
+		var entry PendingEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return nil // skip corrupt rows
+		}
+		out = append(out, StagedPin{CollectionName: name, IssuerAddress: issuer, Entry: &entry})
+		return nil
+	})
+	return out, err
+}
+
 // ---------- pending transfer (mempool unconfirmed spend, advisory) ----------
 
 func (s *nftStore) SavePendingTransfer(pt *PendingTransfer) error {

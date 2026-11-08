@@ -36,8 +36,12 @@ type PinInscription struct {
 	// one per input. Zero-conf consumers derive tx ancestry from it (the
 	// parent→child mint chains behind numberFinal, R-F-5); the txids here
 	// are the wire-hash convention of the raw transaction layer.
-	Inputs    []string `json:"inputs,omitempty"`
-	Timestamp int64    `json:"timestamp"`
+	Inputs []string `json:"inputs,omitempty"`
+	// WireHash is the raw transaction hash (tx.TxHash) — for MVC version>=10
+	// txs it differs from the ledger hash in GenesisTransaction, and overlay
+	// ancestry resolution matches Inputs' wire hashes against it.
+	WireHash  string `json:"wireHash,omitempty"`
+	Timestamp int64  `json:"timestamp"`
 	Output       string `json:"output"`
 	OutputValue  int64  `json:"outputValue,omitempty"`
 	IsTransfered bool   `json:"isTransfered"`
