@@ -31,13 +31,13 @@ type PinInscription struct {
 	// carried so out-of-order staging can replay mints in true chain order
 	// (R-F-10). Mempool pins carry a fetch-order index that has no chain
 	// meaning; their GenesisHeight is -1 and they never stage.
-	TxIndex   int64 `json:"txIndex,omitempty"`
-	Timestamp int64 `json:"timestamp"`
-	Output             string `json:"output"`
-	OutputValue        int64  `json:"outputValue,omitempty"`
-	IsTransfered       bool   `json:"isTransfered"`
-	OriginalId         string `json:"originalId,omitempty"`
-	Host               string `json:"host"`
+	TxIndex      int64  `json:"txIndex,omitempty"`
+	Timestamp    int64  `json:"timestamp"`
+	Output       string `json:"output"`
+	OutputValue  int64  `json:"outputValue,omitempty"`
+	IsTransfered bool   `json:"isTransfered"`
+	OriginalId   string `json:"originalId,omitempty"`
+	Host         string `json:"host"`
 	// IsOpReturn marks pins parsed from an MVC OP_RETURN output. The MVC
 	// witness envelope is a separate parse path that man-p2p's MVC adapter
 	// never feeds into its pin store, so the mrc721nft aggregate consumes
