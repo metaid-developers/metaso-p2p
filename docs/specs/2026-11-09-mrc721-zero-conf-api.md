@@ -138,7 +138,23 @@ mempool-seen spend still settles authoritatively when it confirms.
   from the node through the live block path; first-write-wins makes replay
   safe).
 
-## 7. Known scope lines
+## 7. Timestamp units (all MRC-721 time fields)
+
+Every time-like field on the MRC-721 surfaces is **unix seconds** — the
+man-p2p contract these endpoints mirror verbatim (`transferTime :=
+time.Now().Unix()` was man-p2p's own stamping):
+
+- `item/transfers` rows: `time`
+- `item/info` `pending.firstSeenAt`, overlay transfer rows `firstSeenAt`/`time`
+- sell intents / offers: `updatedAt` (payload `createdAt` normalized to
+  seconds when the pin carried milliseconds)
+- collection/item `createTime`/`createtime`
+
+JS readers must construct dates with `new Date(seconds * 1000)` (or apply
+the tolerance rule: values `< 10^12` are seconds). Serving milliseconds
+would break parity with the upstream contract and the bootstrapped history.
+
+## 8. Known scope lines
 
 - Ancestry (numberFinal) resolves through pin-carried inputs only; chains
   through non-pin mempool txs read `numberFinal:false` until confirmation.

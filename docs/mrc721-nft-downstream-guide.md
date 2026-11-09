@@ -199,6 +199,13 @@ What IDBots should read (all fields additive; absent = fully confirmed):
 Strict confirmed-only audits/accounting: append `confirmedOnly=1` to ANY
 endpoint — the response is byte-identical to the pre-R-F service.
 
+Timestamp units (2026-11-09 note, downstream field report): every MRC-721
+time field (`item/transfers` `time`, `pending.firstSeenAt`, overlay rows'
+`firstSeenAt`, sell/offer `updatedAt`/`createdAt`, `createTime`) is **unix
+SECONDS** — same as man-p2p served. Rendering with `new Date(value)` treats
+the value as milliseconds and shows 1970; use `new Date(value * 1000)` (or
+tolerance: values `< 10^12` are seconds).
+
 ## 8. Rollback
 
 Point the base back at `https://manapi.metaid.io` — man-p2p keeps serving
