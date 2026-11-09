@@ -73,6 +73,16 @@ func (a *Aggregator) trackedOutputsLocked() map[string]aggregator.TrackedOutput 
 	return tracked
 }
 
+// BaseTrackedOutputs implements aggregator.BaseTrackedOutputsProvider: the
+// confirmed-only tracked set the engine's block spend path detects against
+// (the overlay-aware TrackedOutputs would hide an outpoint whose spend is
+// in flight in the mempool, and its confirmation block must still settle).
+func (a *Aggregator) BaseTrackedOutputs() map[string]aggregator.TrackedOutput {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.baseTrackedLocked()
+}
+
 // HandleBlockTransfers converts the engine's transfer notices into
 // applyTransferHook input, filtered to the CONFIRMED tracked outputs. The
 // confirmed hook is authoritative: a spend first seen in the mempool (its

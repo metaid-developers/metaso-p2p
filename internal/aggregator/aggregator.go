@@ -118,6 +118,20 @@ type TransferConsumer interface {
 	HandleMempoolSpends(chainName string, spends map[string]TransferNotice)
 }
 
+// BaseTrackedOutputsProvider is an optional TransferConsumer extension for
+// zero-confirmation aggregators: the CONFIRMED block spend path must detect
+// spends against the confirmed tracked set. The overlay-aware view returned
+// by TrackedOutputs() excludes outpoints currently recorded as mempool
+// spends — feeding it to the block detector lets a confirming spend fall
+// into the gap: its block scans before the mempool reconcile evicts the
+// overlay entry, the detector never sees the outpoint, the confirmed
+// ownership fold never runs and the later reconcile erases the pending
+// evidence. Consumers without overlay state don't implement it; the engine
+// falls back to TrackedOutputs().
+type BaseTrackedOutputsProvider interface {
+	BaseTrackedOutputs() map[string]TrackedOutput
+}
+
 // MempoolSpendIncrementalConsumer is an optional TransferConsumer extension
 // for zero-confirmation ownership surfaces (R-F-3/R-F-7): the engine feeds
 // the incremental mempool rounds' spend notices on every poll (no reconcile

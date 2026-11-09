@@ -250,7 +250,18 @@ func (e *Engine) processTransfers(entry *chainEntry, height int64) {
 	}
 	idMap := make(map[string]string)
 	for _, consumer := range consumers {
-		for outpoint, tracked := range consumer.TrackedOutputs() {
+		// The CONFIRMED block path detects against the base tracked set:
+		// the overlay-aware view hides outpoints with an in-flight mempool
+		// spend, and that spend's own confirmation block must still settle
+		// it (the mempool reconcile only evicts the overlay evidence after
+		// the block — whichever order, detection must not depend on it).
+		// See aggregator.BaseTrackedOutputsProvider.
+		trackedProvider, ok := consumer.(aggregator.BaseTrackedOutputsProvider)
+		outs := consumer.TrackedOutputs()
+		if ok {
+			outs = trackedProvider.BaseTrackedOutputs()
+		}
+		for outpoint, tracked := range outs {
 			if tracked.Owner != "" {
 				idMap[outpoint] = tracked.Owner
 			}
@@ -349,6 +360,9 @@ func (e *Engine) processMempoolTransfers() {
 		detector, hasDetector := entry.indexer.(chain.MempoolTransferDetector)
 		idMap := make(map[string]string)
 		for _, consumer := range consumers {
+			// The full mempool round keeps the OVERLAY-AWARE view: chained
+			// unconfirmed spends move through overlay-created outputs that
+			// only that view tracks (R-F-3.2).
 			for outpoint, tracked := range consumer.TrackedOutputs() {
 				if tracked.Owner != "" {
 					idMap[outpoint] = tracked.Owner

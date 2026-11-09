@@ -28,19 +28,41 @@ func (d *detectorIndexer) DetectTransfers(idMap map[string]string) (map[string]a
 
 type mempoolDetectorIndexer struct {
 	mockIndexer
-	notices map[string]aggregator.TransferNotice
+	notices    map[string]aggregator.TransferNotice
+	capture    bool
+	seenIdMaps []map[string]string
 }
 
 func (d *mempoolDetectorIndexer) DetectMempoolSpends(idMap map[string]string, txList []any) (map[string]aggregator.TransferNotice, error) {
+	if d.capture {
+		captured := make(map[string]string, len(idMap))
+		for outpoint, owner := range idMap {
+			captured[outpoint] = owner
+		}
+		d.seenIdMaps = append(d.seenIdMaps, captured)
+	}
 	return d.notices, nil
 }
 
 type consumerAggregator struct {
 	mu            sync.Mutex
 	tracked       map[string]aggregator.TrackedOutput
+	baseTracked   map[string]aggregator.TrackedOutput
 	consumedAt    []int64
 	consumed      map[string]aggregator.TransferNotice
 	mempoolRounds []map[string]aggregator.TransferNotice
+}
+
+// BaseTrackedOutputs implements aggregator.BaseTrackedOutputsProvider when
+// baseTracked is non-nil (the zero-conf shape: the overlay-aware view hides
+// outpoints with an in-flight mempool spend).
+func (c *consumerAggregator) BaseTrackedOutputs() map[string]aggregator.TrackedOutput {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.baseTracked == nil {
+		return c.tracked
+	}
+	return c.baseTracked
 }
 
 func (c *consumerAggregator) Name() string                                          { return "fakeconsumer" }
@@ -169,6 +191,63 @@ func TestScanRangeRunsTransfersOnPinlessBlocks(t *testing.T) {
 	}
 	if entry.lastHeight != 100 {
 		t.Fatalf("height not persisted: %d", entry.lastHeight)
+	}
+}
+
+func TestProcessTransfersUsesBaseTrackedWhenInFlightSpend(t *testing.T) {
+	// The zero-conf miss (production, 2026-11-09): a spend seen
+	// incrementally in the mempool is recorded as an overlay spend, so the
+	// overlay-aware TrackedOutputs() view excludes its outpoint — and the
+	// confirming spend's own block must STILL settle it. The block path
+	// must detect against the base tracked set; the mempool path must keep
+	// seeing the overlay view.
+	store := storage.NewPebbleStore(t.TempDir())
+	defer func() { _ = store.Close() }()
+	registry := aggregator.NewRegistry(store, cache.New(store))
+
+	consumer := &consumerAggregator{
+		tracked: map[string]aggregator.TrackedOutput{
+			"bb:1": {Owner: "mvc1qowner2", Ref: "item-2"}, // overlay view: aa:0 hidden (in-flight spend)
+		},
+		baseTracked: map[string]aggregator.TrackedOutput{
+			"aa:0": {Owner: "mvc1qowner", Ref: "item-1"},
+			"bb:1": {Owner: "mvc1qowner2", Ref: "item-2"},
+		},
+	}
+	if err := registry.Register(consumer); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	detector := &detectorIndexer{notices: map[string]aggregator.TransferNotice{
+		"aa:0": {FromAddress: "mvc1qowner", ToAddress: "mvc1qnew", Output: "spend:0", Location: "spend:0:0"},
+	}}
+	engine := NewEngine(store, registry)
+	engine.chains["testchain"] = &chainEntry{chain: &mockChain{name: "testchain"}, indexer: detector}
+
+	engine.processTransfers(engine.chains["testchain"], 100)
+
+	notice, ok := consumer.consumed["aa:0"]
+	if !ok || notice.ToAddress != "mvc1qnew" {
+		t.Fatalf("the confirming spend must settle against the base tracked set: %+v", consumer.consumed)
+	}
+
+	// The mempool path still uses the overlay-aware view: aa:0 (in-flight)
+	// is not offered, bb:1 is.
+	mempoolDetector := &mempoolDetectorIndexer{}
+	chain := &mockChain{name: "testchain", mempoolTxList: []any{"tx1"}}
+	mempoolDetector.notices = map[string]aggregator.TransferNotice{}
+	mempoolDetector.seenIdMaps = make([]map[string]string, 0)
+	mempoolDetector.capture = true
+	engine.chains["testchain"] = &chainEntry{chain: chain, indexer: mempoolDetector}
+	engine.processMempoolTransfers()
+	if len(mempoolDetector.seenIdMaps) != 1 {
+		t.Fatalf("mempool round expected: %+v", mempoolDetector.seenIdMaps)
+	}
+	if _, inFlight := mempoolDetector.seenIdMaps[0]["aa:0"]; inFlight {
+		t.Fatalf("the mempool path must see the overlay-aware view (aa:0 in flight)")
+	}
+	if _, ok := mempoolDetector.seenIdMaps[0]["bb:1"]; !ok {
+		t.Fatalf("the mempool path must keep live overlay outputs tracked")
 	}
 }
 
