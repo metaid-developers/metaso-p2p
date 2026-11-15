@@ -55,10 +55,10 @@ type itemView struct {
 
 // ---------- album resolution ----------
 
-// overlayAlbumsLocked derives the overlay album registrations from the
+// overlayAlbums derives the overlay album registrations from the
 // snapshot: one per (collectionName, issuer) col_create pin — the pair's
 // first create in provisional order wins (first-registration rule).
-func overlayAlbumsLocked(snap *overlaySnapshot) map[string]*overlayPinEntry {
+func overlayAlbums(snap *overlaySnapshot) map[string]*overlayPinEntry {
 	albums := make(map[string]*overlayPinEntry)
 	var creates []*overlayPinEntry
 	for _, entry := range snap.pins {
@@ -80,14 +80,13 @@ func overlayAlbumsLocked(snap *overlaySnapshot) map[string]*overlayPinEntry {
 // the confirmed record wins over an overlay create; overlay modifies fold
 // on top of whichever base won.
 func (a *Aggregator) albumViewByPair(name, issuer string, opts viewOptions) *albumView {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.albumViewByPairLocked(a.overlaySnapshotLocked(), name, issuer, opts)
+	return a.albumViewByPairSnap(a.overlaySnapshot(), name, issuer, opts)
 }
 
-// albumViewByPairLocked is the locked core of albumViewByPair (caller holds
-// a.mu and owns the snapshot).
-func (a *Aggregator) albumViewByPairLocked(snap *overlaySnapshot, name, issuer string, opts viewOptions) *albumView {
+// albumViewByPairSnap is the snapshot-based core of albumViewByPair (caller
+// owns the snapshot; no lock held — Pebble reads and overlay folding are
+// lock-free).
+func (a *Aggregator) albumViewByPairSnap(snap *overlaySnapshot, name, issuer string, opts viewOptions) *albumView {
 	col, err := a.db.GetCollection(name, issuer)
 	if err != nil {
 		return nil
@@ -100,7 +99,7 @@ func (a *Aggregator) albumViewByPairLocked(snap *overlaySnapshot, name, issuer s
 		return nil
 	}
 	if view.collection == nil {
-		entry := overlayAlbumsLocked(snap)[name+"&"+issuer]
+		entry := overlayAlbums(snap)[name+"&"+issuer]
 		if entry == nil || entry.ColCreate == nil {
 			return nil
 		}
@@ -108,7 +107,7 @@ func (a *Aggregator) albumViewByPairLocked(snap *overlaySnapshot, name, issuer s
 		view.confirmed = false
 		view.contentConfirmed = true
 		view.firstSeenAt = entry.FirstSeenAt
-		view.stagedMintCount = a.stagedMintCountForLocked(name, issuer)
+		view.stagedMintCount = a.stagedMintCountForSnap(name, issuer)
 	}
 	a.foldAlbumModifies(snap, view, opts)
 	a.countOverlayMints(snap, view)
@@ -118,24 +117,22 @@ func (a *Aggregator) albumViewByPairLocked(snap *overlaySnapshot, name, issuer s
 // albumViewByPinId resolves by collectionid: the confirmed album under that
 // pinid, else the overlay create with that pinid.
 func (a *Aggregator) albumViewByPinId(pinId string, opts viewOptions) *albumView {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.albumViewByPinIdLocked(a.overlaySnapshotLocked(), pinId, opts)
+	return a.albumViewByPinIdSnap(a.overlaySnapshot(), pinId, opts)
 }
 
-func (a *Aggregator) albumViewByPinIdLocked(snap *overlaySnapshot, pinId string, opts viewOptions) *albumView {
+func (a *Aggregator) albumViewByPinIdSnap(snap *overlaySnapshot, pinId string, opts viewOptions) *albumView {
 	col, err := a.db.GetCollectionByPinId(pinId)
 	if err != nil {
 		return nil
 	}
 	if col != nil {
-		return a.albumViewByPairLocked(snap, col.CollectionName, col.CreateAddress, opts)
+		return a.albumViewByPairSnap(snap, col.CollectionName, col.CreateAddress, opts)
 	}
 	if opts.confirmedOnly {
 		return nil
 	}
 	var entry *overlayPinEntry
-	for _, candidate := range overlayAlbumsLocked(snap) {
+	for _, candidate := range overlayAlbums(snap) {
 		if candidate.PinId == pinId {
 			entry = candidate
 			break
@@ -144,27 +141,25 @@ func (a *Aggregator) albumViewByPinIdLocked(snap *overlaySnapshot, pinId string,
 	if entry == nil || entry.ColCreate == nil {
 		return nil
 	}
-	return a.albumViewFromOverlayCreateLocked(snap, entry, opts)
+	return a.albumViewFromOverlayCreateSnap(snap, entry, opts)
 }
 
 // albumViewByName resolves an ambiguous name to the earliest album under
 // it: confirmed albums first (exactly today's rule), overlay albums only
 // when no confirmed album exists under the name.
 func (a *Aggregator) albumViewByName(name string, opts viewOptions) *albumView {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.albumViewByNameLocked(a.overlaySnapshotLocked(), name, opts)
+	return a.albumViewByNameSnap(a.overlaySnapshot(), name, opts)
 }
 
-func (a *Aggregator) albumViewByNameLocked(snap *overlaySnapshot, name string, opts viewOptions) *albumView {
+func (a *Aggregator) albumViewByNameSnap(snap *overlaySnapshot, name string, opts viewOptions) *albumView {
 	if col, err := a.db.GetEarliestCollectionByName(name); err == nil && col != nil {
-		return a.albumViewByPairLocked(snap, col.CollectionName, col.CreateAddress, opts)
+		return a.albumViewByPairSnap(snap, col.CollectionName, col.CreateAddress, opts)
 	}
 	if opts.confirmedOnly {
 		return nil
 	}
 	var candidates []*overlayPinEntry
-	for _, entry := range overlayAlbumsLocked(snap) {
+	for _, entry := range overlayAlbums(snap) {
 		if entry.ColCreate != nil && entry.ColCreate.CollectionName == name {
 			candidates = append(candidates, entry)
 		}
@@ -179,12 +174,12 @@ func (a *Aggregator) albumViewByNameLocked(snap *overlaySnapshot, name string, o
 		}
 		return x.PinId < y.PinId
 	})
-	return a.albumViewFromOverlayCreateLocked(snap, candidates[0], opts)
+	return a.albumViewFromOverlayCreateSnap(snap, candidates[0], opts)
 }
 
-// albumViewFromOverlayCreateLocked assembles the view of an overlay-created
+// albumViewFromOverlayCreateSnap assembles the view of an overlay-created
 // album (confirmed albums for the pair always win over it).
-func (a *Aggregator) albumViewFromOverlayCreateLocked(snap *overlaySnapshot, entry *overlayPinEntry, opts viewOptions) *albumView {
+func (a *Aggregator) albumViewFromOverlayCreateSnap(snap *overlaySnapshot, entry *overlayPinEntry, opts viewOptions) *albumView {
 	view := &albumView{
 		name:             entry.ColCreate.CollectionName,
 		issuer:           entry.ColCreate.CreateAddress,
@@ -193,7 +188,7 @@ func (a *Aggregator) albumViewFromOverlayCreateLocked(snap *overlaySnapshot, ent
 		contentConfirmed: true,
 		firstSeenAt:      entry.FirstSeenAt,
 	}
-	view.stagedMintCount = a.stagedMintCountForLocked(view.name, view.issuer)
+	view.stagedMintCount = a.stagedMintCountForSnap(view.name, view.issuer)
 	a.foldAlbumModifies(snap, view, opts)
 	a.countOverlayMints(snap, view)
 	return view
@@ -258,7 +253,7 @@ func (a *Aggregator) foldAlbumModifies(snap *overlaySnapshot, view *albumView, o
 // remaining supply stay out of the counts — the same outcome the chain's
 // final order produces.
 func (a *Aggregator) countOverlayMints(snap *overlaySnapshot, view *albumView) {
-	mints := a.overlayMintsForAlbumLocked(snap, view.name, view.issuer)
+	mints := a.overlayMintsForAlbumSnap(snap, view.name, view.issuer)
 	if len(mints) == 0 {
 		return
 	}
@@ -283,10 +278,10 @@ func (a *Aggregator) countOverlayMints(snap *overlaySnapshot, view *albumView) {
 	view.overlayMintCount = count
 }
 
-// overlayMintsForAlbumLocked returns the album's overlay mint pins in
+// overlayMintsForAlbumSnap returns the album's overlay mint pins in
 // provisional order (topological: parent mint tx before child, then
 // firstSeenAt, then txid).
-func (a *Aggregator) overlayMintsForAlbumLocked(snap *overlaySnapshot, name, issuer string) []*overlayPinEntry {
+func (a *Aggregator) overlayMintsForAlbumSnap(snap *overlaySnapshot, name, issuer string) []*overlayPinEntry {
 	var mints []*overlayPinEntry
 	for _, entry := range snap.pins {
 		if entry.Kind == overlayEffectMint && entry.Mint != nil &&
@@ -297,9 +292,9 @@ func (a *Aggregator) overlayMintsForAlbumLocked(snap *overlaySnapshot, name, iss
 	return orderOverlayMints(mints)
 }
 
-// stagedMintCountForLocked counts the confirmed staged mints of a pair
+// stagedMintCountForSnap counts the confirmed staged mints of a pair
 // (album not yet registered).
-func (a *Aggregator) stagedMintCountForLocked(name, issuer string) int64 {
+func (a *Aggregator) stagedMintCountForSnap(name, issuer string) int64 {
 	staged, err := a.db.PeekPendingAll()
 	if err != nil {
 		return 0
@@ -313,9 +308,9 @@ func (a *Aggregator) stagedMintCountForLocked(name, issuer string) int64 {
 	return count
 }
 
-// stagedMintsForLocked returns the pair's confirmed staged mints in the
+// stagedMintsForSnap returns the pair's confirmed staged mints in the
 // order drainPending will commit them (R-F-2.3 numbering source).
-func (a *Aggregator) stagedMintsForLocked(name, issuer string) []*PendingMint {
+func (a *Aggregator) stagedMintsForSnap(name, issuer string) []*PendingMint {
 	staged, err := a.db.PeekPendingAll()
 	if err != nil {
 		return nil
@@ -454,15 +449,13 @@ func isAncestor(parent map[string]string, ancestor, pinId string) bool {
 // (topological provisional order), with provisional numbers and the
 // supply gate applied.
 func (a *Aggregator) itemViewsForAlbum(view *albumView, opts viewOptions) []*itemView {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 
 	views := make([]*itemView, 0, view.confirmedMinted+view.stagedMintCount+view.overlayMintCount)
 	if view.collection != nil {
 		_ = a.db.IterateCollectionItems(view.collection.PinId, func(seq int64, itemPinId string) bool {
 			if item, err := a.db.GetItem(itemPinId); err == nil && item != nil {
-				iv := a.itemViewForConfirmedLocked(snap, item, view.issuer, opts)
+				iv := a.itemViewForConfirmedSnap(snap, item, view.issuer, opts)
 				views = append(views, iv)
 			}
 			return true
@@ -476,9 +469,9 @@ func (a *Aggregator) itemViewsForAlbum(view *albumView, opts viewOptions) []*ite
 	// Staged confirmed mints (album not registered yet): numbered first, in
 	// exactly the order drainPending will commit them (R-F-2.3).
 	pos := view.confirmedMinted
-	for _, mint := range a.stagedMintsForLocked(view.name, view.issuer) {
+	for _, mint := range a.stagedMintsForSnap(view.name, view.issuer) {
 		pos++
-		iv := a.itemViewForStagedMintLocked(snap, view, mint, pos, supply, opts)
+		iv := a.itemViewForStagedMintSnap(snap, view, mint, pos, supply, opts)
 		if iv.overSupply && !opts.includeOverSupply {
 			continue
 		}
@@ -488,9 +481,9 @@ func (a *Aggregator) itemViewsForAlbum(view *albumView, opts viewOptions) []*ite
 	// Overlay mints: provisional numbers continue after the confirmed and
 	// staged mints; past-supply mints get overSupply and stay hidden unless
 	// includeOverSupply=1.
-	for _, entry := range a.overlayMintsForAlbumLocked(snap, view.name, view.issuer) {
+	for _, entry := range a.overlayMintsForAlbumSnap(snap, view.name, view.issuer) {
 		pos++
-		iv := a.itemViewForOverlayMintLocked(snap, view, entry, pos, supply)
+		iv := a.itemViewForOverlayMintSnap(snap, view, entry, pos, supply)
 		if iv.overSupply && !opts.includeOverSupply {
 			continue
 		}
@@ -499,8 +492,8 @@ func (a *Aggregator) itemViewsForAlbum(view *albumView, opts viewOptions) []*ite
 	return views
 }
 
-// itemViewForConfirmedLocked folds the overlay onto a confirmed item.
-func (a *Aggregator) itemViewForConfirmedLocked(snap *overlaySnapshot, item *Item, issuer string, opts viewOptions) *itemView {
+// itemViewForConfirmedSnap folds the overlay onto a confirmed item.
+func (a *Aggregator) itemViewForConfirmedSnap(snap *overlaySnapshot, item *Item, issuer string, opts viewOptions) *itemView {
 	merged := *item
 	view := &itemView{
 		item:               &merged,
@@ -510,7 +503,7 @@ func (a *Aggregator) itemViewForConfirmedLocked(snap *overlaySnapshot, item *Ite
 		albumIssuer:        issuer,
 	}
 	if issuer == "" {
-		view.albumIssuer = a.albumIssuerOfItemLocked(item)
+		view.albumIssuer = a.albumIssuerOfItemSnap(item)
 	}
 	if opts.confirmedOnly {
 		return view
@@ -521,18 +514,18 @@ func (a *Aggregator) itemViewForConfirmedLocked(snap *overlaySnapshot, item *Ite
 	return view
 }
 
-// albumIssuerOfItemLocked resolves a confirmed item's album issuer.
-func (a *Aggregator) albumIssuerOfItemLocked(item *Item) string {
+// albumIssuerOfItemSnap resolves a confirmed item's album issuer.
+func (a *Aggregator) albumIssuerOfItemSnap(item *Item) string {
 	if col, err := a.db.GetCollectionByPinId(item.CollectionPinId); err == nil && col != nil {
 		return col.CreateAddress
 	}
 	return ""
 }
 
-// itemViewForStagedMintLocked projects a confirmed staged mint (album
+// itemViewForStagedMintSnap projects a confirmed staged mint (album
 // unregistered): the pin is confirmed, the number is chain-ordered final,
 // the row itself is not in the confirmed aggregate yet.
-func (a *Aggregator) itemViewForStagedMintLocked(snap *overlaySnapshot, view *albumView, mint *PendingMint, number, supply int64, opts viewOptions) *itemView {
+func (a *Aggregator) itemViewForStagedMintSnap(snap *overlaySnapshot, view *albumView, mint *PendingMint, number, supply int64, opts viewOptions) *itemView {
 	item := &Item{
 		ItemPinId:        mint.ItemPinId,
 		CollectionName:   view.name,
@@ -571,8 +564,8 @@ func (a *Aggregator) itemViewForStagedMintLocked(snap *overlaySnapshot, view *al
 	return iv
 }
 
-// itemViewForOverlayMintLocked projects one overlay mint.
-func (a *Aggregator) itemViewForOverlayMintLocked(snap *overlaySnapshot, view *albumView, entry *overlayPinEntry, number, supply int64) *itemView {
+// itemViewForOverlayMintSnap projects one overlay mint.
+func (a *Aggregator) itemViewForOverlayMintSnap(snap *overlaySnapshot, view *albumView, entry *overlayPinEntry, number, supply int64) *itemView {
 	mint := entry.Mint
 	item := &Item{
 		ItemPinId:        mint.ItemPinId,
@@ -608,7 +601,7 @@ func (a *Aggregator) itemViewForOverlayMintLocked(snap *overlaySnapshot, view *a
 	// (a parent→child chain no miner can reorder); staged/confirmed mints
 	// ranked ahead are chain-final by definition.
 	iv.numberFinal = true
-	mints := a.overlayMintsForAlbumLocked(snap, view.name, view.issuer)
+	mints := a.overlayMintsForAlbumSnap(snap, view.name, view.issuer)
 	if len(mints) > 1 {
 		parent := ancestorMap(mints)
 		for _, other := range mints {
@@ -706,7 +699,7 @@ func (v *itemView) applyDescFold(snap *overlaySnapshot, collectionName string) {
 // descs onto a staged item — exactly what drainOneDesc will do at
 // registration. Staged descs are keyed per (name, issuer) and staged only
 // for the author's own album, so the issuer gate holds by construction.
-// Callers hold a.mu (the staging scan is a Pebble read).
+// Pure function of a staging scan (Pebble read) — no lock.
 func (a *Aggregator) applyStagedDescFold(v *itemView, collectionName, issuer string) {
 	descs, err := a.peekStagedDescs(collectionName, issuer)
 	if err != nil {
@@ -721,8 +714,8 @@ func (a *Aggregator) applyStagedDescFold(v *itemView, collectionName, issuer str
 	}
 }
 
-// peekStagedDescs returns the pair's staged item_desc payloads read-only.
-// Caller holds a.mu.
+// peekStagedDescs returns the pair's staged item_desc payloads read-only
+// (pure Pebble read, no lock).
 func (a *Aggregator) peekStagedDescs(collectionName, issuer string) ([]*PendingDesc, error) {
 	staged, err := a.db.PeekPendingAll()
 	if err != nil {
@@ -761,19 +754,17 @@ func (v *itemView) fillDescFields(ref ItemDescRef) {
 // itemViewByPinId resolves one item's merged view: confirmed item, staged
 // mint, or overlay mint.
 func (a *Aggregator) itemViewByPinId(pinId string, opts viewOptions) *itemView {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 
 	if item, err := a.db.GetItem(pinId); err == nil && item != nil {
-		return a.itemViewForConfirmedLocked(snap, item, "", opts)
+		return a.itemViewForConfirmedSnap(snap, item, "", opts)
 	}
 	if opts.confirmedOnly {
 		return nil
 	}
 	// Overlay mint (direct pinId key hit).
 	if entry := snap.pins[pinId]; entry != nil && entry.Kind == overlayEffectMint && entry.Mint != nil {
-		view := a.albumViewByPairLocked(snap, entry.Collection, entry.Mint.OwnerAddress, opts)
+		view := a.albumViewByPairSnap(snap, entry.Collection, entry.Mint.OwnerAddress, opts)
 		if view == nil {
 			return nil
 		}
@@ -782,17 +773,17 @@ func (a *Aggregator) itemViewByPinId(pinId string, opts viewOptions) *itemView {
 			supply = view.collection.TotalSupply
 		}
 		pos := view.confirmedMinted + view.stagedMintCount
-		for _, m := range a.overlayMintsForAlbumLocked(snap, view.name, view.issuer) {
+		for _, m := range a.overlayMintsForAlbumSnap(snap, view.name, view.issuer) {
 			pos++
 			if m.PinId == pinId {
-				return a.itemViewForOverlayMintLocked(snap, view, entry, pos, supply)
+				return a.itemViewForOverlayMintSnap(snap, view, entry, pos, supply)
 			}
 		}
 		return nil
 	}
 	// Staged confirmed mint (album unregistered): rank within the drain
 	// order (confirmed staged first, then overlay mints).
-	view := a.albumViewByStagedItemLocked(snap, pinId, opts)
+	view := a.albumViewByStagedItemSnap(snap, pinId, opts)
 	if view == nil {
 		return nil
 	}
@@ -801,22 +792,22 @@ func (a *Aggregator) itemViewByPinId(pinId string, opts viewOptions) *itemView {
 		supply = view.collection.TotalSupply
 	}
 	pos := view.confirmedMinted
-	for _, mint := range a.stagedMintsForLocked(view.name, view.issuer) {
+	for _, mint := range a.stagedMintsForSnap(view.name, view.issuer) {
 		pos++
 		if mint.ItemPinId == pinId {
-			return a.itemViewForStagedMintLocked(snap, view, mint, pos, supply, opts)
+			return a.itemViewForStagedMintSnap(snap, view, mint, pos, supply, opts)
 		}
 	}
 	return nil
 }
 
-// albumViewByStagedItemLocked resolves the album view a staged item belongs
+// albumViewByStagedItemSnap resolves the album view a staged item belongs
 // to (found via the staging scan).
-func (a *Aggregator) albumViewByStagedItemLocked(snap *overlaySnapshot, itemPinId string, opts viewOptions) *albumView {
+func (a *Aggregator) albumViewByStagedItemSnap(snap *overlaySnapshot, itemPinId string, opts viewOptions) *albumView {
 	staged, _ := a.db.PeekPendingAll()
 	for _, sp := range staged {
 		if sp.Entry.Kind == "mint" && sp.Entry.Mint != nil && sp.Entry.Mint.ItemPinId == itemPinId {
-			return a.albumViewByPairLocked(snap, sp.CollectionName, sp.IssuerAddress, opts)
+			return a.albumViewByPairSnap(snap, sp.CollectionName, sp.IssuerAddress, opts)
 		}
 	}
 	return nil

@@ -19,25 +19,22 @@ func queryViewOptions(c *gin.Context) viewOptions {
 }
 
 // zeroConfIssuanceActive reports whether the issuance overlay serves this
-// request (gate on, not confirmedOnly).
+// request (gate on, not confirmedOnly). Atomic gate read — a read path must
+// never wait on the ingest mutex (2026-11-15 production incident).
 func (a *Aggregator) zeroConfIssuanceActive(opts viewOptions) bool {
 	if opts.confirmedOnly {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.zeroConfIssuance
+	return a.zeroConfIssuanceGate.Load()
 }
 
 // zeroConfTradeActive reports whether the trading overlay serves this
-// request (gate on, not confirmedOnly).
+// request (gate on, not confirmedOnly). Atomic gate read.
 func (a *Aggregator) zeroConfTradeActive(opts viewOptions) bool {
 	if opts.confirmedOnly {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.zeroConfTrade
+	return a.zeroConfTradeGate.Load()
 }
 
 // collectionViewDTO serializes the merged album view. The base fields are
