@@ -13,6 +13,7 @@ package mrc721nft
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,11 +36,25 @@ const (
 
 // Aggregator is the native MRC-721 NFT aggregate. It never produces socket
 // notifications: the aggregate is a pure query surface.
+//
+// Locking (2026-11-15 production incident fix): two independent locks plus
+// atomic gates. mu serialises the confirmed ingest write paths across their
+// Pebble writes and guards the tracked-output cache; overlayMu (RWMutex)
+// guards the in-memory overlay maps and is only ever held for memory-only
+// operations — never across Pebble writes; the zero-conf gates are atomic
+// bools set once at startup. A stalled Pebble write (the incident held the
+// ingest lock for 2h11m) therefore stalls the ingest pipeline but never
+// blocks a read: gates load atomically and readers copy an overlay snapshot
+// under overlayMu.RLock, then work lock-free.
 type Aggregator struct {
 	store    *storage.PebbleStore
 	db       *nftStore
 	notifyCh chan *aggregator.NotifyEvent
-	mu       sync.Mutex // serialises ingest write paths (live + bootstrap replay)
+
+	// mu serialises the confirmed ingest write paths (live block loop,
+	// mempool spend rounds, bootstrap replay). Guards the Pebble writes and
+	// the tracked cache below. Deliberately NOT held by any read path.
+	mu sync.Mutex
 
 	// tracked is the lazily rebuilt outpoint → (owner, itemPinId) cache for
 	// the engine's transfer detection; invalidated by trackedDirty after
@@ -47,26 +62,31 @@ type Aggregator struct {
 	tracked      map[string]aggregator.TrackedOutput
 	trackedDirty bool
 
-	// Zero-confirmation overlay state (R-F-1): in-memory only, guarded by
-	// a.mu, rebuilt from the node mempool after a restart within one poll
-	// plus one full scan. Never persisted, never replayed by backfill.
-	zeroConfIssuance bool
-	zeroConfTrade    bool
-	overlayPins      map[string]*overlayPinEntry   // pinId → entry
-	overlaySpends    map[string]*overlaySpendEntry // spent outpoint → entry
-	overlayTxids     map[string]int64              // live overlay txid → firstSeenAt
-	overlayCap       int
+	// overlayMu guards the overlay maps. Writers take it for the map
+	// mutation only; readers take RLock to copy a snapshot and then work
+	// lock-free. Never held across Pebble writes.
+	overlayMu sync.RWMutex
+
+	// Zero-confirmation overlay state (R-F-1): in-memory only, rebuilt from
+	// the node mempool after a restart within one poll plus one full scan.
+	// Never persisted, never replayed by backfill. All fields below are
+	// guarded by overlayMu except the gates, which are set once at startup.
+	zeroConfIssuanceGate atomic.Bool
+	zeroConfTradeGate    atomic.Bool
+	overlayPins          map[string]*overlayPinEntry   // pinId → entry
+	overlaySpends        map[string]*overlaySpendEntry // spent outpoint → entry
+	overlayTxids         map[string]int64              // live overlay txid → firstSeenAt
+	overlayCap           int
 
 	// replayClient is the upstream client the admin replay-pins endpoint
-	// repairs entities from (set at startup, nil disables the endpoint).
+	// repairs entities from (set once at startup before serving, nil
+	// disables the endpoint; unsynchronized by design).
 	replayClient *UpstreamClient
 }
 
 // SetReplayClient wires the upstream client used by the admin replay-pins
-// endpoint (called from the daemon startup, after Init).
+// endpoint (called from the daemon startup, after Init, before serving).
 func (a *Aggregator) SetReplayClient(client *UpstreamClient) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.replayClient = client
 }
 
@@ -93,25 +113,29 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 // HandleBlockPin folds a confirmed pin into the NFT aggregate. Pins from
 // other paths are ignored; malformed or invalid protocol pins are logged
 // and skipped so they never fail the block pipeline. Confirmation handoff
-// (R-F-8.1): once the confirmed facts are folded, the pin's overlay entries
-// go — same critical section, so no read observes a gap or a duplicate.
+// (R-F-8.1): the pin's overlay entries are dropped right after the
+// confirmed facts are folded — the fold runs under the ingest mutex (the
+// Pebble writes), the drop under overlayMu (memory only), in that order. A
+// read racing that handoff window may transiently still apply the overlay
+// effect of the just-folded tx (spend folds self-skip on the moved
+// outpoint; mint folds self-correct once the entry drops) — the previous
+// single-critical-section design prevented that only by blocking every
+// read for the entire duration of a stalled Pebble write.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.ingestNftPin(pin)
+	a.mu.Unlock()
 	if pin != nil {
-		a.dropOverlayForTxLocked(txidOfPin(pin))
+		a.dropOverlayForTx(txidOfPin(pin))
 	}
 	return nil, nil
 }
 
 // HandleMempoolPin records the pin's zero-conf overlay effect (R-F-1) when
 // the issuance gate is on; the confirmed aggregate stays untouched until
-// the block folds the pin in.
+// the block folds the pin in. Memory only — no ingest lock involved.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.recordMempoolPinLocked(pin)
+	a.recordMempoolPin(pin)
 	return nil, nil
 }
 

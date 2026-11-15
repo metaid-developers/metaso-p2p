@@ -18,8 +18,12 @@ import (
 //     dropped transaction's effects vanish, revealing the confirmed state
 //     beneath. Nothing here is ever persisted, replayed, or backfilled.
 //   - Confirmed wins. When a pin or spend confirms, the block path ingests
-//     it first and the overlay entries of that txid are dropped in the same
-//     critical section (no gap, no duplicate rows).
+//     it first and the overlay entries of that txid are dropped immediately
+//     after the fold completes (fold under the ingest mutex, drop under
+//     overlayMu — the drop is a memory-only map edit). A read racing that
+//     handoff window may transiently still apply the overlay effect of the
+//     just-folded tx; spend folds self-skip on the moved outpoint and mint
+//     folds self-correct once the entry drops.
 //   - Eviction. A fully observed mempool round that no longer contains a
 //     transaction removes all of its overlay effects (ReconcileMempoolRound).
 //     A failed fetch never reconciles — the engine skips the chain.
@@ -79,16 +83,14 @@ type overlaySpendEntry struct {
 // SetZeroConfGates wires the R-F-6 config gates (called from the daemon
 // startup before the engine starts; default off keeps today's behavior).
 func (a *Aggregator) SetZeroConfGates(issuance, trade bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.zeroConfIssuance = issuance
-	a.zeroConfTrade = trade
+	a.zeroConfIssuanceGate.Store(issuance)
+	a.zeroConfTradeGate.Store(trade)
 }
 
 // SetOverlayCap overrides the overlay entry cap (tests).
 func (a *Aggregator) SetOverlayCap(cap int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.overlayMu.Lock()
+	defer a.overlayMu.Unlock()
 	if cap > 0 {
 		a.overlayCap = cap
 	}
@@ -145,9 +147,15 @@ func txidOfPin(pin *aggregator.PinInscription) string {
 
 // recordMempoolPin records one mempool pin's overlay effect (R-F-1).
 // Idempotent by pin id: an engine re-delivery keeps the original firstSeenAt.
-// Caller holds a.mu.
+func (a *Aggregator) recordMempoolPin(pin *aggregator.PinInscription) {
+	a.overlayMu.Lock()
+	defer a.overlayMu.Unlock()
+	a.recordMempoolPinLocked(pin)
+}
+
+// recordMempoolPinLocked is the overlayMu-locked core of recordMempoolPin.
 func (a *Aggregator) recordMempoolPinLocked(pin *aggregator.PinInscription) {
-	if pin == nil || a.db == nil || len(pin.Id) == 0 || !a.zeroConfIssuance {
+	if pin == nil || a.db == nil || len(pin.Id) == 0 || !a.zeroConfIssuanceGate.Load() {
 		return
 	}
 	// Same pin universe as the confirmed path: MVC witness-format pins are
@@ -270,9 +278,16 @@ type errOverlayInvalidField struct{ msg string }
 
 func (e errOverlayInvalidField) Error() string { return e.msg }
 
-// recordOverlaySpendsLocked folds mempool spend notices into the overlay
+// recordOverlaySpends folds mempool spend notices into the overlay
 // (R-F-3): one entry per spent tracked outpoint, latest observation wins,
 // firstSeenAt preserved when the same spending tx is re-observed.
+func (a *Aggregator) recordOverlaySpends(chainName string, tracked map[string]aggregator.TrackedOutput, spends map[string]aggregator.TransferNotice, now int64) {
+	a.overlayMu.Lock()
+	defer a.overlayMu.Unlock()
+	a.recordOverlaySpendsLocked(chainName, tracked, spends, now)
+}
+
+// recordOverlaySpendsLocked is the overlayMu-locked core of recordOverlaySpends.
 func (a *Aggregator) recordOverlaySpendsLocked(chainName string, tracked map[string]aggregator.TrackedOutput, spends map[string]aggregator.TransferNotice, now int64) {
 	for outpoint, notice := range spends {
 		ref, ok := tracked[outpoint]
@@ -307,9 +322,20 @@ func (a *Aggregator) recordOverlaySpendsLocked(chainName string, tracked map[str
 	a.evictOverlayCapLocked()
 }
 
-// dropOverlayForTxLocked is the confirmation handoff (R-F-8.1): after the
-// block path ingested a txid's facts, its overlay entries go — same lock,
-// so no read can observe the gap or a duplicate row.
+// dropOverlayForTx is the confirmation handoff (R-F-8.1): after the block
+// path ingested a txid's facts, its overlay entries go — the drop follows
+// the fold immediately (memory-only map edit under overlayMu, never across
+// a Pebble write).
+func (a *Aggregator) dropOverlayForTx(txid string) {
+	if txid == "" {
+		return
+	}
+	a.overlayMu.Lock()
+	defer a.overlayMu.Unlock()
+	a.dropOverlayForTxLocked(txid)
+}
+
+// dropOverlayForTxLocked is the overlayMu-locked core of dropOverlayForTx.
 func (a *Aggregator) dropOverlayForTxLocked(txid string) {
 	if txid == "" {
 		return
@@ -338,8 +364,8 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 	if observedTxIDs == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.overlayMu.Lock()
+	defer a.overlayMu.Unlock()
 	observed := make(map[string]struct{}, len(observedTxIDs))
 	for _, txid := range observedTxIDs {
 		observed[txid] = struct{}{}
@@ -396,13 +422,19 @@ func (a *Aggregator) evictOverlayCapLocked() {
 }
 
 // overlaySnapshot is a consistent copy of the overlay state for read-side
-// projections (taken under a.mu; projections never touch the live maps).
+// projections (projections never touch the live maps — they work on the
+// copy lock-free).
 type overlaySnapshot struct {
 	pins   map[string]*overlayPinEntry
 	spends map[string]*overlaySpendEntry
 }
 
-func (a *Aggregator) overlaySnapshotLocked() *overlaySnapshot {
+// overlaySnapshot copies both overlay maps under overlayMu.RLock (readers
+// run concurrently with each other; a concurrent map edit waits for the
+// copy, which is memory-only and fast).
+func (a *Aggregator) overlaySnapshot() *overlaySnapshot {
+	a.overlayMu.RLock()
+	defer a.overlayMu.RUnlock()
 	snap := &overlaySnapshot{
 		pins:   make(map[string]*overlayPinEntry, len(a.overlayPins)),
 		spends: make(map[string]*overlaySpendEntry, len(a.overlaySpends)),

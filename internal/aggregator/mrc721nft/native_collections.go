@@ -209,14 +209,12 @@ func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRo
 
 // overlaySearchRows serializes the overlay-created albums for the search
 // surfaces (gate on): MintedCount carries the staged + overlay mint count,
-// Confirmed=false marks the row provisional.
+// Confirmed=false marks the row provisional. Snapshot-based — no lock held.
 func (a *Aggregator) overlaySearchRows() []*SearchRow {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 	rows := make([]*SearchRow, 0)
-	for _, entry := range overlayAlbumsLocked(snap) {
-		view := a.albumViewByPairLocked(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, viewOptions{})
+	for _, entry := range overlayAlbums(snap) {
+		view := a.albumViewByPairSnap(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, viewOptions{})
 		if view == nil || view.collection == nil {
 			continue
 		}
@@ -234,9 +232,8 @@ func (a *Aggregator) overlaySearchRows() []*SearchRow {
 // ItemCollectionRef resolves the collection identity of one indexed item
 // for the sibling mrc721 package's offer-row joins (the mrc721.ItemCollectionSource
 // implementation): empty strings when the item is unknown to this aggregate.
+// Pure confirmed-record read — no locks.
 func (a *Aggregator) ItemCollectionRef(itemPinId string) (string, string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.db == nil {
 		return "", ""
 	}

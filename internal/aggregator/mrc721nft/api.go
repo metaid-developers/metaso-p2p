@@ -221,12 +221,10 @@ func (a *Aggregator) handleCollectionPageList(c *gin.Context) {
 
 // overlayCollectionDTOs serializes the overlay-created albums (gate on).
 func (a *Aggregator) overlayCollectionDTOs(opts viewOptions) []gin.H {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 	var dtos []gin.H
-	for _, entry := range overlayAlbumsLocked(snap) {
-		view := a.albumViewByPairLocked(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, opts)
+	for _, entry := range overlayAlbums(snap) {
+		view := a.albumViewByPairSnap(snap, entry.ColCreate.CollectionName, entry.ColCreate.CreateAddress, opts)
 		if view != nil {
 			dtos = append(dtos, a.collectionViewDTO(view, opts))
 		}
@@ -422,27 +420,25 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 
 // foldHolderCollections rewrites the holder's album list under the trade
 // overlay: confirmed albums whose items all moved away drop out, albums
-// holding overlay items join in.
+// holding overlay items join in. Snapshot-based — no lock held.
 func (a *Aggregator) foldHolderCollections(address string, order *[]string, holdCounts map[string]int64, opts viewOptions) {
-	a.mu.Lock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 	// Overlay-owned items by album: overlay mints of the address resolve
 	// through their album's collectionid (spend deliveries and staged mints
 	// join below).
 	overlayByCol := make(map[string]int64) // collection pinid → count
 	for _, entry := range snap.pins {
 		if entry.Kind == overlayEffectMint && entry.Mint != nil && entry.Mint.OwnerAddress == address {
-			view := a.albumViewByPairLocked(snap, entry.Collection, entry.Mint.OwnerAddress, opts)
+			view := a.albumViewByPairSnap(snap, entry.Collection, entry.Mint.OwnerAddress, opts)
 			if view != nil && view.collection != nil {
 				overlayByCol[view.collection.PinId]++
 			}
 		}
 	}
-	a.mu.Unlock()
 	staged, _ := a.db.PeekPendingAll()
 	for _, sp := range staged {
 		if sp.Entry.Kind == "mint" && sp.Entry.Mint != nil && sp.Entry.Mint.OwnerAddress == address {
-			if view := a.albumViewByPair(sp.CollectionName, sp.IssuerAddress, opts); view != nil && view.collection != nil {
+			if view := a.albumViewByPairSnap(snap, sp.CollectionName, sp.IssuerAddress, opts); view != nil && view.collection != nil {
 				overlayByCol[view.collection.PinId]++
 			}
 		}
@@ -533,10 +529,11 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 
 // holderItemPinIds lists the address's visible items under the trade
 // overlay, in serve order: confirmed holdings (overlay owner still the
-// address), then overlay/staged items owned by the address.
+// address), then overlay/staged items owned by the address. Snapshot-based
+// — no lock held; the confirmed reads and the overlay fold work on one
+// consistent snapshot copy.
 func (a *Aggregator) holderItemPinIds(address, collectionFilter string, opts viewOptions) ([]string, int64) {
-	a.mu.Lock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 
 	currentOwner := func(itemPinId string) (owner string, burned bool) {
 		if item, err := a.db.GetItem(itemPinId); err == nil && item != nil {
@@ -560,18 +557,15 @@ func (a *Aggregator) holderItemPinIds(address, collectionFilter string, opts vie
 		}
 		return true
 	})
-	a.mu.Unlock()
 
 	// Overlay deliveries to the address (chained spends land on overlay
 	// outputs): the item's projected owner must be the address.
-	a.mu.Lock()
 	delivered := make(map[string]struct{})
 	for _, sp := range snap.spends {
 		if sp.ToAddress == address && !sp.Burned {
 			delivered[sp.ItemPinId] = struct{}{}
 		}
 	}
-	a.mu.Unlock()
 	for itemPinId := range delivered {
 		if _, listed := seen[itemPinId]; listed {
 			continue
@@ -585,8 +579,6 @@ func (a *Aggregator) holderItemPinIds(address, collectionFilter string, opts vie
 	}
 
 	// Overlay + staged mints owned by the address.
-	a.mu.Lock()
-	snap = a.overlaySnapshotLocked()
 	var ownedPinIds []string
 	for _, entry := range snap.pins {
 		if entry.Kind != overlayEffectMint || entry.Mint == nil || entry.Mint.OwnerAddress != address {
@@ -594,7 +586,6 @@ func (a *Aggregator) holderItemPinIds(address, collectionFilter string, opts vie
 		}
 		ownedPinIds = append(ownedPinIds, entry.Mint.ItemPinId)
 	}
-	a.mu.Unlock()
 	for _, sp := range func() []StagedPin {
 		staged, _ := a.db.PeekPendingAll()
 		return staged
@@ -711,11 +702,9 @@ func (a *Aggregator) handleItemTransfers(c *gin.Context) {
 }
 
 // overlayTransfersForItem returns the item's overlay spends in provisional
-// order (timeline order).
+// order (timeline order). Snapshot-based — no lock held.
 func (a *Aggregator) overlayTransfersForItem(itemPinId string) []*overlaySpendEntry {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	snap := a.overlaySnapshotLocked()
+	snap := a.overlaySnapshot()
 	var spends []*overlaySpendEntry
 	for _, sp := range snap.spends {
 		if sp.ItemPinId == itemPinId {

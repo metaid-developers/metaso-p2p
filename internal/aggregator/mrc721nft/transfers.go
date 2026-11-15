@@ -26,15 +26,27 @@ func (a *Aggregator) markTrackedDirty() {
 // trade gate on it also covers overlay outputs (R-F-3.2): freshly minted
 // and freshly delivered items exist only in the overlay, and a resale or
 // re-transfer before the first confirmation must stay visible at any depth.
+// The confirmed half is built under the ingest mutex, the overlay half
+// under overlayMu.RLock — the two may be a few instructions apart in time;
+// spend recording is latest-wins and the full-round reconcile self-heals,
+// so no consumer depends on their atomicity.
 func (a *Aggregator) TrackedOutputs() map[string]aggregator.TrackedOutput {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.trackedOutputsLocked()
+	base := a.baseTrackedLocked()
+	a.mu.Unlock()
+	return a.extendTrackedOverlay(base)
 }
 
-func (a *Aggregator) trackedOutputsLocked() map[string]aggregator.TrackedOutput {
-	base := a.baseTrackedLocked()
-	if !a.zeroConfTrade || (len(a.overlayPins) == 0 && len(a.overlaySpends) == 0) {
+// extendTrackedOverlay extends the confirmed tracked set with the overlay
+// outputs (the overlay half of the old trackedOutputsLocked). Reads the
+// overlay maps under overlayMu.RLock — never call it holding any lock.
+func (a *Aggregator) extendTrackedOverlay(base map[string]aggregator.TrackedOutput) map[string]aggregator.TrackedOutput {
+	if !a.zeroConfTradeGate.Load() {
+		return base
+	}
+	a.overlayMu.RLock()
+	defer a.overlayMu.RUnlock()
+	if len(a.overlayPins) == 0 && len(a.overlaySpends) == 0 {
 		return base
 	}
 	// Overlay extension: work on a copy (never mutate the lazy cache) — an
@@ -89,14 +101,14 @@ func (a *Aggregator) BaseTrackedOutputs() map[string]aggregator.TrackedOutput {
 // outpoint absent from the overlay-aware view) must still settle here when
 // it confirms, so this filter deliberately uses the base set. The hook's
 // item lookup and (itemPinId, height, txid) idempotency do the rest.
-// Confirmation handoff (R-F-8.1): once the confirmed ownership facts
-// folded, the spending tx's overlay entries go — same critical section.
-// A conflicting mempool spend (different txid that lost the block) stays
+// Confirmation handoff (R-F-8.1): the confirmed ownership facts fold under
+// the ingest mutex (Pebble writes), then the spending tx's overlay entries
+// go, immediately after the fold — memory-only edits under overlayMu. A
+// conflicting mempool spend (different txid that lost the block) stays
 // overlay-live until eviction, where the ownership fold skips it: its spent
 // outpoint no longer matches the confirmed output.
 func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transfers map[string]aggregator.TransferNotice) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	tracked := a.baseTrackedLocked()
 	transferMap := make(map[string]*TransferInfo, len(transfers))
 	pinIdByOutput := make(map[string]string, len(transfers))
@@ -117,10 +129,12 @@ func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transf
 		pinIdByOutput[output] = ref.Ref
 	}
 	if len(transferMap) == 0 {
+		a.mu.Unlock()
 		return
 	}
 	// man-p2p stamps the history rows with the processing time.
 	a.applyTransferHook(chainName, height, transferMap, pinIdByOutput, time.Now().Unix())
+	spentTxids := make([]string, 0, len(transferMap))
 	for _, info := range transferMap {
 		// Location is the "<ledgerTxid>:<vout>:<satOffset>" pointer; the
 		// overlay entries are keyed by the bare spending txid.
@@ -128,7 +142,11 @@ func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transf
 		if idx := strings.Index(txid, ":"); idx >= 0 {
 			txid = txid[:idx]
 		}
-		a.dropOverlayForTxLocked(txid)
+		spentTxids = append(spentTxids, txid)
+	}
+	a.mu.Unlock()
+	for _, txid := range spentTxids {
+		a.dropOverlayForTx(txid)
 	}
 }
 
@@ -158,15 +176,21 @@ func (a *Aggregator) baseTrackedLocked() map[string]aggregator.TrackedOutput {
 // confirmed hook is authoritative. With the trade gate on the same notices
 // also fold into the zero-conf ownership overlay.
 func (a *Aggregator) HandleMempoolSpends(chainName string, spends map[string]aggregator.TransferNotice) {
+	// Confirmed tracked set (ingest mutex), extended with the overlay
+	// outputs (overlayMu.RLock) — the extension decides which mempool spends
+	// of overlay-owned items record.
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	tracked := a.trackedOutputsLocked()
+	base := a.baseTrackedLocked()
+	a.mu.Unlock()
+	tracked := a.extendTrackedOverlay(base)
 	now := time.Now().Unix()
+	a.mu.Lock()
 	seen := a.recordPendingTransfersLocked(chainName, tracked, spends, now)
-	if a.zeroConfTrade {
-		a.recordOverlaySpendsLocked(chainName, tracked, spends, now)
+	a.mu.Unlock()
+	if a.zeroConfTradeGate.Load() {
+		a.recordOverlaySpends(chainName, tracked, spends, now)
 	}
-	a.mempoolReconcileLocked(chainName, seen)
+	a.mempoolReconcile(chainName, seen)
 }
 
 // HandleMempoolSpendsIncremental implements aggregator.MempoolOverlayConsumer
@@ -176,15 +200,18 @@ func (a *Aggregator) HandleMempoolSpends(chainName string, spends map[string]agg
 // never evict anything. With the trade gate off this is a strict no-op
 // (today's trading behavior, exactly).
 func (a *Aggregator) HandleMempoolSpendsIncremental(chainName string, spends map[string]aggregator.TransferNotice) {
-	if !a.zeroConfTrade {
+	if !a.zeroConfTradeGate.Load() {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	tracked := a.trackedOutputsLocked()
+	base := a.baseTrackedLocked()
+	a.mu.Unlock()
+	tracked := a.extendTrackedOverlay(base)
 	now := time.Now().Unix()
+	a.mu.Lock()
 	a.recordPendingTransfersLocked(chainName, tracked, spends, now)
-	a.recordOverlaySpendsLocked(chainName, tracked, spends, now)
+	a.mu.Unlock()
+	a.recordOverlaySpends(chainName, tracked, spends, now)
 }
 
 // recordPendingTransfersLocked writes the advisory pending-transfer records
@@ -229,11 +256,11 @@ func (a *Aggregator) recordPendingTransfersLocked(chainName string, tracked map[
 	return seen
 }
 
-// mempoolReconcileLocked deletes pendings for this chain that the round no
-// longer observed. Never runs on a failed fetch — the engine skips the
-// chain entirely in that case, so live pendings cannot be evicted by a
-// partial observation.
-func (a *Aggregator) mempoolReconcileLocked(chainName string, seen map[string]string) {
+// mempoolReconcile deletes pendings for this chain that the round no
+// longer observed. Pure Pebble work — no locks. Never runs on a failed
+// fetch — the engine skips the chain entirely in that case, so live
+// pendings cannot be evicted by a partial observation.
+func (a *Aggregator) mempoolReconcile(chainName string, seen map[string]string) {
 	var stale []*PendingTransfer
 	if err := a.db.IteratePendingTransfers(func(pt *PendingTransfer) bool {
 		if pt.ChainName == chainName && seen[pt.ItemPinId] != pt.TxId {
