@@ -13,6 +13,7 @@ import (
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
+	"github.com/metaid-developers/metaso-p2p/internal/presence"
 )
 
 func TestTokenizeCJKBigrams(t *testing.T) {
@@ -241,5 +242,39 @@ func TestSearchCachesAmortizeInputs(t *testing.T) {
 	}
 	if profiles.calls != 2 || history.calls != 2 {
 		t.Fatalf("expired inputs must rebuild: corpus=%d history=%d", profiles.calls, history.calls)
+	}
+}
+
+// TestPresenceIndexMatchesFindPresence proves the per-request lowercase index
+// answers the same online/offline decision as the reference full-scan
+// findPresence for every alias combination, including empty and
+// whitespace-padded inputs.
+func TestPresenceIndexMatchesFindPresence(t *testing.T) {
+	items := []presence.OnlineEntry{
+		{MetaId: "  IDQ1Online  ", LastSeenAt: 111},
+		{MetaId: "idq1second", ConnectedAt: 222},
+	}
+	index := newPresenceIndex(items)
+
+	cases := [][]string{
+		{"idq1online"},
+		{"IDQ1ONLINE"},
+		{" idq1online "},
+		{"idq1second"},
+		{"idq1missing"},
+		{"", "idq1second"},
+		{"idq1missing", "idq1online"},
+		{},
+		{"  "},
+	}
+	for _, candidates := range cases {
+		wantEntry, wantOK := findPresence(items, candidates)
+		gotEntry, gotOK := index.lookup(candidates...)
+		if wantOK != gotOK {
+			t.Fatalf("candidates %v: findPresence ok=%v index ok=%v", candidates, wantOK, gotOK)
+		}
+		if wantOK && (wantEntry.MetaId != gotEntry.MetaId || wantEntry.LastSeenAt != gotEntry.LastSeenAt || wantEntry.ConnectedAt != gotEntry.ConnectedAt) {
+			t.Fatalf("candidates %v: entry mismatch: reference=%+v index=%+v", candidates, wantEntry, gotEntry)
+		}
 	}
 }

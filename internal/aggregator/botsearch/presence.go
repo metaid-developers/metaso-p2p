@@ -41,7 +41,10 @@ func (a *Aggregator) presenceSnapshot() []presence.OnlineEntry {
 
 // findPresence matches any of the identity aliases (globalMetaId / metaId /
 // address, case-insensitive) against the online entries' MetaId field.
-// Mirrors bothomepage's findPresence.
+// Mirrors bothomepage's findPresence. Reference implementation retained for
+// tests; the handler uses presenceIndex instead — scanning the full online
+// set per profile with a ToLower per comparison was 87% of request CPU
+// (production pprof, 2026-11-20).
 func findPresence(items []presence.OnlineEntry, candidates []string) (presence.OnlineEntry, bool) {
 	if len(items) == 0 || len(candidates) == 0 {
 		return presence.OnlineEntry{}, false
@@ -62,20 +65,40 @@ func findPresence(items []presence.OnlineEntry, candidates []string) (presence.O
 	return presence.OnlineEntry{}, false
 }
 
-func identityCandidates(globalMetaId, metaId, address string) []string {
-	candidates := make([]string, 0, 3)
-	seen := make(map[string]struct{}, 3)
-	for _, value := range []string{globalMetaId, metaId, address} {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+// presenceIndex is the per-request lowercase index over the merged online
+// set. Building it once turns the per-profile presence join into O(1) map
+// probes per identity alias.
+type presenceIndex struct {
+	byIdentity map[string]presence.OnlineEntry
+}
+
+func newPresenceIndex(items []presence.OnlineEntry) presenceIndex {
+	index := presenceIndex{byIdentity: make(map[string]presence.OnlineEntry, len(items))}
+	for _, item := range items {
+		key := strings.ToLower(strings.TrimSpace(item.MetaId))
+		if key == "" {
 			continue
 		}
-		key := strings.ToLower(trimmed)
-		if _, ok := seen[key]; ok {
-			continue
+		if _, ok := index.byIdentity[key]; !ok {
+			index.byIdentity[key] = item
 		}
-		seen[key] = struct{}{}
-		candidates = append(candidates, trimmed)
 	}
-	return candidates
+	return index
+}
+
+// lookup reports whether any identity alias is online, first alias wins.
+// Matches findPresence semantics up to tie-breaking: findPresence returns the
+// first matching entry in list order, the index returns the entry of the
+// first matching alias (globalMetaId before metaId before address).
+func (p presenceIndex) lookup(candidates ...string) (presence.OnlineEntry, bool) {
+	for _, candidate := range candidates {
+		key := strings.ToLower(strings.TrimSpace(candidate))
+		if key == "" {
+			continue
+		}
+		if item, ok := p.byIdentity[key]; ok {
+			return item, true
+		}
+	}
+	return presence.OnlineEntry{}, false
 }

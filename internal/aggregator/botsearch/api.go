@@ -133,7 +133,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 		return
 	}
 
-	presenceItems := a.presenceSnapshot()
+	presenceIndex := newPresenceIndex(a.presenceSnapshot())
 
 	excluded := make(map[string]struct{}, len(req.ExcludeGlobalMetaIds))
 	for _, id := range req.ExcludeGlobalMetaIds {
@@ -166,7 +166,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 
 		online := false
 		var lastSeenMs int64
-		if entry, ok := findPresence(presenceItems, identityCandidates(profile.GlobalMetaID, profile.MetaID, profile.Address)); ok {
+		if entry, ok := presenceIndex.lookup(profile.GlobalMetaID, profile.MetaID, profile.Address); ok {
 			online = true
 			lastSeenMs = entry.LastSeenAt
 			if lastSeenMs == 0 {
