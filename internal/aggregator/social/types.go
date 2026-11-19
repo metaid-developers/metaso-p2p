@@ -112,6 +112,28 @@ type ProfileLookup interface {
 	LookupByAddress(address string) (*TargetRef, error)
 }
 
+// LocalProfileLookup resolves profiles through the local reverse indexes
+// only, without any remote fallback. Graph read paths prefer it when the
+// wired lookup supports it: the remote profile fallback waits on per-peer
+// HTTP (production pprof 2026-11-20: /api/social counts spent ~1s per
+// request inside httpRemoteProfileLookup), and a peer whose profile is not
+// locally indexed legitimately degrades to an unresolved distinct form per
+// spec §2.5. Ingestion and top-level query-input normalization keep the
+// remote-capable lookups.
+type LocalProfileLookup interface {
+	LookupLocalByMetaId(metaId string) (*TargetRef, error)
+	LookupLocalByGlobalMetaId(globalMetaId string) (*TargetRef, error)
+}
+
+// localProfileLookup returns the wired lookup's local-only view, or nil.
+func (a *Aggregator) localProfileLookup() LocalProfileLookup {
+	if a == nil || a.profileLookup == nil {
+		return nil
+	}
+	local, _ := a.profileLookup.(LocalProfileLookup)
+	return local
+}
+
 func (a *Aggregator) SetProfileLookup(lookup ProfileLookup) {
 	a.profileLookup = lookup
 }

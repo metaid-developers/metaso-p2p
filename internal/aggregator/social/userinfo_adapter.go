@@ -34,6 +34,25 @@ func (a *userInfoLookupAdapter) LookupByAddress(address string) (*TargetRef, err
 	return targetRefFromUserInfo(p), err
 }
 
+// LookupLocalByMetaId resolves through the local reverse indexes only, so
+// per-peer graph reads never wait on the remote profile fallback.
+func (a *userInfoLookupAdapter) LookupLocalByMetaId(metaId string) (*TargetRef, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupLocalByIdentity(metaId)
+	return targetRefFromUserInfo(p), err
+}
+
+// LookupLocalByGlobalMetaId resolves through the local reverse indexes only.
+func (a *userInfoLookupAdapter) LookupLocalByGlobalMetaId(globalMetaId string) (*TargetRef, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupLocalByIdentity(globalMetaId)
+	return targetRefFromUserInfo(p), err
+}
+
 func targetRefFromUserInfo(p *userinfo.UserProfile) *TargetRef {
 	if p == nil {
 		return nil
