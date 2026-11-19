@@ -7,6 +7,8 @@
 package botsearch
 
 import (
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +56,44 @@ type Aggregator struct {
 	localPresence  presence.LocalReader
 	globalPresence presence.GlobalReader
 	now            func() int64 // unix milliseconds; test hook
+
+	// Search-input caches. A single /api/bots/search request previously paid
+	// the full corpus rebuild plus one group-history prefix scan per profile
+	// (three identity aliases each); production baseline measured ~2s per
+	// request. Corpus, per-identity history, and per-provider published skills
+	// all change slowly, so they are cached behind short TTLs. Presence stays
+	// uncached: it is in-memory and drives the onlineOnly gate.
+	corpusMu     sync.Mutex
+	corpus       []userinfo.BotSearchProfile
+	corpusAtMs   int64
+	historyMu    sync.Mutex
+	historyCache map[string]groupHistoryCacheEntry
+	skillsMu     sync.Mutex
+	skillsCache  map[string]skillsCacheEntry
+}
+
+// Cache TTLs for the search inputs. They bound staleness for ranking data;
+// the wire contract treats search as advisory, so 30s staleness is acceptable
+// in exchange for not rescanning the corpus per request.
+const (
+	searchCorpusTTL  = 30 * time.Second
+	searchHistoryTTL = 30 * time.Second
+	searchSkillsTTL  = 30 * time.Second
+
+	// searchCacheMaxEntries bounds the per-identity caches; the corpus size
+	// naturally bounds the working set, so hitting this cap means identities
+	// rotated — drop the map and start fresh.
+	searchCacheMaxEntries = 8192
+)
+
+type groupHistoryCacheEntry struct {
+	items  []groupchat.GroupHistoryItem
+	atMs   int64
+}
+
+type skillsCacheEntry struct {
+	names []string
+	atMs  int64
 }
 
 func (a *Aggregator) Name() string { return "botsearch" }
@@ -63,7 +103,86 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	if a.now == nil {
 		a.now = func() int64 { return time.Now().UnixMilli() }
 	}
+	a.historyCache = make(map[string]groupHistoryCacheEntry)
+	a.skillsCache = make(map[string]skillsCacheEntry)
 	return nil
+}
+
+func (a *Aggregator) nowMs() int64 {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now().UnixMilli()
+}
+
+// searchCorpusSnapshot returns the searchable profile corpus, cached for
+// searchCorpusTTL. The upstream builder already returns independent copies,
+// so sharing the cached slice between requests is safe as long as handlers
+// treat it as read-only.
+func (a *Aggregator) searchCorpusSnapshot() []userinfo.BotSearchProfile {
+	nowMs := a.nowMs()
+	a.corpusMu.Lock()
+	defer a.corpusMu.Unlock()
+	if a.corpus != nil && nowMs-a.corpusAtMs < searchCorpusTTL.Milliseconds() {
+		return a.corpus
+	}
+	corpus := a.profiles.BotSearchProfiles()
+	a.corpus = corpus
+	a.corpusAtMs = nowMs
+	return corpus
+}
+
+// groupHistoryForIdentityCached returns the group history for one profile's
+// identity aliases, cached per identity tuple for searchHistoryTTL. Lookup
+// errors are not cached: a transient history failure must not pin stale
+// results, and handleSearch surfaces it to the caller as before.
+func (a *Aggregator) groupHistoryForIdentityCached(metaId, globalMetaId, address string) ([]groupchat.GroupHistoryItem, error) {
+	if a.history == nil {
+		return []groupchat.GroupHistoryItem{}, nil
+	}
+	key := strings.ToLower(metaId) + "|" + strings.ToLower(globalMetaId) + "|" + strings.ToLower(address)
+	nowMs := a.nowMs()
+
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+	if entry, ok := a.historyCache[key]; ok && nowMs-entry.atMs < searchHistoryTTL.Milliseconds() {
+		return entry.items, nil
+	}
+	items, err := a.history.GroupHistoryForIdentity(metaId, globalMetaId, address)
+	if err != nil {
+		return nil, err
+	}
+	if len(a.historyCache) >= searchCacheMaxEntries {
+		a.historyCache = make(map[string]groupHistoryCacheEntry)
+	}
+	a.historyCache[key] = groupHistoryCacheEntry{items: items, atMs: nowMs}
+	return items, nil
+}
+
+// publishedSkillsCached returns a provider's published skill-service names,
+// cached per provider for searchSkillsTTL. Errors fall back to the empty list
+// exactly like the uncached call site.
+func (a *Aggregator) publishedSkillsCached(globalMetaId string) []string {
+	if a.skills == nil || globalMetaId == "" {
+		return []string{}
+	}
+	key := strings.ToLower(globalMetaId)
+	nowMs := a.nowMs()
+
+	a.skillsMu.Lock()
+	defer a.skillsMu.Unlock()
+	if entry, ok := a.skillsCache[key]; ok && nowMs-entry.atMs < searchSkillsTTL.Milliseconds() {
+		return entry.names
+	}
+	names := []string{}
+	if list, err := a.skills.PublishedServiceNames(globalMetaId); err == nil && list != nil {
+		names = list
+	}
+	if len(a.skillsCache) >= searchCacheMaxEntries {
+		a.skillsCache = make(map[string]skillsCacheEntry)
+	}
+	a.skillsCache[key] = skillsCacheEntry{names: names, atMs: nowMs}
+	return names
 }
 
 // HandleBlockPin is a no-op: botsearch aggregates nothing of its own.

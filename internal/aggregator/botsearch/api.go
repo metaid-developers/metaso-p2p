@@ -154,7 +154,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	}
 	matches := make([]scoredCandidate, 0)
 
-	for _, profile := range a.profiles.BotSearchProfiles() {
+	for _, profile := range a.searchCorpusSnapshot() {
 		if requireChatPubkey && !profile.HasChatPubkey {
 			continue
 		}
@@ -177,13 +177,10 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			continue
 		}
 
-		history := []groupchat.GroupHistoryItem{}
-		if a.history != nil {
-			history, err = a.history.GroupHistoryForIdentity(profile.MetaID, profile.GlobalMetaID, profile.Address)
-			if err != nil {
-				api.RespErr(c, codeInternalFailure, "group history lookup failed")
-				return
-			}
+		history, err := a.groupHistoryForIdentityCached(profile.MetaID, profile.GlobalMetaID, profile.Address)
+		if err != nil {
+			api.RespErr(c, codeInternalFailure, "group history lookup failed")
+			return
 		}
 
 		result := scoreCandidate(profile, history, tokens, roleHint, query)
@@ -236,12 +233,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			lastSeenAgo = &ago
 		}
 
-		publishedSkills := []string{}
-		if a.skills != nil && profile.GlobalMetaID != "" {
-			if names, err := a.skills.PublishedServiceNames(profile.GlobalMetaID); err == nil && names != nil {
-				publishedSkills = names
-			}
-		}
+		publishedSkills := a.publishedSkillsCached(profile.GlobalMetaID)
 
 		recent := make([]groupTask, 0, min(recentGroupTasksCap, len(match.history)))
 		for _, item := range match.history[:min(recentGroupTasksCap, len(match.history))] {

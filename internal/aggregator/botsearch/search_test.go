@@ -1,8 +1,15 @@
 package botsearch
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/userinfo"
@@ -147,4 +154,92 @@ func assertHasReason(t *testing.T, reasons []matchReason, want matchReason) {
 		}
 	}
 	t.Fatalf("missing reason %+v in %+v", want, reasons)
+}
+
+// countingProfiles counts corpus builds; the cached accessor must amortize
+// them across requests within the corpus TTL.
+type countingProfiles struct {
+	calls  int
+	corpus []userinfo.BotSearchProfile
+}
+
+func (c *countingProfiles) BotSearchProfiles() []userinfo.BotSearchProfile {
+	c.calls++
+	return c.corpus
+}
+
+// countingHistory counts group-history lookups; the cached accessor must
+// collapse repeated lookups for the same identity tuple within the TTL.
+type countingHistory struct {
+	calls int
+	items []groupchat.GroupHistoryItem
+}
+
+func (c *countingHistory) GroupHistoryForIdentity(identities ...string) ([]groupchat.GroupHistoryItem, error) {
+	c.calls++
+	return c.items, nil
+}
+
+// TestSearchCachesAmortizeInputs proves the search-input caches work: within
+// the TTLs the corpus and per-identity history are built once, and after the
+// TTL elapses (mutable test clock) the next request rebuilds them.
+func TestSearchCachesAmortizeInputs(t *testing.T) {
+	nowMs := int64(fixedNowMs)
+	search := &Aggregator{now: func() int64 { return nowMs }}
+	if err := search.Init(nil, nil); err != nil {
+		t.Fatalf("init botsearch: %v", err)
+	}
+	profiles := &countingProfiles{corpus: []userinfo.BotSearchProfile{{
+		GlobalMetaID:  "idq1cachetest",
+		MetaID:        "metaidcachetest",
+		Name:          "Cache Test Bot",
+		HasChatPubkey: true,
+	}}}
+	history := &countingHistory{items: []groupchat.GroupHistoryItem{{
+		GroupId: "groupcachetest",
+		Title:   "Cache group",
+	}}}
+	search.SetProfileSource(profiles)
+	search.SetGroupHistorySource(history)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	search.RegisterRoutes(router.Group("/api"))
+	doSearch := func() searchTestBody {
+		req := httptest.NewRequest(http.MethodPost, "/api/bots/search",
+			bytes.NewBufferString(`{"query":"cache","onlineOnly":false,"limit":10}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		var decoded searchTestBody
+		if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode body: %v raw=%s", err, w.Body.String())
+		}
+		return decoded
+	}
+
+	first := doSearch()
+	if first.Code != 0 || len(first.Data.Candidates) != 1 {
+		t.Fatalf("first search: code=%d candidates=%d body=%+v", first.Code, len(first.Data.Candidates), first.Data)
+	}
+	if profiles.calls != 1 || history.calls != 1 {
+		t.Fatalf("first search should build inputs once: corpus=%d history=%d", profiles.calls, history.calls)
+	}
+
+	second := doSearch()
+	if second.Code != 0 || len(second.Data.Candidates) != 1 {
+		t.Fatalf("second search: code=%d candidates=%d", second.Code, len(second.Data.Candidates))
+	}
+	if profiles.calls != 1 || history.calls != 1 {
+		t.Fatalf("cached inputs must not rebuild within TTL: corpus=%d history=%d", profiles.calls, history.calls)
+	}
+
+	nowMs += (searchCorpusTTL + time.Second).Milliseconds()
+	third := doSearch()
+	if third.Code != 0 || len(third.Data.Candidates) != 1 {
+		t.Fatalf("third search: code=%d candidates=%d", third.Code, len(third.Data.Candidates))
+	}
+	if profiles.calls != 2 || history.calls != 2 {
+		t.Fatalf("expired inputs must rebuild: corpus=%d history=%d", profiles.calls, history.calls)
+	}
 }
