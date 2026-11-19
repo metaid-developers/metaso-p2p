@@ -278,8 +278,7 @@ func (s *PebbleStore) ScanAfter(namespace string, after []byte, fn func(key, val
 
 // ScanPrefixAfter iterates over keys matching prefix that are strictly after
 // the given key. The after key must lie within the prefix range.
-func (s *PebbleStore) ScanPrefixAfter(namespace string, prefix, after []byte, fn func(key, value []byte) error) error {
-	db, err := s.OpenDB(namespace)
+func (s *PebbleStore) ScanPrefixAfter(namespace string, prefix, after []byte, fn func(key, value []byte) error) error {	db, err := s.OpenDB(namespace)
 	if err != nil {
 		return err
 	}
@@ -297,6 +296,33 @@ func (s *PebbleStore) ScanPrefixAfter(namespace string, prefix, after []byte, fn
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
+		if err := fn(iter.Key(), iter.Value()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ScanPrefixDesc iterates over all keys matching the prefix in descending key
+// order (newest-last-key first) and calls fn for each. If fn returns an
+// error, iteration stops. Read paths whose sort order matches the key order
+// use this to paginate from the tail without materializing the full range.
+func (s *PebbleStore) ScanPrefixDesc(namespace string, prefix []byte, fn func(key, value []byte) error) error {
+	db, err := s.OpenDB(namespace)
+	if err != nil {
+		return err
+	}
+
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.Last(); iter.Valid(); iter.Prev() {
 		if err := fn(iter.Key(), iter.Value()); err != nil {
 			return err
 		}
