@@ -55,7 +55,10 @@ func (a *Aggregator) canonicalPeerId(peer string) string {
 	if idaddress.ValidateIDAddress(strings.ToLower(peer)) {
 		return strings.ToLower(peer)
 	}
-	if canonical, ok, err := a.normalizeIdentity(peer); err == nil && ok && canonical != "" {
+	// Per-peer resolution is local-only: this runs once per peer per request
+	// in the graph read paths, where the remote profile fallback measured
+	// ~1s of waiting per counts request (production pprof, 2026-11-20).
+	if canonical, ok, err := a.normalizeIdentityLocal(peer); err == nil && ok && canonical != "" {
 		return canonical
 	}
 	return peer
@@ -85,7 +88,19 @@ func (a *Aggregator) identityKeyForms(id string) []string {
 		forms = append(forms, alias)
 	}
 	if a != nil && a.profileLookup != nil {
-		if ref, err := a.profileLookup.LookupByGlobalMetaId(id); err == nil && ref != nil {
+		// Alias resolution prefers the local-only view when wired: this
+		// runs per peer in the graph read paths and must not wait on the
+		// remote profile fallback (see LocalProfileLookup).
+		var (
+			ref *TargetRef
+			err error
+		)
+		if local := a.localProfileLookup(); local != nil {
+			ref, err = local.LookupLocalByGlobalMetaId(id)
+		} else {
+			ref, err = a.profileLookup.LookupByGlobalMetaId(id)
+		}
+		if err == nil && ref != nil {
 			addAlias(ref.Address)
 			addAlias(ref.MetaId)
 		}

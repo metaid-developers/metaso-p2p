@@ -396,3 +396,76 @@ func TestEdgeListCursorKindAndStaleRejection(t *testing.T) {
 		t.Fatalf("stale cursor err = %v, want ErrInvalidParameter", err)
 	}
 }
+
+// localFirstTargetLookup implements ProfileLookup and LocalProfileLookup with
+// distinct answers, to prove per-peer graph resolution prefers the local
+// reverse-index path and never reaches the remote-capable lookups.
+type localFirstTargetLookup struct {
+	localGlobal *TargetRef
+	remote      *TargetRef
+	remoteCalls int
+}
+
+func (f *localFirstTargetLookup) LookupLocalByMetaId(metaId string) (*TargetRef, error) {
+	return f.localGlobal, nil
+}
+
+func (f *localFirstTargetLookup) LookupLocalByGlobalMetaId(globalMetaId string) (*TargetRef, error) {
+	return f.localGlobal, nil
+}
+
+func (f *localFirstTargetLookup) LookupByMetaId(metaId string) (*TargetRef, error) {
+	f.remoteCalls++
+	return f.remote, nil
+}
+
+func (f *localFirstTargetLookup) LookupByGlobalMetaId(globalMetaId string) (*TargetRef, error) {
+	f.remoteCalls++
+	return f.remote, nil
+}
+
+func (f *localFirstTargetLookup) LookupByAddress(address string) (*TargetRef, error) {
+	f.remoteCalls++
+	return f.remote, nil
+}
+
+// TestPerPeerResolutionPrefersLocalLookup pins the read-path contract: when
+// the wired lookup supports LocalProfileLookup, canonicalPeerId and
+// identityKeyForms resolve through it exclusively — the remote-capable
+// methods stay untouched (they remain available to ingestion and top-level
+// subject normalization).
+func TestPerPeerResolutionPrefersLocalLookup(t *testing.T) {
+	agg := &Aggregator{}
+	const hexPeer = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	lookup := &localFirstTargetLookup{
+		localGlobal: &TargetRef{GlobalMetaId: "idq1localpeer", MetaId: hexPeer, Address: "1LocalAddr"},
+		remote:      &TargetRef{GlobalMetaId: "idq1remotepeer"},
+	}
+	agg.SetProfileLookup(lookup)
+
+	if got := agg.canonicalPeerId(hexPeer); got != "idq1localpeer" {
+		t.Fatalf("canonicalPeerId = %q, want local-resolved idq1localpeer", got)
+	}
+	forms := agg.identityKeyForms("idq1localpeer")
+	want := []string{"idq1localpeer", "1LocalAddr", hexPeer}
+	if len(forms) != len(want) {
+		t.Fatalf("identityKeyForms = %v, want %v", forms, want)
+	}
+	for i, form := range want {
+		if forms[i] != form {
+			t.Fatalf("identityKeyForms[%d] = %q, want %q (all: %v)", i, forms[i], form, forms)
+		}
+	}
+	if lookup.remoteCalls != 0 {
+		t.Fatalf("per-peer resolution reached the remote-capable lookups %d times", lookup.remoteCalls)
+	}
+
+	// Top-level subject normalization keeps the remote-capable path.
+	canonical, ok, err := agg.normalizeIdentity(hexPeer)
+	if err != nil || !ok || canonical != "idq1remotepeer" {
+		t.Fatalf("normalizeIdentity = %q ok=%v err=%v, want remote-resolved idq1remotepeer", canonical, ok, err)
+	}
+	if lookup.remoteCalls == 0 {
+		t.Fatalf("top-level normalization did not use the remote-capable lookup")
+	}
+}

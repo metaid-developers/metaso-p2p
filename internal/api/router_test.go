@@ -60,6 +60,13 @@ type fullRouterFixture struct {
 }
 
 func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
+	return setupFullRouterFixtureWithConfig(t, func(cfg *config.Config) {})
+}
+
+// setupFullRouterFixtureWithConfig builds the full router fixture and lets a
+// test mutate the config (e.g. arm the chat rate limiter) before the router
+// is constructed.
+func setupFullRouterFixtureWithConfig(t *testing.T, mutate func(cfg *config.Config)) *fullRouterFixture {
 	t.Helper()
 
 	store := storage.NewPebbleStore(t.TempDir())
@@ -132,6 +139,7 @@ func setupFullRouterFixture(t *testing.T) *fullRouterFixture {
 	privateAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userAgg))
 
 	cfg := config.Default()
+	mutate(&cfg)
 	// SetupRouter handles nil socketServer gracefully (Socket.IO routes skipped).
 	return &fullRouterFixture{
 		router:           api.SetupRouter(cfg, store, cacheProvider, reg, nil, "test", nil),
@@ -1877,4 +1885,68 @@ func TestFullRouterPreferenceWiring(t *testing.T) {
 	if validated["score"] != nil || validated["state"] != "unavailable" {
 		t.Fatalf("validated block must be exactly unavailable: %v", validated)
 	}
+}
+
+// TestChatRateLimitCoversChatSurface verifies the opt-in /chat-api limiter:
+// with ChatRateLimit enabled, both the direct socket presence routes and the
+// compatibility group return 429 once the burst is exhausted, while health
+// stays unlimited; with the default (disabled) config nothing is limited.
+func TestChatRateLimitCoversChatSurface(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		router := setupFullRouter(t)
+		for i := 0; i < 10; i++ {
+			w, _ := get(t, router, "/chat-api/group-chat/group-list?metaId=unindexed")
+			if w.Code == http.StatusTooManyRequests {
+				t.Fatalf("disabled limiter returned 429 on request %d", i)
+			}
+		}
+	})
+
+	t.Run("enabled limits the compatibility group", func(t *testing.T) {
+		fixture := setupFullRouterFixtureWithConfig(t, func(cfg *config.Config) {
+			base := config.Default()
+			cfg.ChatRateLimit = base.ChatRateLimit
+			cfg.ChatRateLimit.Enabled = true
+			cfg.ChatRateLimit.RequestsPerSecond = 1
+			cfg.ChatRateLimit.Burst = 2
+		})
+		limited := 0
+		for i := 0; i < 6; i++ {
+			w, _ := get(t, fixture.router, "/chat-api/group-chat/group-list?metaId=unindexed")
+			if w.Code == http.StatusTooManyRequests {
+				limited++
+			} else if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+				t.Fatalf("group-list request %d: status = %d body=%s", i, w.Code, w.Body.String())
+			}
+		}
+		if limited == 0 {
+			t.Fatalf("enabled limiter never tripped on the compatibility group")
+		}
+		// Health must stay outside the chat limiter.
+		w, _ := get(t, fixture.router, "/healthz")
+		if w.Code != http.StatusOK {
+			t.Fatalf("healthz status = %d, want 200 (unlimited)", w.Code)
+		}
+	})
+
+	t.Run("enabled limits the direct socket presence routes", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.ChatRateLimit.Enabled = true
+		cfg.ChatRateLimit.RequestsPerSecond = 1
+		cfg.ChatRateLimit.Burst = 2
+		router, _ := setupPresenceRouterWithConfig(t, cfg, fakePresenceSnapshotProvider{snapshot: fakePresenceSnapshot()})
+
+		limited := 0
+		for i := 0; i < 6; i++ {
+			w, _ := get(t, router, "/chat-api/group-chat/socket/stats")
+			if w.Code == http.StatusTooManyRequests {
+				limited++
+			} else if w.Code != http.StatusOK {
+				t.Fatalf("stats request %d: status = %d body=%s", i, w.Code, w.Body.String())
+			}
+		}
+		if limited == 0 {
+			t.Fatalf("enabled limiter never tripped on the direct presence route")
+		}
+	})
 }

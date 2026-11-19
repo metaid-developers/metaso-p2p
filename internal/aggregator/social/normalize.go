@@ -66,3 +66,41 @@ func isLegacyHexMetaId(input string) bool {
 	_, err := hex.DecodeString(input)
 	return err == nil
 }
+
+// normalizeIdentityLocal is normalizeIdentity with the profile archive
+// restricted to the local reverse indexes (no remote fallback). Per-peer
+// graph resolution runs this variant: a peer whose profile is not locally
+// indexed stays a distinct unresolved form (§2.5) instead of paying a
+// doomed/slow remote lookup per peer per request.
+func (a *Aggregator) normalizeIdentityLocal(input string) (canonical string, ok bool, err error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", false, nil
+	}
+	if candidate := strings.ToLower(input); idaddress.ValidateIDAddress(candidate) {
+		return candidate, true, nil
+	}
+	if isLegacyHexMetaId(input) {
+		local := a.localProfileLookup()
+		if local == nil {
+			// No local-only view wired: fall back to the full lookup so
+			// behavior matches the pre-optional-interface wiring.
+			return a.normalizeIdentity(input)
+		}
+		ref, lookupErr := local.LookupLocalByMetaId(strings.ToLower(input))
+		if lookupErr != nil {
+			return "", false, unavailableWrap(lookupErr)
+		}
+		if ref == nil {
+			return "", false, nil
+		}
+		if globalMetaId := strings.TrimSpace(ref.GlobalMetaId); globalMetaId != "" {
+			return globalMetaId, true, nil
+		}
+		return "", false, nil
+	}
+	if converted, convErr := idaddress.ConvertFromBitcoin(input); convErr == nil && converted != "" {
+		return converted, true, nil
+	}
+	return "", false, nil
+}
