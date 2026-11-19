@@ -16,6 +16,12 @@ import (
 
 const defaultHeartbeatTimeout = 90 * time.Second
 
+// defaultIDChatSnapshotTTL bounds how long the idchat online-users snapshot is
+// served without a rebuild. It is short enough that presence stays near-real
+// time for a polling client, long enough to absorb poll bursts between
+// rebuilds.
+const defaultIDChatSnapshotTTL = 1500 * time.Millisecond
+
 // Server wraps the Socket.IO server with connection management and push capabilities.
 type Server struct {
 	ioServer            *sio.Server
@@ -32,6 +38,18 @@ type Server struct {
 
 	globalReaderMu sync.RWMutex
 	globalReader   presence.GlobalReader
+
+	// idchat online-users snapshot cache. Building the hydrated row set
+	// resolves a profile per online identity, which costs seconds at
+	// production scale while idchat clients poll the endpoint every few
+	// seconds. The full rebuild therefore runs in the background and
+	// requests serve the last completed snapshot (stale-while-revalidate).
+	idchatSnapMu      sync.RWMutex
+	idchatSnap        []idchatOnlineRow
+	idchatSnapAt      time.Time
+	idchatSnapshotTTL time.Duration
+	idchatRebuildCh   chan struct{}
+	idchatWorkerOnce  sync.Once
 }
 
 // PushEnvelope is the wire format for push messages, matching idchat's contract.
@@ -44,10 +62,12 @@ type PushEnvelope struct {
 // NewServer creates and configures a new Socket.IO server.
 func NewServer(cfg config.SocketConfig) *Server {
 	s := &Server{
-		manager: NewConnectionManager(cfg.MaxPCPerUser, cfg.MaxAppPerUser),
-		cfg:     cfg,
-		pushCh:  make(chan *PushEnvelope, 1024),
-		stopCh:  make(chan struct{}),
+		manager:           NewConnectionManager(cfg.MaxPCPerUser, cfg.MaxAppPerUser),
+		cfg:               cfg,
+		pushCh:            make(chan *PushEnvelope, 1024),
+		stopCh:            make(chan struct{}),
+		idchatSnapshotTTL: defaultIDChatSnapshotTTL,
+		idchatRebuildCh:   make(chan struct{}, 1),
 	}
 
 	// Create the underlying Socket.IO server.

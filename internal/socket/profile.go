@@ -25,6 +25,16 @@ type ProfileLookup interface {
 	LookupByAddress(address string) (*ProfileSnapshot, error)
 }
 
+// LocalIdentityLookup resolves a profile through locally indexed data only,
+// without any remote fallback. Presence hydration prefers it when the wired
+// lookup supports it: the remote fallback can be slow or unreachable (DNS
+// flaps included), and a per-row remote call on the online-users hot path is
+// unacceptable. A (nil, nil) result simply renders the row without profile
+// info.
+type LocalIdentityLookup interface {
+	LookupLocalByIdentity(identity string) (*ProfileSnapshot, error)
+}
+
 func (s *Server) hydrateOnlineEntries(items []OnlineEntry) []OnlineEntry {
 	if s == nil || s.profileLookup == nil {
 		return items
@@ -32,9 +42,19 @@ func (s *Server) hydrateOnlineEntries(items []OnlineEntry) []OnlineEntry {
 	// Enrich every online identity regardless of connection type (pc or app).
 	// The legacy idchat behavior resolved name/avatar for all connection types,
 	// since a device type only governs per-type connection caps, not presence
-	// display.
+	// display. Devices of the same identity share one memoized lookup.
+	memo := make(map[string]*ProfileSnapshot, len(items))
 	for i := range items {
-		profile := s.lookupPresenceProfile(items[i].MetaId)
+		id := strings.TrimSpace(items[i].MetaId)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(id)
+		profile, ok := memo[key]
+		if !ok {
+			profile = s.lookupPresenceProfile(id)
+			memo[key] = profile
+		}
 		if profile == nil {
 			continue
 		}
@@ -47,6 +67,16 @@ func (s *Server) hydrateOnlineEntries(items []OnlineEntry) []OnlineEntry {
 func (s *Server) lookupPresenceProfile(id string) *ProfileSnapshot {
 	id = strings.TrimSpace(id)
 	if id == "" || s == nil || s.profileLookup == nil {
+		return nil
+	}
+
+	// Local reverse-index resolution only, when available: presence rows are a
+	// hot path and must never block on the remote profile fallback.
+	if local, ok := s.profileLookup.(LocalIdentityLookup); ok {
+		profile, err := local.LookupLocalByIdentity(id)
+		if err == nil && profile != nil {
+			return profile
+		}
 		return nil
 	}
 

@@ -1336,3 +1336,113 @@ func TestDualPathRouting(t *testing.T) {
 // - TestTimeoutCleanup: stale connection cleanup
 // - TestMissingMetaIdRejection: connection without metaid rejected
 // - TestConcurrentConnections: concurrent connection handling
+
+// TestIdchatOnlineUsersSnapshotServesStaleAndRebuilds verifies the
+// stale-while-revalidate contract of the online-users snapshot: calls within
+// the TTL reuse the cached row set even after presence changed, and a call
+// after the TTL triggers a background rebuild that subsequent calls observe.
+func TestIdchatOnlineUsersSnapshotServesStaleAndRebuilds(t *testing.T) {
+	srv, router := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+	srv.idchatSnapshotTTL = 60 * time.Millisecond
+	router.GET("/chat-api/group-chat/socket/online-users", srv.HandleIdchatOnlineUsers)
+
+	now := time.Now().UnixMilli()
+	addServerTestConnection(srv, "idq1snapusera", ConnTypeApp, now-1000, now-500)
+
+	totalOf := func(body []byte) int {
+		var parsed struct {
+			Data struct {
+				Total int `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("decode response: %v body=%s", err, body)
+		}
+		return parsed.Data.Total
+	}
+
+	first := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?size=100")
+	if got := totalOf(first.Body.Bytes()); got != 1 {
+		t.Fatalf("first call total=%d, want 1 (cold build)", got)
+	}
+
+	// Within the TTL the snapshot is reused even though presence changed.
+	addServerTestConnection(srv, "idq1snapuserb", ConnTypeApp, now-900, now-400)
+	second := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?size=100")
+	if got := totalOf(second.Body.Bytes()); got != 1 {
+		t.Fatalf("second call total=%d, want 1 (fresh snapshot served)", got)
+	}
+
+	// After the TTL the stale snapshot is served while the worker rebuilds;
+	// the rebuild must eventually publish the new connection.
+	time.Sleep(2 * srv.idchatSnapshotTTL)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp := performRequest(t, router, "GET", "/chat-api/group-chat/socket/online-users?size=100")
+		if got := totalOf(resp.Body.Bytes()); got == 2 {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("snapshot did not rebuild to total=2 in time, last total=%d", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// localFirstProfileLookup implements both ProfileLookup and
+// LocalIdentityLookup with distinct answers, to prove presence hydration
+// prefers the local reverse-index path and never falls back to the remote
+// capable lookups for presence rows.
+type localFirstProfileLookup struct {
+	local  *ProfileSnapshot
+	global *ProfileSnapshot
+}
+
+func (f *localFirstProfileLookup) LookupLocalByIdentity(identity string) (*ProfileSnapshot, error) {
+	return f.local, nil
+}
+
+func (f *localFirstProfileLookup) LookupByMetaId(metaid string) (*ProfileSnapshot, error) {
+	return f.global, nil
+}
+
+func (f *localFirstProfileLookup) LookupByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error) {
+	return f.global, nil
+}
+
+func (f *localFirstProfileLookup) LookupByAddress(address string) (*ProfileSnapshot, error) {
+	return f.global, nil
+}
+
+// TestHydrateOnlineEntriesPrefersLocalLookup verifies the local-only presence
+// hydration contract: when the wired lookup supports LocalIdentityLookup its
+// answer wins, and a local miss renders the row without profile info even
+// though the remote-capable lookups would resolve one.
+func TestHydrateOnlineEntriesPrefersLocalLookup(t *testing.T) {
+	srv, _ := newTestRouter(t)
+	defer shutdownServerWithoutTestConnections(srv)
+
+	const id = "idq1localfirst"
+	srv.SetProfileLookup(&localFirstProfileLookup{
+		local:  &ProfileSnapshot{GlobalMetaId: id, Name: "Local Profile"},
+		global: &ProfileSnapshot{GlobalMetaId: id, Name: "Remote Profile"},
+	})
+
+	items := []OnlineEntry{{MetaId: id}}
+	hydrated := srv.hydrateOnlineEntries(items)
+	if len(hydrated) != 1 || hydrated[0].UserInfo == nil {
+		t.Fatalf("row not hydrated: %#v", hydrated)
+	}
+	if hydrated[0].UserInfo.Name != "Local Profile" {
+		t.Fatalf("hydration did not prefer the local lookup: %#v", hydrated[0].UserInfo)
+	}
+
+	srv.SetProfileLookup(&localFirstProfileLookup{
+		global: &ProfileSnapshot{GlobalMetaId: id, Name: "Remote Profile"},
+	})
+	items = []OnlineEntry{{MetaId: id}}
+	hydrated = srv.hydrateOnlineEntries(items)
+	if len(hydrated) != 1 || hydrated[0].UserInfo != nil {
+		t.Fatalf("local miss must render the row without profile info: %#v", hydrated)
+	}
+}

@@ -122,7 +122,10 @@ func (s *Server) HandleIdchatOnlineUsers(c *gin.Context) {
 	// but userInfo is omitted.
 	withUserInfo, _ := strconv.ParseBool(strings.TrimSpace(c.DefaultQuery("withUserInfo", "false")))
 
-	allRows := s.onlineRowsForIDChat(withUserInfo)
+	allRows := s.idchatOnlineRowsSnapshot()
+	if !withUserInfo {
+		allRows = stripIDChatRowProfiles(allRows)
+	}
 	total := len(allRows)
 	start := offset
 	if start > total {
@@ -232,8 +235,85 @@ func (s *Server) onlineItemsForIDChat(withUserInfo bool) []OnlineEntry {
 	return s.hydrateOnlineEntries(items)
 }
 
-func (s *Server) onlineRowsForIDChat(withUserInfo bool) []idchatOnlineRow {
-	items := s.onlineItemsForIDChat(withUserInfo)
+// idchatOnlineRowsSnapshot returns the cached, fully hydrated online-users
+// row set, kicking off a background rebuild once the snapshot is older than
+// the TTL (stale-while-revalidate). The first call after server start builds
+// inline so the response is never empty; later calls never block on a rebuild.
+func (s *Server) idchatOnlineRowsSnapshot() []idchatOnlineRow {
+	if s.idchatSnapshotTTL <= 0 {
+		return s.buildIDChatOnlineRows()
+	}
+	s.idchatSnapMu.RLock()
+	rows, builtAt := s.idchatSnap, s.idchatSnapAt
+	s.idchatSnapMu.RUnlock()
+	if rows != nil && time.Since(builtAt) < s.idchatSnapshotTTL {
+		return rows
+	}
+	s.startIDChatRebuildWorker()
+	if rows != nil {
+		// Serve the stale snapshot while the worker refreshes it.
+		s.kickIDChatRebuild()
+		return rows
+	}
+	// Cold start: build inline, single-flight via the write lock.
+	s.idchatSnapMu.Lock()
+	defer s.idchatSnapMu.Unlock()
+	if s.idchatSnap != nil {
+		return s.idchatSnap
+	}
+	rows = s.buildIDChatOnlineRows()
+	s.idchatSnap = rows
+	s.idchatSnapAt = time.Now()
+	return rows
+}
+
+func (s *Server) kickIDChatRebuild() {
+	select {
+	case s.idchatRebuildCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Server) startIDChatRebuildWorker() {
+	s.idchatWorkerOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-s.idchatRebuildCh:
+					rows := s.buildIDChatOnlineRows()
+					s.idchatSnapMu.Lock()
+					s.idchatSnap = rows
+					s.idchatSnapAt = time.Now()
+					s.idchatSnapMu.Unlock()
+				case <-s.stopCh:
+					return
+				}
+			}
+		}()
+	})
+}
+
+// stripIDChatRowProfiles returns shallow copies of the rows with profile info
+// omitted, matching the withUserInfo=false wire shape without mutating the
+// shared snapshot rows.
+func stripIDChatRowProfiles(rows []idchatOnlineRow) []idchatOnlineRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]idchatOnlineRow, len(rows))
+	for i, row := range rows {
+		row.UserInfo = nil
+		out[i] = row
+	}
+	return out
+}
+
+// buildIDChatOnlineRows builds the device-grouped online-users row set with
+// profile hydration. It is the expensive path (one profile resolution per
+// unique online identity), so it only runs on the cold first request or in
+// the background rebuild worker.
+func (s *Server) buildIDChatOnlineRows() []idchatOnlineRow {
+	items := s.onlineItemsForIDChat(true)
 	now := time.Now().UnixMilli()
 	rowsByIdentity := make(map[string]*idchatOnlineRow, len(items))
 

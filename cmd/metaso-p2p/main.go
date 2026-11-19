@@ -663,6 +663,16 @@ func (a *socketUserInfoLookupAdapter) LookupByAddress(address string) (*socket.P
 	return socketProfileFromUserInfo(p), err
 }
 
+// LookupLocalByIdentity resolves through the local reverse indexes only, so
+// presence hydration never blocks on the remote profile fallback.
+func (a *socketUserInfoLookupAdapter) LookupLocalByIdentity(identity string) (*socket.ProfileSnapshot, error) {
+	if a == nil || a.ui == nil {
+		return nil, nil
+	}
+	p, err := a.ui.LookupLocalByIdentity(identity)
+	return socketProfileFromUserInfo(p), err
+}
+
 func socketProfileFromUserInfo(p *userinfo.UserProfile) *socket.ProfileSnapshot {
 	if p == nil {
 		return nil
