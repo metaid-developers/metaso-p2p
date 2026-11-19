@@ -43,6 +43,15 @@ func SetupRouter(
 		})
 	})
 
+	// Chat-surface rate limiter (opt-in via config): one instance shared by
+	// the direct socket presence routes and the /chat-api compatibility
+	// group below. Generous per-identity budgets — mobile clients share
+	// NAT IPs and normal polling sits around 0.07 req/s per client.
+	var chatLimiter *RateLimiter
+	if cfg.ChatRateLimit.Enabled {
+		chatLimiter = NewRateLimiter(cfg.ChatRateLimit.RequestsPerSecond, cfg.ChatRateLimit.Burst)
+	}
+
 	// Socket.IO routes
 	if socketServer != nil {
 		handler := socketServer.Handler()
@@ -55,9 +64,16 @@ func SetupRouter(
 
 		// Presence routes
 		socketServer.RegisterPresenceRoutes(router, cfg.Federation.PresencePath)
-		router.GET("/chat-api/group-chat/socket/online-users", socketServer.HandleIdchatOnlineUsers)
-		router.GET("/chat-api/group-chat/socket/user-online", socketServer.HandleIdchatUserOnline)
-		router.GET("/chat-api/group-chat/socket/stats", socketServer.HandleOnlineStats)
+		registerChatPresenceRoute := func(path string, handler gin.HandlerFunc) {
+			if chatLimiter != nil {
+				router.GET(path, chatLimiter.Middleware(cfg.ChatRateLimit.Keys), handler)
+				return
+			}
+			router.GET(path, handler)
+		}
+		registerChatPresenceRoute("/chat-api/group-chat/socket/online-users", socketServer.HandleIdchatOnlineUsers)
+		registerChatPresenceRoute("/chat-api/group-chat/socket/user-online", socketServer.HandleIdchatUserOnline)
+		registerChatPresenceRoute("/chat-api/group-chat/socket/stats", socketServer.HandleOnlineStats)
 	}
 
 	// Aggregator routes (mounted under /api/ prefix for native metaso-p2p clients).
@@ -77,7 +93,13 @@ func SetupRouter(
 		// idchat's current runtime config builds chat HTTP URLs as
 		// `<metaSoBaseURL>/chat-api/group-chat/*`, so expose the existing group
 		// and private chat handlers under that compatibility prefix as well.
+		// The chat limiter (opt-in, generous per-identity budgets for NAT'd
+		// mobile clients) guards this surface; the direct socket presence
+		// routes above share the same limiter instance.
 		chatAPIGroup := router.Group("/chat-api")
+		if chatLimiter != nil {
+			chatAPIGroup.Use(chatLimiter.Middleware(cfg.ChatRateLimit.Keys))
+		}
 		for _, a := range aggRegistry.All() {
 			switch a.Name() {
 			case "groupchat", "privatechat":

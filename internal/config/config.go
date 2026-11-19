@@ -26,6 +26,7 @@ type Config struct {
 	BotHomepageV2Backfill BotHomepageV2BackfillConfig `json:"botHomepageV2Backfill"`
 	BlockBackfill         BlockBackfillConfig         `json:"blockBackfill"`
 	RateLimit             RateLimitConfig             `json:"rateLimit"`
+	ChatRateLimit         ChatRateLimit               `json:"chatRateLimit"`
 	ProtocolRegistry      ProtocolRegistryConfig      `json:"protocolRegistry"`
 	Mrc721                Mrc721Config                `json:"mrc721"`
 }
@@ -132,6 +133,15 @@ type RateLimitConfig struct {
 	Burst             int               `json:"burst"`
 	Keys              map[string]string `json:"keys"`
 }
+
+// ChatRateLimit configures the /chat-api compatibility-surface limiter —
+// the idchat group/private-chat routes plus the three direct
+// /chat-api/group-chat/socket/* presence routes (online-users included).
+// Same opt-in semantics as the /api limiter; the defaults are deliberately
+// generous because mobile clients share NAT IPs, so per-identity buckets
+// must not trip on normal polling (observed ~0.07 req/s per client).
+// Disabled by default; production arms it via env.
+type ChatRateLimit = RateLimitConfig
 
 // BotHubConfig holds the Bot Hub skill-service aggregator runtime knobs.
 // Today this is just the asset base URL — the place we resolve chain-
@@ -458,6 +468,12 @@ func Default() Config {
 			Burst:             20,
 			Keys:              map[string]string{},
 		},
+		ChatRateLimit: ChatRateLimit{
+			Enabled:           false,
+			RequestsPerSecond: 50,
+			Burst:             200,
+			Keys:              map[string]string{},
+		},
 		ProtocolRegistry: ProtocolRegistryConfig{
 			Blocklist:          nil,
 			OwnerBoundModifies: true,
@@ -577,6 +593,10 @@ func Load() (Config, error) {
 	applyFloatEnv("METASO_P2P_RATE_LIMIT_RPS", &cfg.RateLimit.RequestsPerSecond)
 	applyIntEnv("METASO_P2P_RATE_LIMIT_BURST", &cfg.RateLimit.Burst)
 	applyRateLimitKeysEnv("METASO_P2P_RATE_LIMIT_KEYS", cfg.RateLimit.Keys)
+	applyBoolEnv("METASO_P2P_CHAT_RATE_LIMIT_ENABLED", &cfg.ChatRateLimit.Enabled)
+	applyFloatEnv("METASO_P2P_CHAT_RATE_LIMIT_RPS", &cfg.ChatRateLimit.RequestsPerSecond)
+	applyIntEnv("METASO_P2P_CHAT_RATE_LIMIT_BURST", &cfg.ChatRateLimit.Burst)
+	applyRateLimitKeysEnv("METASO_P2P_CHAT_RATE_LIMIT_KEYS", cfg.ChatRateLimit.Keys)
 
 	applyStringSliceEnv("METASO_P2P_PROTOCOL_REGISTRY_BLOCKLIST", &cfg.ProtocolRegistry.Blocklist)
 	applyBoolEnv("METASO_P2P_PROTOCOL_OWNER_BOUND_MODIFIES", &cfg.ProtocolRegistry.OwnerBoundModifies)
