@@ -495,3 +495,106 @@ func TestScoreDocument_ProtocolPriorAppliedToFinalScore(t *testing.T) {
 		t.Fatalf("zero score with prior = %d, want 0", got)
 	}
 }
+
+// TestIndexedSearchPathMatchesReference proves the cached-index fast path
+// computes exactly what the reference raw-document path computes: identical
+// IDF weight vectors, identical per-document scores (relevance and newest
+// admission), over a corpus with CJK, latin, exact-phrase, and tag-only hits.
+func TestIndexedSearchPathMatchesReference(t *testing.T) {
+	docs := []metawebdoc.Document{
+		{ProtocolKey: "simplenote", SourcePinId: "pin1", CurrentPinId: "c1", CreatedAt: 100,
+			Title: "IDBots Beginner Tutorial", Tags: []string{"Tutorial", "metaid"}, Summary: "Getting started with MetaID", ContentExcerpt: "alpha other content"},
+		{ProtocolKey: "simplenote", SourcePinId: "pin2", CurrentPinId: "c2", CreatedAt: 110,
+			Title: "常见问题汇总", Tags: []string{"FAQ"}, Summary: "占卜塔罗牌入门", ContentExcerpt: "命运与塔罗牌的关系"},
+		{ProtocolKey: "simplebuzz", SourcePinId: "pin3", CurrentPinId: "c3", CreatedAt: 120,
+			Title: "random chatter", Summary: "metaid everywhere in every sentence", ContentExcerpt: "common words only"},
+		{ProtocolKey: "skill-service", SourcePinId: "pin4", CurrentPinId: "c4", CreatedAt: 130,
+			Title: "metaid skill", Summary: "unique offering", ContentExcerpt: "rare tokens here"},
+	}
+	sources := []DocumentSource{&fakeDocSource{docs: docs}}
+	agg := &Aggregator{}
+	agg.SetDocumentSources(sources...)
+
+	queries := []string{
+		"metaid",
+		"IDBots Beginner Tutorial",
+		"占卜 塔罗",
+		"tutorial alpha",
+		"everywhere",
+		"nothing matches this",
+	}
+	for _, query := range queries {
+		tokens := scoringTokens(tokenizeQuery(query))
+
+		refWeights := tokenIDFWeights(sources, tokens)
+		refScores := make([]int, len(docs))
+		for i := range docs {
+			refScores[i] = scoreDocument(&docs[i], tokens, weightsForProtocol(refWeights, docs[i].ProtocolKey, tokens), query)
+		}
+
+		indexes := agg.indexedSources()
+		idxWeights := tokenIDFWeightsIndexed(indexes, tokens)
+		if len(idxWeights) != len(refWeights) {
+			t.Fatalf("query %q: weight keys %v vs reference %v", query, idxWeights, refWeights)
+		}
+		for key, vec := range refWeights {
+			for j := range vec {
+				if idxWeights[key][j] != vec[j] {
+					t.Fatalf("query %q: key %s token %d weight %v vs reference %v", query, key, j, idxWeights[key][j], vec[j])
+				}
+			}
+		}
+
+		pos := 0
+		for _, index := range indexes {
+			for i := range index.docs {
+				entry := &index.docs[i]
+				idxScore := scoreIndexedDoc(entry, tokens, weightsForProtocol(idxWeights, entry.doc.ProtocolKey, tokens), query)
+				if idxScore != refScores[pos] {
+					t.Fatalf("query %q doc %d: indexed score %d vs reference %d", query, pos, idxScore, refScores[pos])
+				}
+				if indexedDocMatchesAny(entry, tokens) != documentMatchesAny(&docs[pos], tokens) {
+					t.Fatalf("query %q doc %d: newest admission mismatch", query, pos)
+				}
+				pos++
+			}
+		}
+	}
+}
+
+// TestIndexedSourcesRebuildsOnSnapshotChange proves the per-source index cache
+// invalidates when the source snapshot changes (copy-on-write swap) and reuses
+// the cached index when it did not.
+func TestIndexedSourcesRebuildsOnSnapshotChange(t *testing.T) {
+	docs := []metawebdoc.Document{
+		{ProtocolKey: "simplenote", SourcePinId: "pin1", CurrentPinId: "c1", CreatedAt: 100,
+			Title: "Alpha", Summary: "s", ContentExcerpt: "c"},
+	}
+	source := &fakeDocSource{docs: docs}
+	agg := &Aggregator{}
+	agg.SetDocumentSources(source)
+
+	first := agg.indexedSources()
+	if len(first) != 1 || len(first[0].docs) != 1 {
+		t.Fatalf("first index build: %+v", first)
+	}
+	firstIdx := first[0] // capture before a rebuild overwrites the slot
+	reused := agg.indexedSources()
+	if reused[0] != firstIdx {
+		t.Fatalf("unchanged snapshot must reuse the cached index")
+	}
+
+	source.docs = []metawebdoc.Document{
+		{ProtocolKey: "simplenote", SourcePinId: "pin1", CurrentPinId: "c1", CreatedAt: 100,
+			Title: "Alpha", Summary: "s", ContentExcerpt: "c"},
+		{ProtocolKey: "simplenote", SourcePinId: "pin2", CurrentPinId: "c2", CreatedAt: 120,
+			Title: "Beta", Summary: "s2", ContentExcerpt: "c2"},
+	}
+	rebuilt := agg.indexedSources()
+	if rebuilt[0] == firstIdx {
+		t.Fatalf("changed snapshot must rebuild the index")
+	}
+	if len(rebuilt[0].docs) != 2 {
+		t.Fatalf("rebuilt index has %d docs, want 2", len(rebuilt[0].docs))
+	}
+}

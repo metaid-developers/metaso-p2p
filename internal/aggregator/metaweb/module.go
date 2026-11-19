@@ -13,6 +13,7 @@
 package metaweb
 
 import (
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -115,7 +116,9 @@ type Aggregator struct {
 	freshCache         *freshResponseCache
 	versionCaches      versionCache
 	interactionSources []InboxSource
-	now                func() int64 // unix milliseconds; test hook
+	searchIndexMu      sync.Mutex
+	searchIndexes      []*searchIndex // parallel to sources; nil entry = not built
+	now                func() int64   // unix milliseconds; test hook
 }
 
 func (a *Aggregator) Name() string { return "metaweb" }
@@ -159,6 +162,7 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 // and skillservice).
 func (a *Aggregator) SetDocumentSources(sources ...DocumentSource) {
 	a.sources = sources
+	a.searchIndexes = make([]*searchIndex, len(sources))
 }
 
 func (a *Aggregator) SetProfileNamer(namer ProfileNamer) {

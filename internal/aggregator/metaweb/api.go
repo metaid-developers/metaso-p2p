@@ -78,23 +78,27 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	// yields no scoring tokens and therefore an empty result set.
 	tokens := scoringTokens(tokenizeQuery(params.query))
 
-	// Pass 1: lightweight IDF, document frequency counted per protocol key
-	// over the merged snapshot (all docs, unfiltered). Pass 2 below applies
-	// filters and computes the scores with each doc's own namespace weights.
-	weights := tokenIDFWeights(a.sources, tokens)
+	// The snapshot text index (lowercased fields + unions, cached per source
+	// snapshot) keeps both passes allocation-free: pass 1 counts document
+	// frequency per protocol key over all docs (unfiltered), pass 2 applies
+	// filters and scores from the precomputed fields. Same math as the
+	// reference scoreDocument/tokenIDFWeights path over raw documents.
+	indexes := a.indexedSources()
+
+	weights := tokenIDFWeightsIndexed(indexes, tokens)
 
 	matches := make([]scoredDoc, 0)
 
 	// Pass 2: score over one merged snapshot per request; filters apply
 	// before scoring. The snapshots are shared immutable slices read in
 	// place.
-	for _, source := range a.sources {
-		if source == nil {
+	for _, index := range indexes {
+		if index == nil {
 			continue
 		}
-		docs := source.SearchDocuments()
-		for i := range docs {
-			doc := docs[i]
+		for i := range index.docs {
+			entry := &index.docs[i]
+			doc := entry.doc
 			if params.protocols != nil {
 				if _, ok := params.protocols[doc.ProtocolKey]; !ok {
 					continue
@@ -113,16 +117,16 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			}
 			score := 0
 			if params.newest {
-				if !documentMatchesAny(&doc, tokens) {
+				if !indexedDocMatchesAny(entry, tokens) {
 					continue
 				}
 			} else {
-				score = scoreDocument(&doc, tokens, weightsForProtocol(weights, doc.ProtocolKey, tokens), params.query)
+				score = scoreIndexedDoc(entry, tokens, weightsForProtocol(weights, doc.ProtocolKey, tokens), params.query)
 				if score <= 0 {
 					continue
 				}
 			}
-			matches = append(matches, scoredDoc{doc: doc, score: score})
+			matches = append(matches, scoredDoc{doc: *doc, score: score})
 		}
 	}
 

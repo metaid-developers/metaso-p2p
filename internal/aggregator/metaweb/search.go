@@ -376,6 +376,108 @@ func containsAny(texts []string, token string) bool {
 	return false
 }
 
+// --- Indexed fast path -------------------------------------------------------
+//
+// The handler runs the search over the cached lowercased text index
+// (search_index.go) with the same math as the reference implementations above,
+// but without re-lowercasing or re-allocating per request: one pass counts
+// document frequencies over the precomputed unions, the second scores the
+// filtered documents from the precomputed fields. The equivalence test pins
+// the indexed path to the reference path.
+
+// tokenIDFWeightsIndexed is tokenIDFWeights over the cached index: the same
+// smooth IDF multiplier per protocol key, counted on the precomputed unions.
+func tokenIDFWeightsIndexed(indexes []*searchIndex, tokens []string) map[string][]float64 {
+	weights := make(map[string][]float64)
+	if len(tokens) == 0 {
+		return weights
+	}
+	df := make(map[string][]int)   // protocol key -> per-token document frequency
+	totals := make(map[string]int) // protocol key -> document count
+	for _, index := range indexes {
+		if index == nil {
+			continue
+		}
+		for i := range index.docs {
+			entry := &index.docs[i]
+			key := entry.doc.ProtocolKey
+			vec, ok := df[key]
+			if !ok {
+				vec = make([]int, len(tokens))
+				df[key] = vec
+			}
+			totals[key]++
+			for j, token := range tokens {
+				if tokenHitsText(entry.union, token) {
+					vec[j]++
+				}
+			}
+		}
+	}
+	for key, vec := range df {
+		total := totals[key]
+		w := make([]float64, len(tokens))
+		for j, token := range tokens {
+			weight := float64(tokenWeight(token))
+			if total > 0 && vec[j] > 0 {
+				weight *= math.Log1p(float64(total)/float64(vec[j])) / math.Log1p(float64(total))
+			}
+			w[j] = weight
+		}
+		weights[key] = w
+	}
+	return weights
+}
+
+// scoreIndexedDoc is scoreDocument over an indexed document: identical math,
+// using the precomputed lowercased fields.
+func scoreIndexedDoc(entry *indexedDoc, tokens []string, weights []float64, query string) int {
+	score := 0.0
+	for i, token := range tokens {
+		weight := weights[i]
+		if tokenHitsText(entry.title, token) {
+			score += weightTitle * weight
+		}
+		if tagsHit(entry.tags, token) {
+			score += weightTags * weight
+		}
+		if tokenHitsText(entry.summary, token) {
+			score += weightSummary * weight
+		}
+		if tokenHitsText(entry.content, token) {
+			score += weightContent * weight
+		}
+	}
+
+	if len(tokens) > 0 {
+		if trimmed := strings.ToLower(strings.TrimSpace(query)); trimmed != "" {
+			if strings.Contains(entry.title, trimmed) {
+				score += exactTitleBoost
+			}
+			if strings.Contains(entry.summary, trimmed) || containsAny(entry.tags, trimmed) || strings.Contains(entry.content, trimmed) {
+				score += exactOtherBoost
+			}
+		}
+	}
+	return int(score * protocolPrior(entry.doc.ProtocolKey))
+}
+
+// indexedDocMatchesAny is documentMatchesAny over an indexed document: the
+// sort=newest admission filter with identical semantics.
+func indexedDocMatchesAny(entry *indexedDoc, tokens []string) bool {
+	for _, token := range tokens {
+		if tokenHitsText(entry.title, token) || tokenHitsText(entry.summary, token) || tokenHitsText(entry.content, token) {
+			return true
+		}
+		for _, tag := range entry.tags {
+			if tokenHitsText(tag, token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Opaque offset cursor, same wire format as the MetaApp / MetaID / skill
 // service lists and botsearch: base64url(JSON {"o": offset}).
 type searchCursorPayload struct {
