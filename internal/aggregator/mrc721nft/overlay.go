@@ -283,12 +283,14 @@ func (e errOverlayInvalidField) Error() string { return e.msg }
 // firstSeenAt preserved when the same spending tx is re-observed.
 func (a *Aggregator) recordOverlaySpends(chainName string, tracked map[string]aggregator.TrackedOutput, spends map[string]aggregator.TransferNotice, now int64) {
 	a.overlayMu.Lock()
-	defer a.overlayMu.Unlock()
-	a.recordOverlaySpendsLocked(chainName, tracked, spends, now)
+	events := a.recordOverlaySpendsLocked(chainName, tracked, spends, now)
+	a.overlayMu.Unlock()
+	a.emitTransferEvents(events)
 }
 
 // recordOverlaySpendsLocked is the overlayMu-locked core of recordOverlaySpends.
-func (a *Aggregator) recordOverlaySpendsLocked(chainName string, tracked map[string]aggregator.TrackedOutput, spends map[string]aggregator.TransferNotice, now int64) {
+func (a *Aggregator) recordOverlaySpendsLocked(chainName string, tracked map[string]aggregator.TrackedOutput, spends map[string]aggregator.TransferNotice, now int64) []TransferEvent {
+	var events []TransferEvent
 	for outpoint, notice := range spends {
 		ref, ok := tracked[outpoint]
 		if !ok {
@@ -315,11 +317,29 @@ func (a *Aggregator) recordOverlaySpendsLocked(chainName string, tracked map[str
 		}
 		if existing := a.overlaySpends[outpoint]; existing != nil && existing.TxId == txId {
 			entry.FirstSeenAt = existing.FirstSeenAt // re-observation keeps first arrival
+		} else {
+			fromAddr := notice.FromAddress
+			if fromAddr == "" {
+				fromAddr = ref.Owner
+			}
+			events = append(events, TransferEvent{
+				ItemPinId:   ref.Ref,
+				FromAddress: fromAddr,
+				ToAddress:   notice.ToAddress,
+				NewOutpoint: notice.Output,
+				ChainName:   chainName,
+				Height:      -1,
+				TxId:        txId,
+				Time:        now,
+				Burned:      entry.Burned,
+				Confirmed:   false,
+			})
 		}
 		a.overlaySpends[outpoint] = entry
 		a.overlayTxids[txId] = entry.FirstSeenAt
 	}
 	a.evictOverlayCapLocked()
+	return events
 }
 
 // dropOverlayForTx is the confirmation handoff (R-F-8.1): after the block
@@ -365,7 +385,6 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 		return
 	}
 	a.overlayMu.Lock()
-	defer a.overlayMu.Unlock()
 	observed := make(map[string]struct{}, len(observedTxIDs))
 	for _, txid := range observedTxIDs {
 		observed[txid] = struct{}{}
@@ -379,8 +398,13 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 	for _, txid := range staleTxs {
 		a.dropOverlayForTxLocked(txid)
 	}
+	hook := a.overlayReconciledHook
+	a.overlayMu.Unlock()
 	if len(staleTxs) > 0 {
 		log.Printf("[mrc721nft] overlay reconcile (%s): evicted %d txid(s)", chainName, len(staleTxs))
+		if hook != nil {
+			hook()
+		}
 	}
 }
 

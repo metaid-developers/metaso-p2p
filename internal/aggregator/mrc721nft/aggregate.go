@@ -552,7 +552,8 @@ func (a *Aggregator) mintCommit(collectionName string, col *Collection, mint *Pe
 // pinIdByOutput maps outpoint → item pin id. Idempotent by
 // (itemPinId, height, txid): the same transfer event replayed through chain
 // re-index, dual-path delivery or backfill re-runs never double-counts.
-func (a *Aggregator) applyTransferHook(chainName string, height int64, transferMap map[string]*TransferInfo, pinIdByOutput map[string]string, transferTime int64) {
+func (a *Aggregator) applyTransferHook(chainName string, height int64, transferMap map[string]*TransferInfo, pinIdByOutput map[string]string, transferTime int64) []TransferEvent {
+	var events []TransferEvent
 	for output, info := range transferMap {
 		pinId := pinIdByOutput[output]
 		if pinId == "" {
@@ -569,6 +570,7 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 		if item == nil {
 			continue // not an MRC-721 item
 		}
+		prevOwner := item.OwnerAddress
 		if info.IsMeltdown || info.Address == "" {
 			// Meltdown: mark burned, drop from holder views, keep the
 			// history row for provenance.
@@ -594,6 +596,23 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 			continue
 		}
 		a.markTrackedDirty()
+		txId := info.Location
+		if idx := strings.Index(txId, ":"); idx >= 0 {
+			txId = txId[:idx]
+		}
+		events = append(events, TransferEvent{
+			ItemPinId:       pinId,
+			CollectionPinId: item.CollectionPinId,
+			FromAddress:     firstNonEmptyStr(info.FromAddress, prevOwner),
+			ToAddress:       info.Address,
+			NewOutpoint:     item.Output,
+			ChainName:       chainName,
+			Height:          height,
+			TxId:            txId,
+			Time:            transferTime,
+			Burned:          item.Burned,
+			Confirmed:       true,
+		})
 		if err := a.db.SaveItemTransfer(&ItemTransfer{
 			ItemPinId:   pinId,
 			FromAddress: info.FromAddress,
@@ -614,6 +633,16 @@ func (a *Aggregator) applyTransferHook(chainName string, height int64, transferM
 			}
 		}
 	}
+	return events
+}
+
+func firstNonEmptyStr(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ---------- pending replay ----------

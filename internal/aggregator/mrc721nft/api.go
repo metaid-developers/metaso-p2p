@@ -208,7 +208,9 @@ func (a *Aggregator) handleCollectionPageList(c *gin.Context) {
 				continue
 			}
 		}
-		dtos = append(dtos, a.collectionDTO(col))
+		dto := a.collectionDTO(col)
+		a.applyCollectionMarketFields(dto, col.PinId, opts)
+		dtos = append(dtos, dto)
 	}
 	// Overlay-created albums join the page (R-F-2 acceptance: search and
 	// page surfaces include the album within one poll), ordered after the
@@ -266,7 +268,9 @@ func (a *Aggregator) handleCollectionInfo(c *gin.Context) {
 		a.respondNoData(c)
 		return
 	}
-	a.respondOK(c, a.collectionDTO(col))
+	dto := a.collectionDTO(col)
+	a.applyCollectionMarketFields(dto, col.PinId, opts)
+	a.respondOK(c, dto)
 }
 
 func (a *Aggregator) handleCollectionItemsPageList(c *gin.Context) {
@@ -362,9 +366,15 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
-	address := c.Query("address")
-	if address == "" {
+	address := strings.TrimSpace(c.Query("address"))
+	globalMetaId := strings.TrimSpace(c.Query("globalMetaId"))
+	if address == "" && globalMetaId == "" {
 		a.respondParamError(c)
+		return
+	}
+	addresses := a.resolveQueryAddresses(address, globalMetaId)
+	if len(addresses) == 0 {
+		a.respondOK(c, gin.H{"list": []gin.H{}, "total": int64(0)})
 		return
 	}
 	// Dedup the held items into albums (keyed by collectionid — names are
@@ -372,16 +382,23 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 	// (ownnum).
 	holdCounts := make(map[string]int64)
 	var order []string
-	err := a.db.IterateOwnerItems(address, "", func(collectionPinId, itemPinId string) bool {
-		if _, seen := holdCounts[collectionPinId]; !seen {
-			order = append(order, collectionPinId)
+	seenItems := make(map[string]struct{})
+	for _, addr := range addresses {
+		err := a.db.IterateOwnerItems(addr, "", func(collectionPinId, itemPinId string) bool {
+			if _, ok := seenItems[itemPinId]; ok {
+				return true
+			}
+			seenItems[itemPinId] = struct{}{}
+			if _, seen := holdCounts[collectionPinId]; !seen {
+				order = append(order, collectionPinId)
+			}
+			holdCounts[collectionPinId]++
+			return true
+		})
+		if err != nil {
+			a.respondServiceError(c)
+			return
 		}
-		holdCounts[collectionPinId]++
-		return true
-	})
-	if err != nil {
-		a.respondServiceError(c)
-		return
 	}
 	opts := queryViewOptions(c)
 	tradeActive := a.zeroConfTradeActive(opts)
@@ -389,7 +406,9 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 		// Zero-conf holder view: fold the overlay ownership — hide albums
 		// whose items all moved away, add albums holding overlay items
 		// (overlay mints / staged mints / delivered spends).
-		a.foldHolderCollections(address, &order, holdCounts, opts)
+		for _, addr := range addresses {
+			a.foldHolderCollections(addr, &order, holdCounts, opts)
+		}
 	}
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	total := int64(len(order))
@@ -411,6 +430,7 @@ func (a *Aggregator) handleAddressCollection(c *gin.Context) {
 				continue
 			}
 			dto := a.collectionDTO(col)
+			a.applyCollectionMarketFields(dto, col.PinId, opts)
 			dto["ownnum"] = holdCounts[collectionPinId]
 			dtos = append(dtos, dto)
 		}
@@ -456,9 +476,15 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 		a.respondServiceError(c)
 		return
 	}
-	address := c.Query("address")
-	if address == "" {
+	address := strings.TrimSpace(c.Query("address"))
+	globalMetaId := strings.TrimSpace(c.Query("globalMetaId"))
+	if address == "" && globalMetaId == "" {
 		a.respondParamError(c)
+		return
+	}
+	addresses := a.resolveQueryAddresses(address, globalMetaId)
+	if len(addresses) == 0 {
+		a.respondOK(c, gin.H{"list": []gin.H{}, "total": int64(0)})
 		return
 	}
 	// Optional album filter: pinId = collectionid (exact), name = earliest
@@ -484,7 +510,19 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 		// Zero-conf holder view: base items whose overlay owner moved away
 		// hide, overlay-owned items (fresh mints, staged mints, delivered
 		// spends) join — any chain depth (R-F-3.2/3.3).
-		pinIds, total := a.holderItemPinIds(address, collectionFilter, opts)
+		var pinIds []string
+		seenPinIds := make(map[string]struct{})
+		for _, addr := range addresses {
+			ids, _ := a.holderItemPinIds(addr, collectionFilter, opts)
+			for _, id := range ids {
+				if _, ok := seenPinIds[id]; ok {
+					continue
+				}
+				seenPinIds[id] = struct{}{}
+				pinIds = append(pinIds, id)
+			}
+		}
+		total := int64(len(pinIds))
 		cursor, size := a.queryCursor(c), a.querySize(c)
 		dtos := make([]gin.H, 0)
 		start := cursor
@@ -506,23 +544,30 @@ func (a *Aggregator) handleAddressItem(c *gin.Context) {
 	cursor, size := a.queryCursor(c), a.querySize(c)
 	dtos := make([]gin.H, 0)
 	var total int64
-	err := a.db.IterateOwnerItems(address, collectionFilter, func(collectionPinId, itemPinId string) bool {
-		if total < cursor || total >= cursor+size {
+	seen := make(map[string]struct{})
+	for _, addr := range addresses {
+		err := a.db.IterateOwnerItems(addr, collectionFilter, func(collectionPinId, itemPinId string) bool {
+			if _, ok := seen[itemPinId]; ok {
+				return true
+			}
+			seen[itemPinId] = struct{}{}
+			if total < cursor || total >= cursor+size {
+				total++
+				return true
+			}
+			item, err := a.db.GetItem(itemPinId)
+			if err != nil || item == nil {
+				total++
+				return true
+			}
+			dtos = append(dtos, a.itemDTO(item))
 			total++
 			return true
+		})
+		if err != nil {
+			a.respondServiceError(c)
+			return
 		}
-		item, err := a.db.GetItem(itemPinId)
-		if err != nil || item == nil {
-			total++
-			return true
-		}
-		dtos = append(dtos, a.itemDTO(item))
-		total++
-		return true
-	})
-	if err != nil {
-		a.respondServiceError(c)
-		return
 	}
 	a.respondOK(c, gin.H{"list": dtos, "total": total})
 }
@@ -621,7 +666,9 @@ func (a *Aggregator) handleItemInfo(c *gin.Context) {
 	opts := queryViewOptions(c)
 	if a.zeroConfIssuanceActive(opts) {
 		if view := a.itemViewByPinId(pinId, opts); view != nil {
-			a.respondOK(c, a.itemViewDTO(view, opts))
+			dto := a.itemViewDTO(view, opts)
+			a.applyItemDetailFields(dto, view.item.ItemPinId, view.item.OwnerAddress, opts)
+			a.respondOK(c, dto)
 			return
 		}
 	}
@@ -641,6 +688,7 @@ func (a *Aggregator) handleItemInfo(c *gin.Context) {
 	if pt, _ := a.db.GetPendingTransfer(pinId); pt != nil {
 		data["pending"] = a.pendingTransferDTO(pt)
 	}
+	a.applyItemDetailFields(data, item.ItemPinId, item.OwnerAddress, opts)
 	a.respondOK(c, data)
 }
 

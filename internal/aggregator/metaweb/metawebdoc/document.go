@@ -29,25 +29,28 @@ const (
 
 // Protocol keys of the unified search contract.
 const (
-	KeySimpleNote     = "simplenote"
-	KeySimpleBuzz     = "simplebuzz"
-	KeyMetaApp        = "metaapp"
-	KeyMetaBotSkill   = "metabot-skill"
-	KeySkillService   = "skill-service"
-	KeyMetaProtocol   = "metaprotocol"
-	KeySimpleQuestion = "simplequestion"
-	KeySimpleAnswer   = "simpleanswer"
+	KeySimpleNote       = "simplenote"
+	KeySimpleBuzz       = "simplebuzz"
+	KeyMetaApp          = "metaapp"
+	KeyMetaBotSkill     = "metabot-skill"
+	KeySkillService     = "skill-service"
+	KeyMetaProtocol     = "metaprotocol"
+	KeySimpleQuestion   = "simplequestion"
+	KeySimpleAnswer     = "simpleanswer"
+	KeyMrc721Collection = "mrc721-collection"
+	KeyMrc721Listing    = "mrc721-listing"
 )
 
 var protocolKeysByPath = map[string]string{
-	PathSimpleNote:     KeySimpleNote,
-	PathSimpleBuzz:     KeySimpleBuzz,
-	PathMetaApp:        KeyMetaApp,
-	PathMetaBotSkill:   KeyMetaBotSkill,
-	PathSkillService:   KeySkillService,
-	PathMetaProtocol:   KeyMetaProtocol,
-	PathSimpleQuestion: KeySimpleQuestion,
-	PathSimpleAnswer:   KeySimpleAnswer,
+	PathSimpleNote:        KeySimpleNote,
+	PathSimpleBuzz:        KeySimpleBuzz,
+	PathMetaApp:           KeyMetaApp,
+	PathMetaBotSkill:      KeyMetaBotSkill,
+	PathSkillService:      KeySkillService,
+	PathMetaProtocol:      KeyMetaProtocol,
+	PathSimpleQuestion:    KeySimpleQuestion,
+	PathSimpleAnswer:      KeySimpleAnswer,
+	"/protocols/mrc721sell": KeyMrc721Listing,
 }
 
 // Document is one searchable projection of an indexed record. Derived fields
@@ -68,6 +71,10 @@ type Document struct {
 	CreatedAt             int64          `json:"createdAt"` // unix seconds
 	UpdatedAt             int64          `json:"updatedAt"` // unix seconds
 	Extra                 map[string]any `json:"extra"`
+	// Fingerprint is an optional internal version token (omitted from JSON)
+	// consumed by search index invalidation for live-changing projections
+	// whose CurrentPinId stays constant (e.g. mrc721-collection / mrc721-listing).
+	Fingerprint string `json:"-"`
 }
 
 // NormaliseProtocolPath lowercases a pin path and strips the trailing slash
@@ -94,8 +101,11 @@ func ProtocolKeyForPath(path string) string {
 	return base
 }
 
-// ValidProtocolKey reports whether key is one of the six v1 protocol keys.
+// ValidProtocolKey reports whether key is one of the supported unified-search protocol keys.
 func ValidProtocolKey(key string) bool {
+	if key == KeyMrc721Collection || key == KeyMrc721Listing {
+		return true
+	}
 	for _, known := range protocolKeysByPath {
 		if key == known {
 			return true

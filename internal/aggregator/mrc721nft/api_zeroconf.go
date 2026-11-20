@@ -70,6 +70,7 @@ func (a *Aggregator) collectionViewDTO(view *albumView, opts viewOptions) gin.H 
 		"genesisTx":        col.GenesisTx,
 	}
 	if !a.zeroConfIssuanceActive(opts) {
+		a.applyCollectionMarketFields(dto, col.PinId, opts)
 		return dto
 	}
 	dto["confirmed"] = view.confirmed
@@ -79,6 +80,7 @@ func (a *Aggregator) collectionViewDTO(view *albumView, opts viewOptions) gin.H 
 	if !view.confirmed {
 		dto["firstSeenAt"] = view.firstSeenAt
 	}
+	a.applyCollectionMarketFields(dto, col.PinId, opts)
 	return dto
 }
 

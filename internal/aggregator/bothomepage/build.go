@@ -56,6 +56,17 @@ type LocalProfileLookup interface {
 	LookupLocalByGlobalMetaId(globalMetaId string) (*ProfileSnapshot, error)
 }
 
+type OfficialBadgeProvider interface {
+	GetOfficialBotBadge(globalMetaId string) *OfficialBadge
+}
+
+func (a *Aggregator) resolveOfficialBadge(globalMetaId string) *OfficialBadge {
+	if a == nil || a.officialBadgeProvider == nil || strings.TrimSpace(globalMetaId) == "" {
+		return nil
+	}
+	return a.officialBadgeProvider.GetOfficialBotBadge(strings.TrimSpace(globalMetaId))
+}
+
 func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, error) {
 	requestGlobalMetaId = strings.TrimSpace(requestGlobalMetaId)
 	if requestGlobalMetaId == "" {
@@ -107,6 +118,7 @@ func (a *Aggregator) Build(requestGlobalMetaId string, opts Options) (*Data, err
 		Persona:       persona,
 		Homepage:      homepage,
 		Presence:      resolvedPresence,
+		OfficialBadge: a.resolveOfficialBadge(canonical.GlobalMetaId),
 		Services:      services,
 		Proofs:        proofs,
 		Source:        a.source(resolvedAt),

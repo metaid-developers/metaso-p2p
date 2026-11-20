@@ -52,6 +52,7 @@ func (a *Aggregator) loadV3FromCache(cacheKey string, includePresence bool) (*Da
 		MetaId:       cached.PresenceIdentity.MetaId,
 		Address:      cached.PresenceIdentity.Address,
 	}, includePresence)
+	cached.Data.OfficialBadge = a.resolveOfficialBadge(cached.Data.Identity.GlobalMetaId)
 	return &cached.Data, true
 }
 

@@ -49,9 +49,9 @@ type Mrc721Config struct {
 	Collection Mrc721CollectionConfig `json:"collection"`
 	// Nft enables the native /nft/mrc721 aggregate (collections, items,
 	// transfer provenance ported from man-p2p), which serves the
-	// manapi-compatible /api/mrc721 collection/item query surface. Keep it
-	// disabled until the historical bootstrap has run: the read models are
-	// empty and the collection search keeps its manapi-refreshed source.
+	// manapi-compatible /api/mrc721 collection/item query surface. Enabled by
+	// default so the market aggregation and ownership index are active out of
+	// the box.
 	Nft Mrc721NftConfig `json:"nft"`
 	// Offer enables the /protocols/mrc721offer passive-offer index (R-E,
 	// docs/nft-offer-protocol.md): ingest of the offer declaration log plus
@@ -494,7 +494,7 @@ func Default() Config {
 				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
 			Nft: Mrc721NftConfig{
-				Enabled:       false,
+				Enabled:       true,
 				MANAPIBaseURL: "https://manapi.metaid.io",
 			},
 			Offer: Mrc721OfferConfig{

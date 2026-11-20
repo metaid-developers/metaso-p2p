@@ -2,12 +2,13 @@ package bothomepage
 
 // DataV3 is the dedicated botHomepage.v3 response payload.
 type DataV3 struct {
-	SchemaVersion string      `json:"schemaVersion"`
-	Identity      IdentityV3  `json:"identity"`
-	Profile       ProfileV3   `json:"profile"`
-	Presence      Presence    `json:"presence"`
-	Sections      []SectionV3 `json:"sections"`
-	Warnings      []string    `json:"warnings"`
+	SchemaVersion string         `json:"schemaVersion"`
+	Identity      IdentityV3     `json:"identity"`
+	Profile       ProfileV3      `json:"profile"`
+	Presence      Presence       `json:"presence"`
+	OfficialBadge *OfficialBadge `json:"officialBadge"`
+	Sections      []SectionV3    `json:"sections"`
+	Warnings      []string       `json:"warnings"`
 }
 
 type IdentityV3 struct {

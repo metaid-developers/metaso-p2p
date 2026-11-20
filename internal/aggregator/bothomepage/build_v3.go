@@ -50,9 +50,10 @@ func (a *Aggregator) BuildV3(requestGlobalMetaId string, opts Options) (*DataV3,
 			LegacyMetaId: canonical.MetaId,
 			Display:      abbreviateGlobalMetaId(canonical.GlobalMetaId),
 		},
-		Profile:  outProfile,
-		Presence: a.resolvePresence(*profile, opts.IncludePresence),
-		Sections: sections,
+		Profile:       outProfile,
+		Presence:      a.resolvePresence(*profile, opts.IncludePresence),
+		OfficialBadge: a.resolveOfficialBadge(canonical.GlobalMetaId),
+		Sections:      sections,
 		Warnings: warnings,
 	}
 	a.storeV3Cache(buildV3CacheKey(requestGlobalMetaId, opts), result, profile)

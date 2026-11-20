@@ -46,16 +46,30 @@ type SkillLister interface {
 	PublishedServiceNames(providerGlobalMetaId string) ([]string, error)
 }
 
+// OfficialBadge is the CA-verified official bot badge projected onto bot search results.
+type OfficialBadge struct {
+	Verified   bool   `json:"verified"`
+	Role       string `json:"role"`
+	BadgeType  string `json:"badgeType"`
+	BadgeLabel string `json:"badgeLabel"`
+}
+
+// OfficialBadgeProvider resolves CA-verified official bot badges by globalMetaId.
+type OfficialBadgeProvider interface {
+	GetOfficialBotBadge(globalMetaId string) *OfficialBadge
+}
+
 // Aggregator is a read-only aggregator: HandleBlockPin/HandleMempoolPin are
 // no-ops and it owns no Pebble data.
 type Aggregator struct {
-	notifyCh       chan *aggregator.NotifyEvent
-	profiles       ProfileSource
-	history        GroupHistorySource
-	skills         SkillLister
-	localPresence  presence.LocalReader
-	globalPresence presence.GlobalReader
-	now            func() int64 // unix milliseconds; test hook
+	notifyCh              chan *aggregator.NotifyEvent
+	profiles              ProfileSource
+	history               GroupHistorySource
+	skills                SkillLister
+	officialBadgeProvider OfficialBadgeProvider
+	localPresence         presence.LocalReader
+	globalPresence        presence.GlobalReader
+	now                   func() int64 // unix milliseconds; test hook
 
 	// Search-input caches. A single /api/bots/search request previously paid
 	// the full corpus rebuild plus one group-history prefix scan per profile
@@ -213,6 +227,11 @@ func (a *Aggregator) SetGroupHistorySource(source GroupHistorySource) {
 
 func (a *Aggregator) SetSkillLister(lister SkillLister) {
 	a.skills = lister
+}
+
+// SetOfficialBadgeProvider wires the CA official-bot badge lookup.
+func (a *Aggregator) SetOfficialBadgeProvider(provider OfficialBadgeProvider) {
+	a.officialBadgeProvider = provider
 }
 
 // SetPresenceReaders injects the presence backends, mirroring the bothomepage

@@ -52,26 +52,41 @@ type UserProfile struct {
 	HomepageId        string `json:"homepageId,omitempty"`
 	Background        string `json:"background,omitempty"`
 	BackgroundId      string `json:"backgroundId,omitempty"`
-	ChatPublicKey     string `json:"chatpubkey,omitempty"`
-	ChatPublicKeyId   string `json:"chatpubkeyId,omitempty"`
-	ChainName         string `json:"chainName,omitempty"`
+	ChatPublicKey     string         `json:"chatpubkey,omitempty"`
+	ChatPublicKeyId   string         `json:"chatpubkeyId,omitempty"`
+	ChainName         string         `json:"chainName,omitempty"`
+	OfficialBadge     *OfficialBadge `json:"officialBadge"`
+}
+
+// OfficialBadge is the optional CA-verified badge projected onto /info/*.
+type OfficialBadge struct {
+	Verified   bool   `json:"verified"`
+	Role       string `json:"role"`
+	BadgeType  string `json:"badgeType"`
+	BadgeLabel string `json:"badgeLabel"`
+}
+
+// OfficialBadgeProvider resolves CA-verified official bot badges by globalMetaId.
+type OfficialBadgeProvider interface {
+	GetOfficialBotBadge(globalMetaId string) *OfficialBadge
 }
 
 // Aggregator indexes /info/* pins and serves user profile queries.
 type Aggregator struct {
-	store                *storage.PebbleStore
-	cache                *cache.Cache[[]byte]
-	notifyCh             chan *aggregator.NotifyEvent
-	remoteLookup         remoteProfileLookup
-	profileMode          string
-	allowRemoteFallback  bool
-	scanProfiles         func(func(*UserProfile) bool) (*UserProfile, error)
-	profileWriteMu       sync.Mutex
-	globalMetaIDPrefixMu sync.Mutex
-	profilesByIdentity   sync.Map
-	onProfileUpdated     func(string)
-	searchDocsMu         sync.RWMutex
-	searchDocs           map[string]*metaIDSearchDoc
+	store                 *storage.PebbleStore
+	cache                 *cache.Cache[[]byte]
+	notifyCh              chan *aggregator.NotifyEvent
+	remoteLookup          remoteProfileLookup
+	profileMode           string
+	allowRemoteFallback   bool
+	scanProfiles          func(func(*UserProfile) bool) (*UserProfile, error)
+	profileWriteMu        sync.Mutex
+	globalMetaIDPrefixMu  sync.Mutex
+	profilesByIdentity    sync.Map
+	onProfileUpdated      func(string)
+	officialBadgeProvider OfficialBadgeProvider
+	searchDocsMu          sync.RWMutex
+	searchDocs            map[string]*metaIDSearchDoc
 }
 
 const (
@@ -109,6 +124,24 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 // invalidate profile-derived caches after a committed profile change.
 func (a *Aggregator) SetProfileUpdatedHook(hook func(globalMetaID string)) {
 	a.onProfileUpdated = hook
+}
+
+// SetOfficialBadgeProvider wires the CA official-bot badge lookup for /info/* responses.
+func (a *Aggregator) SetOfficialBadgeProvider(provider OfficialBadgeProvider) {
+	a.officialBadgeProvider = provider
+}
+
+func (a *Aggregator) withOfficialBadge(profile *UserProfile) *UserProfile {
+	if profile == nil {
+		return nil
+	}
+	cp := *profile
+	if a != nil && a.officialBadgeProvider != nil && strings.TrimSpace(cp.GlobalMetaID) != "" {
+		cp.OfficialBadge = a.officialBadgeProvider.GetOfficialBotBadge(cp.GlobalMetaID)
+	} else {
+		cp.OfficialBadge = nil
+	}
+	return &cp
 }
 
 // HandleBlockPin processes /info/* and / (init) paths.
@@ -347,7 +380,7 @@ func (a *Aggregator) handleAddressInfo(c *gin.Context) {
 		return
 	}
 
-	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, a.withOfficialBadge(profile))
 }
 
 func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
@@ -369,7 +402,7 @@ func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 				if raw, err := json.Marshal(completed); err == nil {
 					a.cache.Set(cacheKey, raw, defaultTTL)
 				}
-				api.RespSuccessCode(c, api.MetaFileSuccessCode, completed)
+				api.RespSuccessCode(c, api.MetaFileSuccessCode, a.withOfficialBadge(completed))
 				return
 			}
 		}
@@ -386,7 +419,7 @@ func (a *Aggregator) handleMetaIdInfo(c *gin.Context) {
 		a.cache.Set(cacheKey, raw, defaultTTL)
 	}
 
-	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, a.withOfficialBadge(profile))
 }
 
 func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
@@ -403,7 +436,7 @@ func (a *Aggregator) handleGlobalMetaIdInfo(c *gin.Context) {
 		return
 	}
 
-	api.RespSuccessCode(c, api.MetaFileSuccessCode, profile)
+	api.RespSuccessCode(c, api.MetaFileSuccessCode, a.withOfficialBadge(profile))
 }
 
 // --- In-process lookup helpers ----------------------------------------------

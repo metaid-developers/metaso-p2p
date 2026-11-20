@@ -36,6 +36,17 @@ type SearchRow struct {
 	// pointer nils out on confirmed rows so their bytes stay unchanged).
 	Confirmed   *bool `json:"confirmed,omitempty"`
 	FirstSeenAt int64 `json:"firstSeenAt,omitempty"`
+
+	// Optional market & CA summary enrichment (P1-1), populated when wired
+	// and not suppressed by confirmedOnly=1.
+	CaVerified          *bool  `json:"caVerified,omitempty"`
+	CaDisplayTitle      string `json:"caDisplayTitle,omitempty"`
+	HolderCount         *int   `json:"holderCount,omitempty"`
+	ListedCount         *int   `json:"listedCount,omitempty"`
+	FloorPriceMeMilli   *int64 `json:"floorPriceMeMilli,omitempty"`
+	FloorPriceCnyCents  *int64 `json:"floorPriceCnyCents,omitempty"`
+	MedianPriceMeMilli  *int64 `json:"medianPriceMeMilli,omitempty"`
+	MedianPriceCnyCents *int64 `json:"medianPriceCnyCents,omitempty"`
 }
 
 func searchRowFrom(col *Collection) *SearchRow {
@@ -200,6 +211,26 @@ func (a *Aggregator) nativeRows(offset int64, size int, predicate func(*SearchRo
 		end = int64(total)
 	}
 	page := matches[offset:end]
+	if zeroConf && a.collectionMarketEnrich != nil {
+		for _, row := range page {
+			if row == nil || row.Pinid == "" {
+				continue
+			}
+			if fields := a.collectionMarketEnrich.EnrichCollection(row.Pinid); fields != nil {
+				ca := fields.CaVerified
+				hc := fields.HolderCount
+				lc := fields.ListedCount
+				row.CaVerified = &ca
+				row.CaDisplayTitle = fields.CaDisplayTitle
+				row.HolderCount = &hc
+				row.ListedCount = &lc
+				row.FloorPriceMeMilli = fields.FloorPriceMeMilli
+				row.FloorPriceCnyCents = fields.FloorPriceCnyCents
+				row.MedianPriceMeMilli = fields.MedianPriceMeMilli
+				row.MedianPriceCnyCents = fields.MedianPriceCnyCents
+			}
+		}
+	}
 	next := ""
 	if end < int64(total) && len(page) > 0 {
 		next = encodeSearchCursor(end)

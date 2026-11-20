@@ -133,7 +133,7 @@ func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transf
 		return
 	}
 	// man-p2p stamps the history rows with the processing time.
-	a.applyTransferHook(chainName, height, transferMap, pinIdByOutput, time.Now().Unix())
+	events := a.applyTransferHook(chainName, height, transferMap, pinIdByOutput, time.Now().Unix())
 	spentTxids := make([]string, 0, len(transferMap))
 	for _, info := range transferMap {
 		// Location is the "<ledgerTxid>:<vout>:<satOffset>" pointer; the
@@ -148,6 +148,7 @@ func (a *Aggregator) HandleBlockTransfers(chainName string, height int64, transf
 	for _, txid := range spentTxids {
 		a.dropOverlayForTx(txid)
 	}
+	a.emitTransferEvents(events)
 }
 
 // baseTrackedLocked rebuilds the confirmed-only tracked set (the lazy cache).
