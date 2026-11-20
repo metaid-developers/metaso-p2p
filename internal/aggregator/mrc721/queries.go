@@ -3,6 +3,7 @@ package mrc721
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -207,15 +208,48 @@ func (a *Aggregator) reconcileSellIntentReadState(rec *SellIntentRecord) *SellIn
 		return &cp
 	}
 	if nftReader != nil {
-		if owner, _, burned, found := nftReader.ItemOwnership(cp.ItemPinId, zeroConf); found {
+		if hasSubsequentTransfer(nftReader, &cp) {
+			cp.Active = false
+			cp.InactiveReason = "transferred"
+			return &cp
+		}
+		if owner, outpoint, burned, found := nftReader.ItemOwnership(cp.ItemPinId, zeroConf); found {
 			if burned || owner != cp.SellerAddress {
 				cp.Active = false
 				cp.InactiveReason = "transferred"
 				return &cp
 			}
+			if cp.ItemOutpoint != nil && cp.ItemOutpoint.TxID != "" && outpoint != "" {
+				declared := fmt.Sprintf("%s:%d", strings.ToLower(cp.ItemOutpoint.TxID), cp.ItemOutpoint.Vout)
+				if !strings.EqualFold(outpoint, declared) {
+					cp.Active = false
+					cp.InactiveReason = "transferred"
+					return &cp
+				}
+			}
 		}
 	}
 	return &cp
+}
+
+func hasSubsequentTransfer(nftReader NFTReader, rec *SellIntentRecord) bool {
+	if nftReader == nil || rec == nil {
+		return false
+	}
+	lastH, lastTime, _, count, found := nftReader.ItemLatestConfirmedTransfer(rec.ItemPinId)
+	if !found || count == 0 {
+		return false
+	}
+	if rec.Height > 0 {
+		if lastH > rec.Height {
+			return true
+		}
+		if lastH == rec.Height && lastTime > rec.UpdatedAt {
+			return true
+		}
+		return false
+	}
+	return rec.UpdatedAt > 0 && lastTime > rec.UpdatedAt
 }
 
 // mergeSellOverlay folds the sell declaration overlay into a newest-first

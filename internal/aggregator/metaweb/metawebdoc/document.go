@@ -71,6 +71,10 @@ type Document struct {
 	CreatedAt             int64          `json:"createdAt"` // unix seconds
 	UpdatedAt             int64          `json:"updatedAt"` // unix seconds
 	Extra                 map[string]any `json:"extra"`
+	// Fingerprint is an optional internal version token (omitted from JSON)
+	// consumed by search index invalidation for live-changing projections
+	// whose CurrentPinId stays constant (e.g. mrc721-collection / mrc721-listing).
+	Fingerprint string `json:"-"`
 }
 
 // NormaliseProtocolPath lowercases a pin path and strips the trailing slash

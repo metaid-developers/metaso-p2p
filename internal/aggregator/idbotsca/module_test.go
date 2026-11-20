@@ -186,3 +186,72 @@ func TestTrustedPublisherAcceptedAndForgedRejected(t *testing.T) {
 		t.Fatalf("unexpected CA registry payload counts: cols=%d bots=%d", len(resp.Data.Collections), len(resp.Data.OfficialBots))
 	}
 }
+
+func TestStaleMempoolCleanupAndOnChangeCallback(t *testing.T) {
+	store := storage.NewPebbleStore(t.TempDir())
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := int64(1760000000)
+	agg := &Aggregator{nowFn: func() int64 { return now }}
+	if err := agg.Init(store, nil); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	changes := 0
+	agg.SetOnChange(func() {
+		changes++
+	})
+
+	// 1. Confirmed pin at t=1000
+	_, err := agg.HandleBlockPin(makeCAPin(
+		"conf1i0", "create", OfficialMetaID, OfficialGlobalMetaID, OfficialMVCAddress, 100,
+		map[string]any{"collections": []map[string]any{{"collectionPinId": "colConf", "displayTitle": "Confirmed"}}},
+	))
+	if err != nil {
+		t.Fatalf("block pin: %v", err)
+	}
+	if changes != 1 {
+		t.Fatalf("expected 1 onChange after block pin, got %d", changes)
+	}
+
+	// 2. Mempool pin at t=1100 (Timestamp > confirmed)
+	mpPin := makeCAPin(
+		"mp1i0", "modify", OfficialMetaID, OfficialGlobalMetaID, OfficialMVCAddress, -1,
+		map[string]any{"collections": []map[string]any{{"collectionPinId": "colMem", "displayTitle": "Mempool"}}},
+	)
+	mpPin.Timestamp = 1760001000
+	if _, err := agg.HandleMempoolPin(mpPin); err != nil {
+		t.Fatalf("mempool pin: %v", err)
+	}
+	if ok, _ := agg.IsCollectionCertified("colMem"); !ok {
+		t.Fatal("expected mempool collection certified before timeout")
+	}
+
+	// Advance clock by 31 minutes -> stale mempool auto-cleaned on read and triggers onChange!
+	now += 31 * 60
+	if ok, _ := agg.IsCollectionCertified("colMem"); ok {
+		t.Fatal("expected stale mempool (>30m) evicted")
+	}
+	if ok, _ := agg.IsCollectionCertified("colConf"); !ok {
+		t.Fatal("expected confirmed registry restored after stale mempool eviction")
+	}
+	if changes < 3 {
+		t.Fatalf("expected onChange fired on eviction, got %d", changes)
+	}
+
+	// 3. Stale mempool with UpdatedAt < confirmed.UpdatedAt is evicted on read too.
+	agg.mu.Lock()
+	agg.mempool = &RegistrySnapshot{
+		Verified:  true,
+		PinId:     "oldmp1i0",
+		UpdatedAt: 100,
+		Collections: []CollectionCertEntry{{
+			CollectionPinId: "colStaleTs",
+		}},
+	}
+	agg.mempoolSeenAt = now
+	agg.rebuildEffectiveLocked()
+	agg.mu.Unlock()
+	if ok, _ := agg.IsCollectionCertified("colStaleTs"); ok {
+		t.Fatal("expected mempool with older UpdatedAt than confirmed to be evicted")
+	}
+}

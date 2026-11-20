@@ -274,6 +274,9 @@ func main() {
 			mrc721Agg = mrc721Candidate
 			if idbotscaAgg != nil {
 				mrc721Agg.SetCAReader(&mrc721CAAdapter{ca: idbotscaAgg})
+				idbotscaAgg.SetOnChange(func() {
+					mrc721Agg.RefreshMarketCache()
+				})
 			}
 			mrc721Agg.SetProfileReader(&mrc721ProfileAdapter{ui: userinfoAgg})
 		}
@@ -315,6 +318,7 @@ func main() {
 					mrc721Agg.SetItemCollectionSource(nftCandidate)
 					mrc721Agg.SetNFTReader(nftCandidate)
 					nftCandidate.SetTransferEventHook(mrc721Agg.OnItemTransferred)
+					nftCandidate.SetOverlayReconciledHook(mrc721Agg.RefreshMarketCache)
 					nftCandidate.SetCollectionMarketEnricher(mrc721Agg)
 					nftCandidate.SetItemDetailEnricher(mrc721Agg)
 				}
@@ -843,6 +847,17 @@ func (a *mrc721CAAdapter) IsCollectionCertified(collectionPinId string) (bool, s
 		title = entry.CollectionName
 	}
 	return true, title
+}
+
+func (a *mrc721CAAdapter) GetOfficialBotRole(globalMetaId string) (bool, string) {
+	if a == nil || a.ca == nil {
+		return false, ""
+	}
+	badge := a.ca.GetOfficialBotBadge(globalMetaId)
+	if badge == nil || !badge.Verified {
+		return false, ""
+	}
+	return true, badge.Role
 }
 
 type mrc721ProfileAdapter struct {

@@ -100,6 +100,8 @@ func docsFingerprint(docs []metawebdoc.Document) uint64 {
 		buf = append(buf, 0)
 		buf = append(buf, doc.CurrentPinId...)
 		buf = append(buf, 0)
+		buf = append(buf, doc.Fingerprint...)
+		buf = append(buf, 0)
 		buf = strconv.AppendUint(buf, uint64(doc.CreatedAt), 10)
 		buf = append(buf, 0x1e)
 		h.Write(buf)

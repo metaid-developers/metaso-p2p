@@ -264,6 +264,15 @@ type collectionRow struct {
 	Cover            string `json:"cover,omitempty"`
 	GenesisChainName string `json:"genesisChainName,omitempty"`
 	MintedCount      int64  `json:"mintedCount,omitempty"`
+
+	CaVerified          *bool  `json:"caVerified,omitempty"`
+	CaDisplayTitle      string `json:"caDisplayTitle,omitempty"`
+	HolderCount         *int   `json:"holderCount,omitempty"`
+	ListedCount         *int   `json:"listedCount,omitempty"`
+	FloorPriceMeMilli   *int64 `json:"floorPriceMeMilli,omitempty"`
+	FloorPriceCnyCents  *int64 `json:"floorPriceCnyCents,omitempty"`
+	MedianPriceMeMilli  *int64 `json:"medianPriceMeMilli,omitempty"`
+	MedianPriceCnyCents *int64 `json:"medianPriceCnyCents,omitempty"`
 }
 
 func collectionRowFrom(rec *CollectionRecord) *collectionRow {
@@ -318,7 +327,11 @@ func (a *Aggregator) handleCollectionSearch(c *gin.Context) {
 		respondMrc721Error(c, err)
 		return
 	}
-	respondMrc721OK(c, collectionPageData(page))
+	data := collectionPageData(page)
+	if !zeroConfOnly(c) {
+		a.enrichFallbackCollectionRows(data.List)
+	}
+	respondMrc721OK(c, data)
 }
 
 func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
@@ -351,7 +364,32 @@ func (a *Aggregator) handleAddressCollectionsIssued(c *gin.Context) {
 		respondMrc721Error(c, err)
 		return
 	}
-	respondMrc721OK(c, collectionPageData(page))
+	data := collectionPageData(page)
+	if !zeroConfOnly(c) {
+		a.enrichFallbackCollectionRows(data.List)
+	}
+	respondMrc721OK(c, data)
+}
+
+func (a *Aggregator) enrichFallbackCollectionRows(rows []*collectionRow) {
+	for _, row := range rows {
+		if row == nil || row.Pinid == "" {
+			continue
+		}
+		if fields := a.EnrichCollection(row.Pinid); fields != nil {
+			ca := fields.CaVerified
+			hc := fields.HolderCount
+			lc := fields.ListedCount
+			row.CaVerified = &ca
+			row.CaDisplayTitle = fields.CaDisplayTitle
+			row.HolderCount = &hc
+			row.ListedCount = &lc
+			row.FloorPriceMeMilli = fields.FloorPriceMeMilli
+			row.FloorPriceCnyCents = fields.FloorPriceCnyCents
+			row.MedianPriceMeMilli = fields.MedianPriceMeMilli
+			row.MedianPriceCnyCents = fields.MedianPriceCnyCents
+		}
+	}
 }
 
 // nativeCollectionPageData wraps native search rows in the same wire shape

@@ -86,6 +86,7 @@ type Aggregator struct {
 	// Cross-module hooks wired at daemon startup (main.go) without importing
 	// sibling aggregator packages.
 	transferEventHook      func(TransferEvent)
+	overlayReconciledHook  func()
 	addressResolver        AddressResolver
 	collectionMarketEnrich CellEnricherRef
 	itemDetailEnrich       ItemDetailEnricher

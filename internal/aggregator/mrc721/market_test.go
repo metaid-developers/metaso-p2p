@@ -19,11 +19,20 @@ import (
 
 type stubCA struct {
 	certified map[string]string
+	botRoles  map[string]string
 }
 
 func (s *stubCA) IsCollectionCertified(collectionPinId string) (bool, string) {
 	title, ok := s.certified[strings.ToLower(strings.TrimSpace(collectionPinId))]
 	return ok, title
+}
+
+func (s *stubCA) GetOfficialBotRole(globalMetaId string) (bool, string) {
+	if s.botRoles == nil {
+		return false, ""
+	}
+	role, ok := s.botRoles[strings.ToLower(strings.TrimSpace(globalMetaId))]
+	return ok, role
 }
 
 type stubProfiles struct {
@@ -73,6 +82,7 @@ func setupMarketFixture(t *testing.T) (*Aggregator, *mrc721nft.Aggregator, *gin.
 		t.Fatalf("init mrc721: %v", err)
 	}
 	agg.SetNFTReader(nftAgg)
+	agg.SetNativeCollectionSource(nftAgg)
 	nftAgg.SetTransferEventHook(agg.OnItemTransferred)
 	nftAgg.SetCollectionMarketEnricher(agg)
 	nftAgg.SetItemDetailEnricher(agg)
@@ -393,9 +403,10 @@ func TestMarketAggregationListingsHoldersTradesAndMetaweb(t *testing.T) {
 		Id:            testSellPinId("forged-trade", 0),
 		Path:          PathTrade,
 		Operation:     "create",
+		Address:       "1AttackerAddress11111111111111111",
 		GenesisHeight: 220,
 		Timestamp:     1760000800,
-		ContentBody: []byte(`{"txId":"` + saleTx + `","itemPinId":"` + item4 + `","buyerAddress":"1AttackerAddress11111111111111111","currency":"me","amountMilli":12450}`),
+		ContentBody:   []byte(`{"txId":"` + saleTx + `","itemPinId":"` + item4 + `","buyerAddress":"1AttackerAddress11111111111111111","currency":"me","amountMilli":12450}`),
 	}
 	nftAgg.HandleBlockTransfers("mvc", 220, map[string]aggregator.TransferNotice{
 		hexOf("xfer-item4") + ":0": {
@@ -413,9 +424,10 @@ func TestMarketAggregationListingsHoldersTradesAndMetaweb(t *testing.T) {
 		Id:            testSellPinId("valid-trade", 0),
 		Path:          PathTrade,
 		Operation:     "create",
+		Address:       testSeller2,
 		GenesisHeight: 221,
 		Timestamp:     1760000900,
-		ContentBody: []byte(`{"txId":"` + saleTx + `","itemPinId":"` + item4 + `","sellerAddress":"` + testSeller2 + `","buyerAddress":"` + testSeller1 + `","currency":"me","amountMilli":12450,"settledAt":1760000900,"verifiedSource":"abs_escrow"}`),
+		ContentBody:   []byte(`{"txId":"` + saleTx + `","itemPinId":"` + item4 + `","sellerAddress":"` + testSeller2 + `","buyerAddress":"` + testSeller1 + `","currency":"me","amountMilli":12450,"settledAt":1760000900,"verifiedSource":"abs_escrow"}`),
 	}
 	if _, err := agg.HandleBlockPin(validTrade); err != nil {
 		t.Fatalf("valid trade err: %v", err)
@@ -481,4 +493,417 @@ func TestMarketAggregationListingsHoldersTradesAndMetaweb(t *testing.T) {
 
 	// Keep unused idbotsca import honest if referenced in future extensions.
 	_ = idbotsca.PathCA
+}
+
+func TestP01MetawebCleanPinIdAndDynamicFingerprint(t *testing.T) {
+	agg, nftAgg, _ := setupMarketFixture(t)
+	item1, _, item3, _ := seedCollectionAndItems(t, nftAgg)
+
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("mw-sell1", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller1,
+		GenesisHeight: 210,
+		Timestamp:     1760000500,
+		ContentBody:   []byte(`{"itemPinId":"` + item1 + `","sellerAddress":"` + testSeller1 + `","active":true,"prices":{"me":{"amountMilli":15000}}}`),
+	}); err != nil {
+		t.Fatalf("sell1: %v", err)
+	}
+
+	mw := &metaweb.Aggregator{}
+	if err := mw.Init(storage.NewPebbleStore(t.TempDir()), nil); err != nil {
+		t.Fatalf("init metaweb: %v", err)
+	}
+	mw.SetDocumentSources(agg)
+	mwRouter := gin.New()
+	mw.RegisterRoutes(mwRouter.Group("/api"))
+
+	queryMetaweb := func(proto string) []struct {
+		Protocol     string   `json:"protocol"`
+		PinId        string   `json:"pinId"`
+		CurrentPinId string   `json:"currentPinId"`
+		Summary      string   `json:"summary"`
+		Tags         []string `json:"tags"`
+		Links        struct {
+			Pin string `json:"pin"`
+		} `json:"links"`
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/metaweb/search?q=MetaBot&protocols="+proto, nil)
+		rec := httptest.NewRecorder()
+		mwRouter.ServeHTTP(rec, req)
+		var resp struct {
+			Code int `json:"code"`
+			Data struct {
+				Items []struct {
+					Protocol     string   `json:"protocol"`
+					PinId        string   `json:"pinId"`
+					CurrentPinId string   `json:"currentPinId"`
+					Summary      string   `json:"summary"`
+					Tags         []string `json:"tags"`
+					Links        struct {
+						Pin string `json:"pin"`
+					} `json:"links"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Code != 0 {
+			t.Fatalf("metaweb query failed: err=%v code=%d raw=%s", err, resp.Code, rec.Body.String())
+		}
+		return resp.Data.Items
+	}
+
+	colItems := queryMetaweb("mrc721-collection")
+	if len(colItems) != 1 {
+		t.Fatalf("expected 1 collection doc, got %+v", colItems)
+	}
+	if colItems[0].PinId != testCollection || colItems[0].CurrentPinId != testCollection || strings.Contains(colItems[0].CurrentPinId, "#") {
+		t.Fatalf("dirty currentPinId on collection: %+v", colItems[0])
+	}
+	if colItems[0].Links.Pin != "/api/metaweb/pin/"+testCollection {
+		t.Fatalf("unexpected links.pin: %s", colItems[0].Links.Pin)
+	}
+	if !strings.Contains(colItems[0].Summary, "floor 15.000 ME") {
+		t.Fatalf("expected initial floor summary, got %q", colItems[0].Summary)
+	}
+
+	// Add a lower floor listing from seller2 (currently offline), then flip seller2 online.
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("mw-sell2", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller2,
+		GenesisHeight: 211,
+		Timestamp:     1760000600,
+		ContentBody:   []byte(`{"itemPinId":"` + item3 + `","sellerAddress":"` + testSeller2 + `","active":true,"prices":{"me":{"amountMilli":8000}}}`),
+	}); err != nil {
+		t.Fatalf("sell2: %v", err)
+	}
+
+	colItems2 := queryMetaweb("mrc721-collection")
+	if !strings.Contains(colItems2[0].Summary, "floor 8.000 ME") {
+		t.Fatalf("expected updated floor summary after new listing, got %q", colItems2[0].Summary)
+	}
+
+	// Flip seller1/seller2 online -> mrc721-listing index fingerprint must invalidate and show "online" tag.
+	// First check item3 owned by seller2 (initially offline).
+	agg.SetPresenceReader(&stubPresence{online: map[string]int64{
+		"idq1sellerone000000000000000000000000000000": 5,
+		"idq1sellertwo000000000000000000000000000000": 2,
+	}})
+	listItems := queryMetaweb("mrc721-listing")
+	foundOnline := false
+	for _, it := range listItems {
+		if strings.Contains(it.Summary, "8.000 ME") {
+			for _, tag := range it.Tags {
+				if tag == "online" {
+					foundOnline = true
+				}
+			}
+		}
+	}
+	if !foundOnline {
+		t.Fatalf("expected mrc721-listing index rebuild with online tag, got %+v", listItems)
+	}
+}
+
+func TestP02TradePublisherAuthImplicitUpgradeAndZeroConf(t *testing.T) {
+	agg, nftAgg, router := setupMarketFixture(t)
+	item1, _, item3, _ := seedCollectionAndItems(t, nftAgg)
+
+	const escrowBotGID = "idq1escrowbot0000000000000000000000000000000"
+	agg.SetCAReader(&stubCA{
+		certified: map[string]string{strings.ToLower(testCollection): "MetaBot Genesis"},
+		botRoles:  map[string]string{escrowBotGID: "escrow_guarantor"},
+	})
+
+	// 1. Seed active offer on item3 (owned by testSeller2), then settle on-chain -> implicit chain_offer trade.
+	if _, err := agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("offer-item3", 0),
+		Path:          PathOffer,
+		Operation:     "create",
+		Address:       testSeller2,
+		GenesisHeight: 210,
+		Timestamp:     1760000400,
+		ContentBody:   []byte(`{"itemPinId":"` + item3 + `","active":true,"priceSats":500000,"offerTx":"deadbeef"}`),
+	}); err != nil {
+		t.Fatalf("offer pin: %v", err)
+	}
+	saleTx1 := hexOf("item3-confirmed-sale")
+	nftAgg.HandleBlockTransfers("mvc", 215, map[string]aggregator.TransferNotice{
+		hexOf("xfer-item3") + ":0": {
+			FromAddress: testSeller2,
+			ToAddress:   testSeller1,
+			Output:      saleTx1 + ":0",
+			OutputValue: 1000,
+			Location:    saleTx1 + ":0:0",
+		},
+	})
+
+	// 2. Unauthorized third party tries to hijack saleTx1 with fake price -> MUST be rejected.
+	hijackTrade := &aggregator.PinInscription{
+		Id:            testSellPinId("hijack-trade", 0),
+		Path:          PathTrade,
+		Operation:     "create",
+		Address:       "1RandomAttackerAddr1111111111111111",
+		GlobalMetaId:  "idq1attacker000000000000000000000000000000",
+		GenesisHeight: 216,
+		Timestamp:     1760000500,
+		ContentBody:   []byte(`{"txId":"` + saleTx1 + `","itemPinId":"` + item3 + `","sellerAddress":"` + testSeller2 + `","buyerAddress":"` + testSeller1 + `","currency":"me","amountMilli":99999999}`),
+	}
+	if _, err := agg.HandleBlockPin(hijackTrade); err != nil {
+		t.Fatalf("hijack trade err: %v", err)
+	}
+	_, sumEnv1 := doMrc721Request(t, router, "/api/mrc721/market/collection/"+testCollection+"/summary")
+	var sum1 CollectionMarketSummary
+	_ = json.Unmarshal(sumEnv1.Data, &sum1)
+	if sum1.TradeStats.TotalTrades != 1 || sum1.TradeStats.VolumeMeMilli24h != 0 {
+		t.Fatalf("hijack polluted tradeStats: %+v", sum1.TradeStats)
+	}
+
+	// 3. Authorized CA escrow_guarantor broadcasts real receipt -> upgrades implicit chain_offer idempotently!
+	escrowReceipt := &aggregator.PinInscription{
+		Id:            testSellPinId("escrow-trade", 0),
+		Path:          PathTrade,
+		Operation:     "create",
+		GlobalMetaId:  escrowBotGID,
+		GenesisHeight: 217,
+		Timestamp:     1760000600,
+		ContentBody:   []byte(`{"txId":"` + saleTx1 + `","itemPinId":"` + item3 + `","sellerAddress":"` + testSeller2 + `","buyerAddress":"` + testSeller1 + `","currency":"me","amountMilli":14000,"settledAt":1760000600,"verifiedSource":"abs_escrow"}`),
+	}
+	if _, err := agg.HandleBlockPin(escrowReceipt); err != nil {
+		t.Fatalf("escrow receipt err: %v", err)
+	}
+	_, sumEnv2 := doMrc721Request(t, router, "/api/mrc721/market/collection/"+testCollection+"/summary")
+	var sum2 CollectionMarketSummary
+	_ = json.Unmarshal(sumEnv2.Data, &sum2)
+	if sum2.TradeStats.TotalTrades != 1 || sum2.TradeStats.VolumeMeMilli24h != 14000 || sum2.TradeStats.LastSalePriceMeMilli == nil || *sum2.TradeStats.LastSalePriceMeMilli != 14000 {
+		t.Fatalf("expected upgraded trade without double-count, got %+v", sum2.TradeStats)
+	}
+
+	// 4. 0-conf transfer + 0-conf mrc721trade visible immediately, hidden with confirmedOnly=1, deduplicated on confirm.
+	mempoolSaleTx := hexOf("item1-mempool-sale")
+	nftAgg.HandleMempoolSpendsIncremental("mvc", map[string]aggregator.TransferNotice{
+		hexOf("item1") + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      mempoolSaleTx + ":0",
+			OutputValue: 1000,
+			Location:    mempoolSaleTx + ":0:0",
+		},
+	})
+	mempoolTradePin := &aggregator.PinInscription{
+		Id:            testSellPinId("mp-trade1", 0),
+		Path:          PathTrade,
+		Operation:     "create",
+		Address:       testSeller1, // real seller
+		GenesisHeight: -1,
+		Timestamp:     1760000700,
+		ContentBody:   []byte(`{"txId":"` + mempoolSaleTx + `","itemPinId":"` + item1 + `","sellerAddress":"` + testSeller1 + `","buyerAddress":"` + testSeller2 + `","currency":"me","amountMilli":18000,"settledAt":1760000700}`),
+	}
+	if _, err := agg.HandleMempoolPin(mempoolTradePin); err != nil {
+		t.Fatalf("mempool trade pin err: %v", err)
+	}
+
+	_, tradesAllEnv := doMrc721Request(t, router, "/api/mrc721/market/trades?collectionPinId="+url.QueryEscape(testCollection))
+	var tradesAll struct {
+		List  []TradeRecord `json:"list"`
+		Total int           `json:"total"`
+	}
+	_ = json.Unmarshal(tradesAllEnv.Data, &tradesAll)
+	if tradesAll.Total != 2 || tradesAll.List[0].TxId != mempoolSaleTx || tradesAll.List[0].Confirmed {
+		t.Fatalf("expected 0-conf trade first with confirmed=false, got %+v", tradesAll)
+	}
+
+	_, tradesConfEnv := doMrc721Request(t, router, "/api/mrc721/market/trades?confirmedOnly=1&collectionPinId="+url.QueryEscape(testCollection))
+	var tradesConf struct {
+		List  []TradeRecord `json:"list"`
+		Total int           `json:"total"`
+	}
+	_ = json.Unmarshal(tradesConfEnv.Data, &tradesConf)
+	if tradesConf.Total != 1 || tradesConf.List[0].TxId != saleTx1 {
+		t.Fatalf("expected confirmedOnly=1 to exclude 0-conf trade, got %+v", tradesConf)
+	}
+
+	// Confirm both transfer & trade pin on-chain -> deduplicated cleanly with confirmed=true.
+	nftAgg.HandleBlockTransfers("mvc", 218, map[string]aggregator.TransferNotice{
+		hexOf("item1") + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      mempoolSaleTx + ":0",
+			OutputValue: 1000,
+			Location:    mempoolSaleTx + ":0:0",
+		},
+	})
+	mempoolTradePin.GenesisHeight = 218
+	if _, err := agg.HandleBlockPin(mempoolTradePin); err != nil {
+		t.Fatalf("confirm trade pin: %v", err)
+	}
+	_, tradesAfterConf := doMrc721Request(t, router, "/api/mrc721/market/trades?confirmedOnly=1&collectionPinId="+url.QueryEscape(testCollection))
+	_ = json.Unmarshal(tradesAfterConf.Data, &tradesConf)
+	if tradesConf.Total != 2 || !tradesConf.List[0].Confirmed {
+		t.Fatalf("expected 2 confirmed trades after block confirmation, got %+v", tradesConf)
+	}
+}
+
+func TestP03TransferAfterSellOutOfOrderAndMempoolEviction(t *testing.T) {
+	agg, nftAgg, router := setupMarketFixture(t)
+	item1, _, _, _ := seedCollectionAndItems(t, nftAgg)
+
+	txAB := hexOf("tx-a-to-b")
+	txBA := hexOf("tx-b-to-a")
+
+	// 1. Confirmed transfer A->B at H=105, then B->A at H=106 (item1 minted at H=102).
+	nftAgg.HandleBlockTransfers("mvc", 105, map[string]aggregator.TransferNotice{
+		hexOf("item1") + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      txAB + ":0",
+			OutputValue: 1000,
+			Location:    txAB + ":0:0",
+		},
+	})
+	nftAgg.HandleBlockTransfers("mvc", 106, map[string]aggregator.TransferNotice{
+		txAB + ":0": {
+			FromAddress: testSeller2,
+			ToAddress:   testSeller1,
+			Output:      txBA + ":0",
+			OutputValue: 1000,
+			Location:    txBA + ":0:0",
+		},
+	})
+
+	// 2. Out-of-order replay of old sell pin at H=104 (without itemOutpoint) MUST stay inactive!
+	oldSell := &aggregator.PinInscription{
+		Id:            testSellPinId("old-sell-h104", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller1,
+		GenesisHeight: 104,
+		Timestamp:     1760000100,
+		ContentBody:   []byte(`{"itemPinId":"` + item1 + `","sellerAddress":"` + testSeller1 + `","active":true,"prices":{"me":{"amountMilli":10000}}}`),
+	}
+	if _, err := agg.HandleBlockPin(oldSell); err != nil {
+		t.Fatalf("replay old sell: %v", err)
+	}
+	info, err := agg.SellIntentInfo(item1)
+	if err != nil || info == nil || info.Active || info.InactiveReason != "transferred" {
+		t.Fatalf("expected H=104 replayed sell to stay transferred-invalid, got %+v (err=%v)", info, err)
+	}
+	if info.ItemOutpoint != nil && info.ItemOutpoint.TxID == txBA {
+		t.Fatalf("must not backfill H=106 outpoint onto H=104 sell intent: %+v", info.ItemOutpoint)
+	}
+
+	// 3. New sell pin at H=107 after return transfer MUST be active!
+	newSell := &aggregator.PinInscription{
+		Id:            testSellPinId("new-sell-h107", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller1,
+		GenesisHeight: 107,
+		Timestamp:     1760000300,
+		ContentBody:   []byte(`{"itemPinId":"` + item1 + `","sellerAddress":"` + testSeller1 + `","active":true,"prices":{"me":{"amountMilli":11000}}}`),
+	}
+	if _, err := agg.HandleBlockPin(newSell); err != nil {
+		t.Fatalf("new sell h107: %v", err)
+	}
+	info2, _ := agg.SellIntentInfo(item1)
+	if info2 == nil || !info2.Active {
+		t.Fatalf("expected H=107 sell intent active, got %+v", info2)
+	}
+
+	// 4. 0-conf mempool transfer invalidates listing temporarily; evicting mempool tx restores it!
+	txMempool := hexOf("tx-mempool-drop")
+	nftAgg.HandleMempoolSpendsIncremental("mvc", map[string]aggregator.TransferNotice{
+		txBA + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      txMempool + ":0",
+			OutputValue: 1000,
+			Location:    txMempool + ":0:0",
+		},
+	})
+	_, listDuringMP := doMrc721Request(t, router, "/api/mrc721/market/listings?collectionPinId="+url.QueryEscape(testCollection))
+	var mpData struct {
+		Total int `json:"total"`
+	}
+	_ = json.Unmarshal(listDuringMP.Data, &mpData)
+	if mpData.Total != 0 {
+		t.Fatalf("expected 0 active listings during 0-conf transfer, got %d", mpData.Total)
+	}
+
+	// Mempool drops txMempool -> listing must recover!
+	nftAgg.ReconcileMempoolRound("mvc", []string{})
+	_, listAfterEvict := doMrc721Request(t, router, "/api/mrc721/market/listings?collectionPinId="+url.QueryEscape(testCollection))
+	_ = json.Unmarshal(listAfterEvict.Data, &mpData)
+	if mpData.Total != 1 {
+		t.Fatalf("expected listing to recover after mempool eviction, got total=%d", mpData.Total)
+	}
+}
+
+func TestP11SummaryBurnedCountSearchRowsAndListingAliases(t *testing.T) {
+	agg, nftAgg, router := setupMarketFixture(t)
+	item1, item2, item3, _ := seedCollectionAndItems(t, nftAgg)
+
+	// Burn item3 so burnedCount == 1.
+	nftAgg.HandleBlockTransfers("mvc", 205, map[string]aggregator.TransferNotice{
+		hexOf("xfer-item3") + ":0": {
+			FromAddress: testSeller2,
+			ToAddress:   "",
+			Output:      hexOf("burn-item3") + ":0",
+			Location:    hexOf("burn-item3") + ":0:0",
+			Meltdown:    true,
+		},
+	})
+	_ = item3
+
+	_, _ = agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("p11-s1", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller1,
+		GenesisHeight: 210,
+		Timestamp:     1760000500,
+		ContentBody:   []byte(`{"itemPinId":"` + item1 + `","sellerAddress":"` + testSeller1 + `","active":true,"prices":{"me":{"amountMilli":15000},"fiat":{"currency":"CNY","amountCents":900}},"autoFulfillMe":true,"negotiable":true,"shopMetaAppPinId":"shoppin111i0"}`),
+	})
+	_, _ = agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("p11-s2", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller1,
+		GenesisHeight: 211,
+		Timestamp:     1760000600,
+		ContentBody:   []byte(`{"itemPinId":"` + item2 + `","sellerAddress":"` + testSeller1 + `","active":true,"prices":{"me":{"amountMilli":9000},"fiat":{"currency":"CNY","amountCents":1200}},"autoFulfillMe":false,"negotiable":false,"shopMetaAppPinId":"shoppin222i0"}`),
+	})
+
+	// 1. burnedCount in summary
+	_, sumEnv := doMrc721Request(t, router, "/api/mrc721/market/collection/"+testCollection+"/summary")
+	var summary CollectionMarketSummary
+	_ = json.Unmarshal(sumEnv.Data, &summary)
+	if summary.BurnedCount != 1 {
+		t.Fatalf("expected burnedCount=1, got %d", summary.BurnedCount)
+	}
+
+	// 2. /api/mrc721/collection/search carries market & CA enrichment fields
+	_, searchEnv := doMrc721Request(t, router, "/api/mrc721/collection/search?keyword=MetaBot")
+	var searchPage struct {
+		List []mrc721nft.SearchRow `json:"list"`
+	}
+	_ = json.Unmarshal(searchEnv.Data, &searchPage)
+	if len(searchPage.List) != 1 || searchPage.List[0].CaVerified == nil || !*searchPage.List[0].CaVerified ||
+		searchPage.List[0].ListedCount == nil || *searchPage.List[0].ListedCount != 2 ||
+		searchPage.List[0].FloorPriceMeMilli == nil || *searchPage.List[0].FloorPriceMeMilli != 9000 {
+		t.Fatalf("expected enriched SearchRow market fields, got %+v", searchPage.List)
+	}
+
+	// 3. /api/mrc721/market/listings filters & aliases
+	_, aliasEnv := doMrc721Request(t, router, "/api/mrc721/market/listings?shopMetaAppPinId=shoppin111i0&autoFulfillMe=true&negotiable=true&sellerGlobalMetaId=idq1sellerone000000000000000000000000000000&currency=cny&maxPriceCnyCents=1000&minPriceMeMilli=10000&sort=price_asc&limit=5")
+	var aliasPage struct {
+		List  []ListingDTO `json:"list"`
+		Total int          `json:"total"`
+	}
+	_ = json.Unmarshal(aliasEnv.Data, &aliasPage)
+	if aliasPage.Total != 1 || aliasPage.List[0].ItemPinId != item1 {
+		t.Fatalf("expected 1 listing matching all P1-1 filters/aliases, got %+v", aliasPage)
+	}
 }

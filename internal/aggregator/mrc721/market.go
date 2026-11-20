@@ -33,6 +33,7 @@ type CollectionMarketSummary struct {
 	CaVerified          bool                  `json:"caVerified"`
 	TotalSupply         int64                 `json:"totalSupply"`
 	MintedCount         int64                 `json:"mintedCount"`
+	BurnedCount         int                   `json:"burnedCount"`
 	HolderCount         int                   `json:"holderCount"`
 	ListedCount         int                   `json:"listedCount"`
 	ListedMeCount       int                   `json:"listedMeCount"`
@@ -126,7 +127,7 @@ func (a *Aggregator) getOrBuildMarketSummaries() ([]*CollectionMarketSummary, ma
 		return cached.summaries, cached.byPinId
 	}
 
-	summaries, byPinId := a.computeAllCollectionSummaries(nowSec)
+	summaries, byPinId := a.computeAllCollectionSummaries(nowSec, a.zeroConfTrade)
 	a.marketMu.Lock()
 	a.marketCache = &marketCacheSnapshot{
 		builtAtSec: nowSec,
@@ -137,11 +138,11 @@ func (a *Aggregator) getOrBuildMarketSummaries() ([]*CollectionMarketSummary, ma
 	return summaries, byPinId
 }
 
-func (a *Aggregator) computeAllCollectionSummaries(nowSec int64) ([]*CollectionMarketSummary, map[string]*CollectionMarketSummary) {
+func (a *Aggregator) computeAllCollectionSummaries(nowSec int64, includeZeroConf bool) ([]*CollectionMarketSummary, map[string]*CollectionMarketSummary) {
 	a.mu.Lock()
 	nftReader := a.nftReader
 	caReader := a.caReader
-	zeroConf := a.zeroConfTrade
+	zeroConf := includeZeroConf && a.zeroConfTrade
 	a.mu.Unlock()
 
 	summaries := make([]*CollectionMarketSummary, 0)
@@ -196,12 +197,13 @@ func (a *Aggregator) computeAllCollectionSummaries(nowSec int64) ([]*CollectionM
 				if hc, _, err := nftReader.CollectionHolderStats(col.PinId, zeroConf); err == nil {
 					s.HolderCount = hc
 				}
+				s.BurnedCount = nftReader.CollectionBurnedCount(col.PinId, zeroConf)
 			}
 		}
 	}
 
 	// Group active listings by collectionPinId.
-	intents, _ := a.listAllEffectiveSellIntents(true)
+	intents, _ := a.listAllEffectiveSellIntents(zeroConf)
 	mePricesByCol := make(map[string][]int64)
 	cnyPricesByCol := make(map[string][]int64)
 	floorListingByCol := make(map[string]*SellIntentRecord)
@@ -250,7 +252,7 @@ func (a *Aggregator) computeAllCollectionSummaries(nowSec int64) ([]*CollectionM
 		}
 	}
 
-	tradeStatsMap := a.collectionTradeStatsMap(nowSec)
+	tradeStatsMap := a.collectionTradeStatsMap(nowSec, zeroConf)
 
 	for key, s := range byPinId {
 		if prices := mePricesByCol[key]; len(prices) > 0 {
@@ -539,7 +541,12 @@ func (a *Aggregator) handleMarketCollections(c *gin.Context) {
 	keyword := strings.ToLower(strings.TrimSpace(c.Query("keyword")))
 	sortBy := strings.ToLower(strings.TrimSpace(c.DefaultQuery("sort", "listed_desc")))
 
-	allSummaries, _ := a.getOrBuildMarketSummaries()
+	var allSummaries []*CollectionMarketSummary
+	if zeroConfOnly(c) {
+		allSummaries, _ = a.computeAllCollectionSummaries(a.nowUnix(), false)
+	} else {
+		allSummaries, _ = a.getOrBuildMarketSummaries()
+	}
 	filtered := make([]*CollectionMarketSummary, 0, len(allSummaries))
 	for _, s := range allSummaries {
 		if caOnly && !s.CaVerified {
@@ -620,7 +627,12 @@ func (a *Aggregator) handleMarketCollectionSummary(c *gin.Context) {
 		respondMarketErr(c, 40000, "collectionPinId required")
 		return
 	}
-	_, byPinId := a.getOrBuildMarketSummaries()
+	var byPinId map[string]*CollectionMarketSummary
+	if zeroConfOnly(c) {
+		_, byPinId = a.computeAllCollectionSummaries(a.nowUnix(), false)
+	} else {
+		_, byPinId = a.getOrBuildMarketSummaries()
+	}
 	s := byPinId[strings.ToLower(collectionPinId)]
 	if s == nil {
 		respondMarketErr(c, 40400, "collection not found")
@@ -635,7 +647,11 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		respondMarketErr(c, 50000, "mrc721 index unavailable")
 		return
 	}
-	size, err := parseListSize(c.Query("size"))
+	sizeRaw := strings.TrimSpace(c.Query("size"))
+	if sizeRaw == "" {
+		sizeRaw = strings.TrimSpace(c.Query("limit"))
+	}
+	size, err := parseListSize(sizeRaw)
 	if err != nil {
 		respondMarketErr(c, 40000, "invalid parameter: size")
 		return
@@ -644,28 +660,75 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 
 	collectionPinId := strings.TrimSpace(c.Query("collectionPinId"))
 	sellerFilter := strings.TrimSpace(c.Query("seller"))
-	currency := strings.TrimSpace(c.DefaultQuery("currency", "any"))
+	if sellerFilter == "" {
+		sellerFilter = strings.TrimSpace(c.Query("sellerGlobalMetaId"))
+	}
+	shopMetaAppPinId := strings.TrimSpace(c.Query("shopMetaAppPinId"))
+	currency := strings.ToLower(strings.TrimSpace(c.DefaultQuery("currency", "any")))
+	if currency == "cny" {
+		currency = "fiat:cny"
+	}
 	onlineOnly := parseBoolQuery(c.Query("onlineOnly"))
 	caOnly := parseBoolQuery(c.Query("caOnly"))
 	keyword := strings.ToLower(strings.TrimSpace(c.Query("keyword")))
 	sortBy := strings.ToLower(strings.TrimSpace(c.DefaultQuery("sort", "newest")))
-
-	var minPrice, maxPrice *int64
-	if raw := strings.TrimSpace(c.Query("minPrice")); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || v < 0 {
-			respondMarketErr(c, 40000, "invalid parameter: minPrice")
-			return
+	switch sortBy {
+	case "recent":
+		sortBy = "newest"
+	case "price_asc":
+		if currency == "fiat:cny" {
+			sortBy = "price_cny_asc"
+		} else {
+			sortBy = "price_me_asc"
 		}
-		minPrice = &v
+	case "price_desc":
+		if currency == "fiat:cny" {
+			sortBy = "price_cny_desc"
+		} else {
+			sortBy = "price_me_desc"
+		}
 	}
-	if raw := strings.TrimSpace(c.Query("maxPrice")); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || v < 0 {
-			respondMarketErr(c, 40000, "invalid parameter: maxPrice")
-			return
-		}
-		maxPrice = &v
+
+	autoFulfillFilter, err := parseOptionalBoolQuery(c.Query("autoFulfillMe"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: autoFulfillMe")
+		return
+	}
+	negotiableFilter, err := parseOptionalBoolQuery(c.Query("negotiable"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: negotiable")
+		return
+	}
+
+	minPrice, err := parseOptionalNonNegInt(c.Query("minPrice"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: minPrice")
+		return
+	}
+	maxPrice, err := parseOptionalNonNegInt(c.Query("maxPrice"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: maxPrice")
+		return
+	}
+	minPriceMeMilli, err := parseOptionalNonNegInt(c.Query("minPriceMeMilli"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: minPriceMeMilli")
+		return
+	}
+	maxPriceMeMilli, err := parseOptionalNonNegInt(c.Query("maxPriceMeMilli"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: maxPriceMeMilli")
+		return
+	}
+	minPriceCnyCents, err := parseOptionalNonNegInt(c.Query("minPriceCnyCents"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: minPriceCnyCents")
+		return
+	}
+	maxPriceCnyCents, err := parseOptionalNonNegInt(c.Query("maxPriceCnyCents"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: maxPriceCnyCents")
+		return
 	}
 
 	var sellerAddrs map[string]struct{}
@@ -673,7 +736,8 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		sellerAddrs = a.resolvePartyAddresses(sellerFilter)
 	}
 
-	intents, err := a.listAllEffectiveSellIntents(true)
+	confirmedOnly := zeroConfOnly(c)
+	intents, err := a.listAllEffectiveSellIntents(!confirmedOnly)
 	if err != nil {
 		respondMarketErr(c, 50000, "failed to load listings")
 		return
@@ -683,8 +747,20 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		if rec == nil || !rec.Active {
 			continue
 		}
+		if confirmedOnly && rec.Overlay {
+			continue
+		}
 		dto := a.listingDTOFromRecord(rec)
 		if collectionPinId != "" && !strings.EqualFold(dto.CollectionPinId, collectionPinId) {
+			continue
+		}
+		if shopMetaAppPinId != "" && !strings.EqualFold(dto.ShopMetaAppPinId, shopMetaAppPinId) {
+			continue
+		}
+		if autoFulfillFilter != nil && dto.AutoFulfillMe != *autoFulfillFilter {
+			continue
+		}
+		if negotiableFilter != nil && dto.Negotiable != *negotiableFilter {
 			continue
 		}
 		if caOnly && !dto.CaVerified {
@@ -698,6 +774,18 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		}
 		if !listingMatchesPriceFilter(dto, currency, minPrice, maxPrice) {
 			continue
+		}
+		if minPriceMeMilli != nil || maxPriceMeMilli != nil {
+			p, ok := listingMePrice(dto)
+			if !ok || (minPriceMeMilli != nil && p < *minPriceMeMilli) || (maxPriceMeMilli != nil && p > *maxPriceMeMilli) {
+				continue
+			}
+		}
+		if minPriceCnyCents != nil || maxPriceCnyCents != nil {
+			p, ok := listingCnyPrice(dto)
+			if !ok || (minPriceCnyCents != nil && p < *minPriceCnyCents) || (maxPriceCnyCents != nil && p > *maxPriceCnyCents) {
+				continue
+			}
 		}
 		if keyword != "" && !listingMatchesKeyword(dto, keyword) {
 			continue
@@ -967,6 +1055,35 @@ func parseBoolQuery(raw string) bool {
 	}
 }
 
+func parseOptionalBoolQuery(raw string) (*bool, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	switch trimmed {
+	case "true", "1", "yes":
+		v := true
+		return &v, nil
+	case "false", "0", "no":
+		v := false
+		return &v, nil
+	default:
+		return nil, ErrInvalidParameter
+	}
+}
+
+func parseOptionalNonNegInt(raw string) (*int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	v, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || v < 0 {
+		return nil, ErrInvalidParameter
+	}
+	return &v, nil
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -987,12 +1104,19 @@ func formatMarketVersionToken(s *CollectionMarketSummary) string {
 	if s == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s#%d#%d#%d#%d#%t",
+	sellerOnline := false
+	if s.FloorSeller != nil {
+		sellerOnline = s.FloorSeller.IsOnline
+	}
+	return fmt.Sprintf("%s#%d#%d#%d#%d#%d#%t#%t#%s",
 		s.CollectionPinId,
 		s.ListedCount,
 		ptrValOrNeg(s.FloorPriceMeMilli),
 		ptrValOrNeg(s.FloorPriceCnyCents),
 		s.HolderCount,
+		s.BurnedCount,
 		s.CaVerified,
+		sellerOnline,
+		s.DisplayTitle,
 	)
 }

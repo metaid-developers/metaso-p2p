@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/idbotsca"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
 )
 
@@ -38,6 +39,24 @@ type TradeRecord struct {
 	PriceSats       *int64 `json:"priceSats,omitempty"`
 	SettledAt       int64  `json:"settledAt"`
 	VerifiedSource  string `json:"verifiedSource"` // "abs_escrow" | "escrow_bot" | "chain_offer"
+	Confirmed       bool   `json:"confirmed"`
+}
+
+type tradePublisher struct {
+	Address       string `json:"address,omitempty"`
+	CreateAddress string `json:"createAddress,omitempty"`
+	Creator       string `json:"creator,omitempty"`
+	MetaId        string `json:"metaId,omitempty"`
+	CreateMetaId  string `json:"createMetaId,omitempty"`
+	GlobalMetaId  string `json:"globalMetaId,omitempty"`
+}
+
+type pendingTradeEnvelope struct {
+	PinId       string         `json:"pinId,omitempty"`
+	TxId        string         `json:"txId,omitempty"`
+	FirstSeenAt int64          `json:"firstSeenAt,omitempty"`
+	Trade       *TradeRecord   `json:"trade,omitempty"`
+	Publisher   tradePublisher `json:"publisher,omitempty"`
 }
 
 // CollectionTradeStats is the aggregated trade summary for one collection (Contract C3.2).
@@ -153,7 +172,114 @@ func (a *Aggregator) loadTrade(itemPinId, txId string) (*TradeRecord, error) {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return nil, err
 	}
+	rec.Confirmed = true
 	return &rec, nil
+}
+
+func isImplicitTrade(rec *TradeRecord) bool {
+	return rec != nil && strings.EqualFold(strings.TrimSpace(rec.VerifiedSource), "chain_offer")
+}
+
+func extractTradePublisher(pin *aggregator.PinInscription) tradePublisher {
+	if pin == nil {
+		return tradePublisher{}
+	}
+	return tradePublisher{
+		Address:       strings.TrimSpace(pin.Address),
+		CreateAddress: strings.TrimSpace(pin.CreateAddress),
+		Creator:       strings.TrimSpace(pin.Creator),
+		MetaId:        strings.TrimSpace(pin.MetaId),
+		CreateMetaId:  strings.TrimSpace(pin.CreateMetaId),
+		GlobalMetaId:  strings.TrimSpace(pin.GlobalMetaId),
+	}
+}
+
+func (a *Aggregator) isAuthorizedTradePublisherLocked(pub tradePublisher, fromAddr, toAddr string) bool {
+	// 1. Bob official trust root is always authorized.
+	if (pub.MetaId != "" && strings.EqualFold(pub.MetaId, idbotsca.OfficialMetaID)) ||
+		(pub.CreateMetaId != "" && strings.EqualFold(pub.CreateMetaId, idbotsca.OfficialMetaID)) ||
+		(pub.GlobalMetaId != "" && strings.EqualFold(pub.GlobalMetaId, idbotsca.OfficialGlobalMetaID)) ||
+		pub.Address == idbotsca.OfficialMVCAddress ||
+		pub.CreateAddress == idbotsca.OfficialMVCAddress {
+		return true
+	}
+	// 2. CA-verified escrow_guarantor or official_announcer bot.
+	if a.caReader != nil {
+		gid := pub.GlobalMetaId
+		if gid == "" && a.profileReader != nil {
+			if id := firstNonEmpty(pub.MetaId, pub.CreateMetaId, pub.Address, pub.CreateAddress); id != "" {
+				if p := a.profileReader.LookupProfile(id); p != nil {
+					gid = p.GlobalMetaId
+				}
+			}
+		}
+		if gid != "" {
+			if verified, role := a.caReader.GetOfficialBotRole(gid); verified &&
+				(role == "escrow_guarantor" || role == "official_announcer") {
+				return true
+			}
+		}
+	}
+	// 3. On-chain transfer seller or buyer.
+	return a.pubMatchesAddressLocked(pub, fromAddr) || a.pubMatchesAddressLocked(pub, toAddr)
+}
+
+func (a *Aggregator) pubMatchesAddressLocked(pub tradePublisher, addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	if pub.Address == addr || pub.CreateAddress == addr || pub.Creator == addr {
+		return true
+	}
+	if a.profileReader == nil {
+		return false
+	}
+	for _, gid := range []string{pub.GlobalMetaId, pub.MetaId, pub.CreateMetaId} {
+		if gid == "" {
+			continue
+		}
+		for _, resolved := range a.profileReader.ResolveAddressesByGlobalMetaId(gid) {
+			if resolved == addr {
+				return true
+			}
+		}
+	}
+	if p := a.profileReader.LookupProfile(addr); p != nil {
+		if pub.GlobalMetaId != "" && p.GlobalMetaId != "" && strings.EqualFold(pub.GlobalMetaId, p.GlobalMetaId) {
+			return true
+		}
+		if p.MetaId != "" {
+			if (pub.MetaId != "" && strings.EqualFold(pub.MetaId, p.MetaId)) ||
+				(pub.CreateMetaId != "" && strings.EqualFold(pub.CreateMetaId, p.MetaId)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func buildTradeRecordFromPayload(pin *aggregator.PinInscription, payload *tradePayload, confirmed bool) *TradeRecord {
+	settledAt := payload.SettledAt
+	if settledAt <= 0 && pin != nil {
+		settledAt = unixSeconds(pin.Timestamp)
+	}
+	return &TradeRecord{
+		TxId:            payload.TxId,
+		ItemPinId:       payload.ItemPinId,
+		CollectionPinId: payload.CollectionPinId,
+		SellerAddress:   payload.SellerAddress,
+		SellerMetaId:    payload.SellerMetaId,
+		BuyerAddress:    payload.BuyerAddress,
+		BuyerMetaId:     payload.BuyerMetaId,
+		Currency:        payload.Currency,
+		AmountMilli:     payload.AmountMilli,
+		AmountCents:     payload.AmountCents,
+		PriceSats:       payload.PriceSats,
+		SettledAt:       settledAt,
+		VerifiedSource:  payload.VerifiedSource,
+		Confirmed:       confirmed,
+	}
 }
 
 func (a *Aggregator) saveTradeLocked(rec *TradeRecord) error {
@@ -168,6 +294,17 @@ func (a *Aggregator) saveTradeLocked(rec *TradeRecord) error {
 		return err
 	}
 	return a.store.Set(Namespace, tradeTimeKey(rec.SettledAt, rec.ItemPinId, rec.TxId), []byte("1"))
+}
+
+func (a *Aggregator) dropOverlayTradeForItemTxLocked(itemPinId, txId string) {
+	itemPinId = strings.TrimSpace(itemPinId)
+	txId = strings.ToLower(strings.TrimSpace(txId))
+	for pinId, entry := range a.overlayDecls {
+		if entry.trade != nil && entry.trade.ItemPinId == itemPinId && strings.EqualFold(entry.trade.TxId, txId) {
+			delete(a.overlayDecls, pinId)
+		}
+	}
+	delete(a.overlayPendingTrades, itemPinId+":"+txId)
 }
 
 // ingestTradePin processes /protocols/mrc721trade pins (callers hold a.mu).
@@ -186,33 +323,23 @@ func (a *Aggregator) ingestTradePin(pin *aggregator.PinInscription) (bool, error
 		log.Printf("WARNING: mrc721 trade pin %s skipped: %v", strings.TrimSpace(pin.Id), err)
 		return false, nil
 	}
-	if existing, _ := a.loadTrade(payload.ItemPinId, payload.TxId); existing != nil {
+	existing, _ := a.loadTrade(payload.ItemPinId, payload.TxId)
+	if existing != nil && !isImplicitTrade(existing) {
 		return false, nil
 	}
-	settledAt := payload.SettledAt
-	if settledAt <= 0 {
-		settledAt = unixSeconds(pin.Timestamp)
-	}
-	rec := &TradeRecord{
-		TxId:            payload.TxId,
-		ItemPinId:       payload.ItemPinId,
-		CollectionPinId: payload.CollectionPinId,
-		SellerAddress:   payload.SellerAddress,
-		SellerMetaId:    payload.SellerMetaId,
-		BuyerAddress:    payload.BuyerAddress,
-		BuyerMetaId:     payload.BuyerMetaId,
-		Currency:        payload.Currency,
-		AmountMilli:     payload.AmountMilli,
-		AmountCents:     payload.AmountCents,
-		PriceSats:       payload.PriceSats,
-		SettledAt:       settledAt,
-		VerifiedSource:  payload.VerifiedSource,
-	}
+	pub := extractTradePublisher(pin)
+	rec := buildTradeRecordFromPayload(pin, payload, true)
 	if a.nftReader != nil {
-		tr, found := a.nftReader.ItemTransferByTx(payload.ItemPinId, payload.TxId)
+		tr, found := a.nftReader.ItemTransferByTx(payload.ItemPinId, payload.TxId, a.zeroConfTrade)
 		if !found {
-			// Transfer may not have landed yet; stage until OnItemTransferred verifies it.
-			raw, _ := json.Marshal(rec)
+			// Transfer may not have landed yet; stage with publisher metadata until OnItemTransferred verifies it.
+			env := pendingTradeEnvelope{
+				PinId:     strings.TrimSpace(pin.Id),
+				TxId:      txIdOfPinId(pin.Id),
+				Trade:     rec,
+				Publisher: pub,
+			}
+			raw, _ := json.Marshal(env)
 			if len(raw) > 0 {
 				_ = a.store.Set(Namespace, pendingTradeKey(rec.ItemPinId, rec.TxId), raw)
 			}
@@ -223,14 +350,27 @@ func (a *Aggregator) ingestTradePin(pin *aggregator.PinInscription) (bool, error
 				pin.Id, tr.FromAddress, tr.ToAddress, rec.SellerAddress, rec.BuyerAddress)
 			return false, nil
 		}
+		if !a.isAuthorizedTradePublisherLocked(pub, tr.FromAddress, tr.ToAddress) {
+			log.Printf("WARNING: mrc721 trade pin %s rejected: unauthorized publisher (metaId=%s gid=%s addr=%s)",
+				pin.Id, pub.MetaId, pub.GlobalMetaId, firstNonEmpty(pub.Address, pub.CreateAddress))
+			return false, nil
+		}
 		a.enrichTradeFromTransferLocked(rec, tr.FromAddress, tr.ToAddress)
 	} else {
+		if !a.isAuthorizedTradePublisherLocked(pub, rec.SellerAddress, rec.BuyerAddress) {
+			log.Printf("WARNING: mrc721 trade pin %s rejected: unauthorized publisher", pin.Id)
+			return false, nil
+		}
 		a.enrichTradeMetadataLocked(rec)
+	}
+	if existing != nil && isImplicitTrade(existing) && existing.SettledAt != rec.SettledAt {
+		_ = a.store.Delete(Namespace, tradeTimeKey(existing.SettledAt, existing.ItemPinId, existing.TxId))
 	}
 	if err := a.saveTradeLocked(rec); err != nil {
 		return false, err
 	}
 	_ = a.store.Delete(Namespace, pendingTradeKey(rec.ItemPinId, rec.TxId))
+	a.dropOverlayTradeForItemTxLocked(rec.ItemPinId, rec.TxId)
 	return true, nil
 }
 
@@ -291,10 +431,10 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 	a.mu.Lock()
 	changed := false
 
-	// 1. Auto-invalidate active sell intents on transfer to another address or burn.
+	// 1. Auto-invalidate active sell intents on transfer or burn.
 	if ev.Confirmed {
 		if rec, err := a.loadSellIntent(ev.ItemPinId); err == nil && rec != nil && rec.Active {
-			if ev.Burned || ev.ToAddress != rec.SellerAddress {
+			if ev.Burned || ev.ToAddress != rec.SellerAddress || rec.Height <= 0 || ev.Height >= rec.Height {
 				rec.Active = false
 				rec.InactiveReason = "transferred"
 				if err := a.saveSellIntent(rec); err != nil {
@@ -306,21 +446,28 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 		}
 		delete(a.overlayInvalidated, ev.ItemPinId)
 	} else {
-		// Mempool transfer/burn: mark overlay sell intents and track confirmed invalidation in memory.
-		for _, entry := range a.overlayDecls {
-			if entry.sell != nil && entry.sell.ItemPinId == ev.ItemPinId && entry.sell.Active {
-				if ev.Burned || ev.ToAddress != entry.sell.SellerAddress {
-					entry.sell.Active = false
-					entry.sell.InactiveReason = "transferred"
+		// Mempool transfer/burn: when nftReader is wired, read-time reconciliation
+		// reads live ItemOwnership(itemPinId, zeroConf) directly so an evicted 0-conf
+		// transfer restores the original listing cleanly. Only track overlayInvalidated
+		// as a fallback when nftReader is absent.
+		if a.nftReader == nil {
+			for _, entry := range a.overlayDecls {
+				if entry.sell != nil && entry.sell.ItemPinId == ev.ItemPinId && entry.sell.Active {
+					if ev.Burned || ev.ToAddress != entry.sell.SellerAddress {
+						entry.sell.Active = false
+						entry.sell.InactiveReason = "transferred"
+						changed = true
+					}
+				}
+			}
+			if rec, err := a.loadSellIntent(ev.ItemPinId); err == nil && rec != nil && rec.Active {
+				if ev.Burned || ev.ToAddress != rec.SellerAddress {
+					a.overlayInvalidated[ev.ItemPinId] = "transferred"
 					changed = true
 				}
 			}
-		}
-		if rec, err := a.loadSellIntent(ev.ItemPinId); err == nil && rec != nil && rec.Active {
-			if ev.Burned || ev.ToAddress != rec.SellerAddress {
-				a.overlayInvalidated[ev.ItemPinId] = "transferred"
-				changed = true
-			}
+		} else {
+			changed = true
 		}
 	}
 
@@ -328,20 +475,37 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 	// or record an offer-based settlement if an active /protocols/mrc721offer existed.
 	txId := strings.ToLower(strings.TrimSpace(ev.TxId))
 	if txId != "" && !ev.Burned && ev.ToAddress != "" {
-		if existing, _ := a.loadTrade(ev.ItemPinId, txId); existing == nil {
-			if raw, err := a.store.Get(Namespace, pendingTradeKey(ev.ItemPinId, txId)); err == nil && len(raw) > 0 {
-				var rec TradeRecord
-				if jsonErr := json.Unmarshal(raw, &rec); jsonErr == nil && a.tradeMatchesTransferLocked(&rec, ev.FromAddress, ev.ToAddress) {
-					a.enrichTradeFromTransferLocked(&rec, ev.FromAddress, ev.ToAddress)
-					if rec.CollectionPinId == "" {
-						rec.CollectionPinId = ev.CollectionPinId
-					}
-					if err := a.saveTradeLocked(&rec); err == nil {
-						_ = a.store.Delete(Namespace, pendingTradeKey(ev.ItemPinId, txId))
-						changed = true
+		if ev.Confirmed {
+			existing, _ := a.loadTrade(ev.ItemPinId, txId)
+			promoted := false
+			if existing == nil || isImplicitTrade(existing) {
+				if raw, err := a.store.Get(Namespace, pendingTradeKey(ev.ItemPinId, txId)); err == nil && len(raw) > 0 {
+					var env pendingTradeEnvelope
+					if jsonErr := json.Unmarshal(raw, &env); jsonErr == nil && env.Trade != nil {
+						rec := env.Trade
+						rec.Confirmed = true
+						if a.tradeMatchesTransferLocked(rec, ev.FromAddress, ev.ToAddress) &&
+							a.isAuthorizedTradePublisherLocked(env.Publisher, ev.FromAddress, ev.ToAddress) {
+							a.enrichTradeFromTransferLocked(rec, ev.FromAddress, ev.ToAddress)
+							if rec.CollectionPinId == "" {
+								rec.CollectionPinId = ev.CollectionPinId
+							}
+							if existing != nil && isImplicitTrade(existing) && existing.SettledAt != rec.SettledAt {
+								_ = a.store.Delete(Namespace, tradeTimeKey(existing.SettledAt, existing.ItemPinId, existing.TxId))
+							}
+							if err := a.saveTradeLocked(rec); err == nil {
+								_ = a.store.Delete(Namespace, pendingTradeKey(ev.ItemPinId, txId))
+								a.dropOverlayTradeForItemTxLocked(ev.ItemPinId, txId)
+								promoted = true
+								changed = true
+							}
+						} else {
+							_ = a.store.Delete(Namespace, pendingTradeKey(ev.ItemPinId, txId))
+						}
 					}
 				}
-			} else if ev.Confirmed && ev.FromAddress != ev.ToAddress {
+			}
+			if !promoted && existing == nil && ev.FromAddress != ev.ToAddress {
 				if offer, err := a.loadOffer(ev.ItemPinId); err == nil && offer != nil && offer.Active && offer.PriceSats > 0 {
 					priceSats := offer.PriceSats
 					settledAt := ev.Time
@@ -358,9 +522,36 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 						PriceSats:       &priceSats,
 						SettledAt:       settledAt,
 						VerifiedSource:  "chain_offer",
+						Confirmed:       true,
 					}
 					a.enrichTradeMetadataLocked(rec)
 					if err := a.saveTradeLocked(rec); err == nil {
+						changed = true
+					}
+				}
+			}
+		} else if a.zeroConfTrade {
+			pendingKey := ev.ItemPinId + ":" + txId
+			if env, ok := a.overlayPendingTrades[pendingKey]; ok && env != nil && env.Trade != nil {
+				delete(a.overlayPendingTrades, pendingKey)
+				rec := *env.Trade
+				rec.Confirmed = false
+				if a.tradeMatchesTransferLocked(&rec, ev.FromAddress, ev.ToAddress) &&
+					a.isAuthorizedTradePublisherLocked(env.Publisher, ev.FromAddress, ev.ToAddress) {
+					a.enrichTradeFromTransferLocked(&rec, ev.FromAddress, ev.ToAddress)
+					if rec.CollectionPinId == "" {
+						rec.CollectionPinId = ev.CollectionPinId
+					}
+					if _, dup := a.overlayDecls[env.PinId]; !dup {
+						a.overlayDecls[env.PinId] = &overlayDeclEntry{
+							pinId:       env.PinId,
+							txid:        env.TxId,
+							chainName:   ev.ChainName,
+							firstSeenAt: env.FirstSeenAt,
+							trade:       &rec,
+						}
+						a.overlayTxids[env.TxId] = env.FirstSeenAt
+						a.evictOverlayCapLocked()
 						changed = true
 					}
 				}
@@ -374,27 +565,54 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 	}
 }
 
-func (a *Aggregator) listAllTrades() ([]*TradeRecord, error) {
+func (a *Aggregator) listAllTrades(includeOverlay bool) ([]*TradeRecord, error) {
 	if a == nil || a.store == nil {
 		return nil, nil
 	}
 	trades := make([]*TradeRecord, 0)
-	seen := make(map[string]struct{})
+	byKey := make(map[string]int)
 	err := a.store.ScanPrefix(Namespace, []byte(keyTrade), func(key, value []byte) error {
 		var rec TradeRecord
 		if err := json.Unmarshal(value, &rec); err != nil {
 			return nil
 		}
+		rec.Confirmed = true
 		dedupKey := rec.ItemPinId + ":" + strings.ToLower(rec.TxId)
-		if _, ok := seen[dedupKey]; ok {
+		if _, ok := byKey[dedupKey]; ok {
 			return nil
 		}
-		seen[dedupKey] = struct{}{}
+		byKey[dedupKey] = len(trades)
 		trades = append(trades, &rec)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if includeOverlay {
+		a.mu.Lock()
+		zeroConf := a.zeroConfTrade
+		var overlayTrades []*TradeRecord
+		if zeroConf {
+			for _, entry := range a.overlayDecls {
+				if entry.trade != nil {
+					cp := *entry.trade
+					cp.Confirmed = false
+					overlayTrades = append(overlayTrades, &cp)
+				}
+			}
+		}
+		a.mu.Unlock()
+		for _, rec := range overlayTrades {
+			dedupKey := rec.ItemPinId + ":" + strings.ToLower(rec.TxId)
+			if idx, ok := byKey[dedupKey]; ok {
+				if isImplicitTrade(trades[idx]) {
+					trades[idx] = rec
+				}
+				continue
+			}
+			byKey[dedupKey] = len(trades)
+			trades = append(trades, rec)
+		}
 	}
 	sort.Slice(trades, func(i, j int) bool {
 		if trades[i].SettledAt != trades[j].SettledAt {
@@ -405,8 +623,8 @@ func (a *Aggregator) listAllTrades() ([]*TradeRecord, error) {
 	return trades, nil
 }
 
-func (a *Aggregator) collectionTradeStatsMap(nowSec int64) map[string]CollectionTradeStats {
-	trades, err := a.listAllTrades()
+func (a *Aggregator) collectionTradeStatsMap(nowSec int64, includeOverlay bool) map[string]CollectionTradeStats {
+	trades, err := a.listAllTrades(includeOverlay)
 	if err != nil || len(trades) == 0 {
 		return map[string]CollectionTradeStats{}
 	}
@@ -458,7 +676,7 @@ func (a *Aggregator) handleMarketTrades(c *gin.Context) {
 		partyAddrs = a.resolvePartyAddresses(party)
 	}
 
-	trades, err := a.listAllTrades()
+	trades, err := a.listAllTrades(!zeroConfOnly(c))
 	if err != nil {
 		respondMarketErr(c, 50000, "failed to load trades")
 		return

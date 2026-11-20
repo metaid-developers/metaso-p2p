@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,6 +35,10 @@ const (
 	DefaultGenesisPinID  = "77da77280b9b218cf1edd62f658ca2be561dd7e377f3980182e280487ec38c56i0"
 
 	keyRegistryLatest = "registry:latest"
+
+	// staleMempoolTimeoutSec evicts an unconfirmed mempool CA overlay if it
+	// stays unconfirmed for more than 30 minutes (P1-2).
+	staleMempoolTimeoutSec int64 = 30 * 60
 )
 
 // LegacySeriesConfig describes legacy MetaContract NFT swap mapping on a CA entry.
@@ -121,19 +126,40 @@ type Aggregator struct {
 	store    *storage.PebbleStore
 	notifyCh chan *aggregator.NotifyEvent
 
-	mu           sync.RWMutex
-	confirmed    *RegistrySnapshot
-	mempool      *RegistrySnapshot
-	effective    *RegistrySnapshot
-	colByPinId   map[string]CollectionCertEntry
-	botByGlobal  map[string]OfficialBotEntry
+	mu            sync.RWMutex
+	confirmed     *RegistrySnapshot
+	mempool       *RegistrySnapshot
+	mempoolSeenAt int64
+	effective     *RegistrySnapshot
+	colByPinId    map[string]CollectionCertEntry
+	botByGlobal   map[string]OfficialBotEntry
+	onChange      func()
+	nowFn         func() int64
 }
 
 func (a *Aggregator) Name() string { return Namespace }
 
+// SetOnChange registers a callback fired outside locks whenever the effective
+// CA registry changes (confirmed ingest, backfill, mempool overlay, or eviction).
+func (a *Aggregator) SetOnChange(fn func()) {
+	a.mu.Lock()
+	a.onChange = fn
+	a.mu.Unlock()
+}
+
+func (a *Aggregator) nowUnix() int64 {
+	if a != nil && a.nowFn != nil {
+		return a.nowFn()
+	}
+	return time.Now().Unix()
+}
+
 func (a *Aggregator) Init(store *storage.PebbleStore, _ *cache.CacheProvider) error {
 	a.store = store
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 8)
+	if a.nowFn == nil {
+		a.nowFn = func() int64 { return time.Now().Unix() }
+	}
 	if _, err := store.OpenDB(Namespace); err != nil {
 		return err
 	}
@@ -168,29 +194,38 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	snap := buildSnapshotFromPin(pin, payload)
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.confirmed != nil {
 		if a.confirmed.PinId == snap.PinId {
+			a.mu.Unlock()
 			return nil, nil
 		}
 		if !chainOrderNewer(a.confirmed.Height, a.confirmed.UpdatedAt, a.confirmed.PinId, snap.Height, snap.UpdatedAt, snap.PinId) {
+			a.mu.Unlock()
 			return nil, nil
 		}
 	}
 	if a.store != nil {
 		raw, err := json.Marshal(snap)
 		if err != nil {
+			a.mu.Unlock()
 			return nil, err
 		}
 		if err := a.store.Set(Namespace, []byte(keyRegistryLatest), raw); err != nil {
+			a.mu.Unlock()
 			return nil, err
 		}
 	}
 	a.confirmed = snap
-	if a.mempool != nil && (a.mempool.PinId == snap.PinId || txIdOfPinId(a.mempool.PinId) == txIdOfPinId(snap.PinId)) {
+	if a.mempool != nil && (a.mempool.PinId == snap.PinId || txIdOfPinId(a.mempool.PinId) == txIdOfPinId(snap.PinId) || snap.UpdatedAt > a.mempool.UpdatedAt) {
 		a.mempool = nil
+		a.mempoolSeenAt = 0
 	}
 	a.rebuildEffectiveLocked()
+	cb := a.onChange
+	a.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
 	return nil, nil
 }
 
@@ -209,13 +244,61 @@ func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregat
 	snap := buildSnapshotFromPin(pin, payload)
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	if a.confirmed != nil && a.confirmed.UpdatedAt > snap.UpdatedAt {
+		a.mu.Unlock()
+		return nil, nil
+	}
 	if a.mempool != nil && a.mempool.PinId == snap.PinId {
+		a.mu.Unlock()
 		return nil, nil
 	}
 	a.mempool = snap
+	a.mempoolSeenAt = a.nowUnix()
 	a.rebuildEffectiveLocked()
+	cb := a.onChange
+	a.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
 	return nil, nil
+}
+
+func (a *Aggregator) isMempoolStaleLocked(nowSec int64) bool {
+	if a.mempool == nil {
+		return false
+	}
+	if a.confirmed != nil && a.confirmed.UpdatedAt > a.mempool.UpdatedAt {
+		return true
+	}
+	if a.mempoolSeenAt > 0 && nowSec-a.mempoolSeenAt > staleMempoolTimeoutSec {
+		return true
+	}
+	return false
+}
+
+func (a *Aggregator) cleanupStaleMempoolIfNeeded() {
+	if a == nil {
+		return
+	}
+	nowSec := a.nowUnix()
+	a.mu.RLock()
+	stale := a.isMempoolStaleLocked(nowSec)
+	a.mu.RUnlock()
+	if !stale {
+		return
+	}
+	var cb func()
+	a.mu.Lock()
+	if a.isMempoolStaleLocked(nowSec) {
+		a.mempool = nil
+		a.mempoolSeenAt = 0
+		a.rebuildEffectiveLocked()
+		cb = a.onChange
+	}
+	a.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 // RegisterRoutes mounts GET /api/mrc721/ca/registry (Contract C3.1).
@@ -237,6 +320,7 @@ func (a *Aggregator) Registry() RegistrySnapshot {
 	if a == nil {
 		return emptyRegistrySnapshot()
 	}
+	a.cleanupStaleMempoolIfNeeded()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.effective == nil {
@@ -264,6 +348,7 @@ func (a *Aggregator) IsCollectionCertified(collectionPinId string) (bool, *Colle
 	if a == nil || collectionPinId == "" {
 		return false, nil
 	}
+	a.cleanupStaleMempoolIfNeeded()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.colByPinId == nil {
@@ -283,6 +368,7 @@ func (a *Aggregator) GetOfficialBotBadge(globalMetaId string) *OfficialBadgeDTO 
 	if a == nil || globalMetaId == "" {
 		return nil
 	}
+	a.cleanupStaleMempoolIfNeeded()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.botByGlobal == nil {

@@ -209,6 +209,12 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	}
 	if !rec.Active {
 		rec.InactiveReason = "canceled"
+	} else if a.sellInvalidatedByNFTLocked(rec) {
+		rec.Active = false
+		rec.InactiveReason = "transferred"
+		// Do not stamp a later UTXO onto an already-invalidated historical sell intent;
+		// still resolve collection identity if missing for reporting.
+		a.enrichSellCollectionOnlyLocked(rec)
 	} else {
 		a.enrichSellRecordNFTFieldsLocked(rec)
 		delete(a.overlayInvalidated, itemPinId)
@@ -226,16 +232,31 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	return true, nil
 }
 
-func (a *Aggregator) enrichSellRecordNFTFieldsLocked(rec *SellIntentRecord) {
+func (a *Aggregator) sellInvalidatedByNFTLocked(rec *SellIntentRecord) bool {
 	if rec == nil || a.nftReader == nil {
-		return
+		return false
 	}
-	if rec.ItemOutpoint == nil || rec.ItemOutpoint.TxID == "" {
-		if _, outpoint, burned, found := a.nftReader.ItemOwnership(rec.ItemPinId, a.zeroConfTrade); found && !burned && outpoint != "" {
-			if parsed := parseOutpointStr(outpoint); parsed != nil {
-				rec.ItemOutpoint = parsed
+	if hasSubsequentTransfer(a.nftReader, rec) {
+		return true
+	}
+	zeroConf := rec.Height <= 0 && a.zeroConfTrade
+	if owner, outpoint, burned, found := a.nftReader.ItemOwnership(rec.ItemPinId, zeroConf); found {
+		if burned || owner != rec.SellerAddress {
+			return true
+		}
+		if rec.ItemOutpoint != nil && rec.ItemOutpoint.TxID != "" && outpoint != "" {
+			declared := fmt.Sprintf("%s:%d", strings.ToLower(rec.ItemOutpoint.TxID), rec.ItemOutpoint.Vout)
+			if !strings.EqualFold(outpoint, declared) {
+				return true
 			}
 		}
+	}
+	return false
+}
+
+func (a *Aggregator) enrichSellCollectionOnlyLocked(rec *SellIntentRecord) {
+	if rec == nil || a.nftReader == nil {
+		return
 	}
 	if rec.CollectionPinId == "" || rec.CollectionName == "" {
 		if info := a.nftReader.ItemSummary(rec.ItemPinId, a.zeroConfTrade); info != nil {
@@ -247,6 +268,20 @@ func (a *Aggregator) enrichSellRecordNFTFieldsLocked(rec *SellIntentRecord) {
 			}
 		}
 	}
+}
+
+func (a *Aggregator) enrichSellRecordNFTFieldsLocked(rec *SellIntentRecord) {
+	if rec == nil || a.nftReader == nil {
+		return
+	}
+	if rec.ItemOutpoint == nil || rec.ItemOutpoint.TxID == "" {
+		if _, outpoint, burned, found := a.nftReader.ItemOwnership(rec.ItemPinId, a.zeroConfTrade); found && !burned && outpoint != "" {
+			if parsed := parseOutpointStr(outpoint); parsed != nil {
+				rec.ItemOutpoint = parsed
+			}
+		}
+	}
+	a.enrichSellCollectionOnlyLocked(rec)
 }
 
 func parseOutpointStr(outpoint string) *ItemOutpoint {

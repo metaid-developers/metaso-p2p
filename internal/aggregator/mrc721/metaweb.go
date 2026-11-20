@@ -54,7 +54,8 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 		docs = append(docs, metawebdoc.Document{
 			ProtocolKey:           metawebdoc.KeyMrc721Collection,
 			SourcePinId:           s.CollectionPinId,
-			CurrentPinId:          formatMarketVersionToken(s),
+			CurrentPinId:          s.CollectionPinId,
+			Fingerprint:           formatMarketVersionToken(s),
 			ChainName:             "mvc",
 			Title:                 title,
 			Summary:               summary,
@@ -70,6 +71,7 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 				"cover":               s.Cover,
 				"caVerified":          s.CaVerified,
 				"holderCount":         s.HolderCount,
+				"burnedCount":         s.BurnedCount,
 				"listedCount":         s.ListedCount,
 				"floorPriceMeMilli":   s.FloorPriceMeMilli,
 				"floorPriceCnyCents":  s.FloorPriceCnyCents,
@@ -117,11 +119,12 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 			ProtocolKey:           metawebdoc.KeyMrc721Listing,
 			SourcePinId:           dto.IntentPinId,
 			CurrentPinId:          dto.IntentPinId,
+			Fingerprint:           formatListingVersionToken(dto),
 			ChainName:             firstNonEmpty(rec.ChainName, "mvc"),
 			Title:                 title,
 			Summary:               summary,
 			Tags:                  tags,
-			ContentExcerpt:        firstNonEmpty(dto.Note, dto.Desc),
+			ContentExcerpt:        firstNonEmpty(dto.Note, strings.TrimSpace(dto.ItemName+" "+dto.Desc), dto.Desc),
 			PublisherGlobalMetaId: dto.Seller.GlobalMetaId,
 			PublisherMetaId:       rec.SellerMetaId,
 			CreatedAt:             rec.CreatedAt,
@@ -139,4 +142,33 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 		})
 	}
 	return docs
+}
+
+func formatListingVersionToken(dto *ListingDTO) string {
+	if dto == nil {
+		return ""
+	}
+	var meMilli, cnyCents int64
+	var fiatCur string
+	if dto.Prices != nil {
+		if dto.Prices.Me != nil {
+			meMilli = dto.Prices.Me.AmountMilli
+		}
+		if dto.Prices.Fiat != nil {
+			fiatCur = dto.Prices.Fiat.Currency
+			cnyCents = dto.Prices.Fiat.AmountCents
+		}
+	}
+	return fmt.Sprintf("%s#%s#%d#%s#%d#%t#%t#%t#%d#%d",
+		dto.IntentPinId,
+		dto.ItemPinId,
+		meMilli,
+		fiatCur,
+		cnyCents,
+		dto.CaVerified,
+		dto.Seller.IsOnline,
+		dto.Confirmed,
+		dto.ListedAt,
+		dto.ExpiresAt,
+	)
 }

@@ -27,6 +27,7 @@ type overlayDeclEntry struct {
 	firstSeenAt int64
 	sell        *SellIntentRecord
 	offer       *OfferRecord
+	trade       *TradeRecord
 }
 
 // SetZeroConfTrade wires the trade gate (R-F-6; called from the daemon
@@ -81,6 +82,47 @@ func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscripti
 			return false
 		}
 		entry.offer = a.synthesizeOfferRecord(pin, payload)
+	case PathTrade:
+		payload, err := parseTradePayload(pinPayloadBytes(pin))
+		if err != nil {
+			log.Printf("WARNING: mrc721 overlay trade pin %s skipped: %v", pin.Id, err)
+			return false
+		}
+		if existing, _ := a.loadTrade(payload.ItemPinId, payload.TxId); existing != nil && !isImplicitTrade(existing) {
+			return false
+		}
+		pub := extractTradePublisher(pin)
+		rec := buildTradeRecordFromPayload(pin, payload, false)
+		if a.nftReader != nil {
+			tr, found := a.nftReader.ItemTransferByTx(payload.ItemPinId, payload.TxId, true)
+			if !found {
+				pendingKey := rec.ItemPinId + ":" + rec.TxId
+				a.overlayPendingTrades[pendingKey] = &pendingTradeEnvelope{
+					PinId:       entry.pinId,
+					TxId:        entry.txid,
+					FirstSeenAt: entry.firstSeenAt,
+					Trade:       rec,
+					Publisher:   pub,
+				}
+				return false
+			}
+			if !a.tradeMatchesTransferLocked(rec, tr.FromAddress, tr.ToAddress) {
+				log.Printf("WARNING: mrc721 overlay trade pin %s rejected: transfer mismatch", pin.Id)
+				return false
+			}
+			if !a.isAuthorizedTradePublisherLocked(pub, tr.FromAddress, tr.ToAddress) {
+				log.Printf("WARNING: mrc721 overlay trade pin %s rejected: unauthorized publisher", pin.Id)
+				return false
+			}
+			a.enrichTradeFromTransferLocked(rec, tr.FromAddress, tr.ToAddress)
+		} else {
+			if !a.isAuthorizedTradePublisherLocked(pub, rec.SellerAddress, rec.BuyerAddress) {
+				log.Printf("WARNING: mrc721 overlay trade pin %s rejected: unauthorized publisher", pin.Id)
+				return false
+			}
+			a.enrichTradeMetadataLocked(rec)
+		}
+		entry.trade = rec
 	default:
 		return false
 	}
@@ -243,6 +285,11 @@ func (a *Aggregator) dropOverlayForTxLocked(txid string) {
 			delete(a.overlayDecls, pinId)
 		}
 	}
+	for k, env := range a.overlayPendingTrades {
+		if env != nil && env.TxId == txid {
+			delete(a.overlayPendingTrades, k)
+		}
+	}
 	delete(a.overlayTxids, txid)
 }
 
@@ -250,11 +297,14 @@ func (a *Aggregator) dropOverlayForTxLocked(txid string) {
 // (R-F-4 acceptance: evicting a mempool cancellation restores the intent on
 // the next full round). A nil txid set never reconciles.
 func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []string) {
-	if observedTxIDs == nil || len(a.overlayTxids) == 0 {
+	if observedTxIDs == nil {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	if len(a.overlayTxids) == 0 && len(a.overlayPendingTrades) == 0 {
+		a.mu.Unlock()
+		return
+	}
 	observed := make(map[string]struct{}, len(observedTxIDs))
 	for _, txid := range observedTxIDs {
 		observed[txid] = struct{}{}
@@ -265,11 +315,20 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 			stale = append(stale, txid)
 		}
 	}
+	for _, env := range a.overlayPendingTrades {
+		if env != nil && env.TxId != "" {
+			if _, ok := observed[env.TxId]; !ok {
+				stale = append(stale, env.TxId)
+			}
+		}
+	}
 	for _, txid := range stale {
 		a.dropOverlayForTxLocked(txid)
 	}
+	a.mu.Unlock()
 	if len(stale) > 0 {
 		log.Printf("[mrc721] declaration overlay reconcile (%s): evicted %d txid(s)", chainName, len(stale))
+		a.invalidateMarketCache()
 	}
 }
 

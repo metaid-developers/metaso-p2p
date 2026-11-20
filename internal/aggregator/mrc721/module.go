@@ -133,9 +133,10 @@ func (r *SellIntentRecord) EffectiveAutoFulfillMe() bool {
 	return *r.AutoFulfillMe
 }
 
-// CAReader resolves official CA certification for collections.
+// CAReader resolves official CA certification and official bot roles.
 type CAReader interface {
 	IsCollectionCertified(collectionPinId string) (certified bool, displayTitle string)
+	GetOfficialBotRole(globalMetaId string) (verified bool, role string)
 }
 
 // SellerProfileSnapshot carries userinfo identity fields for market DTOs.
@@ -165,7 +166,9 @@ type NFTReader interface {
 	ItemSummary(itemPinId string, zeroConf bool) *mrc721nft.ItemSummaryInfo
 	ListAllCollections(zeroConf bool) []*mrc721nft.Collection
 	CollectionHolderStats(collectionPinId string, zeroConf bool) (holderCount int, counts map[string]int, err error)
-	ItemTransferByTx(itemPinId, txId string) (*mrc721nft.ItemTransfer, bool)
+	CollectionBurnedCount(collectionPinId string, zeroConf bool) int
+	ItemTransferByTx(itemPinId, txId string, zeroConf bool) (*mrc721nft.ItemTransfer, bool)
+	ItemLatestConfirmedTransfer(itemPinId string) (height int64, txTime int64, txId string, transferCount int64, found bool)
 }
 
 // Aggregator is the mrc721 business-index module. It never produces socket
@@ -194,10 +197,11 @@ type Aggregator struct {
 
 	// Zero-confirmation declaration overlay state (R-F-4): in-memory only,
 	// guarded by a.mu, rebuilt from the node mempool after a restart.
-	zeroConfTrade      bool
-	overlayDecls       map[string]*overlayDeclEntry // pinId → entry
-	overlayTxids       map[string]int64             // live overlay txid → firstSeenAt
-	overlayInvalidated map[string]string            // itemPinId → inactiveReason (mempool transfer/burn)
+	zeroConfTrade        bool
+	overlayDecls         map[string]*overlayDeclEntry     // pinId → entry
+	overlayTxids         map[string]int64                 // live overlay txid → firstSeenAt
+	overlayInvalidated   map[string]string                // itemPinId → inactiveReason (mempool fallback when nftReader is nil)
+	overlayPendingTrades map[string]*pendingTradeEnvelope // itemPinId:txId → staged mempool trade awaiting 0-conf transfer
 
 	// Cross-module readers wired at startup in main.go.
 	caReader       CAReader
@@ -261,6 +265,7 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.overlayDecls = make(map[string]*overlayDeclEntry)
 	a.overlayTxids = make(map[string]int64)
 	a.overlayInvalidated = make(map[string]string)
+	a.overlayPendingTrades = make(map[string]*pendingTradeEnvelope)
 	if a.nowFn == nil {
 		a.nowFn = func() int64 { return time.Now().Unix() }
 	}

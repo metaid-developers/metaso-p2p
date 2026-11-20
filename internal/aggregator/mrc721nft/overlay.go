@@ -385,7 +385,6 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 		return
 	}
 	a.overlayMu.Lock()
-	defer a.overlayMu.Unlock()
 	observed := make(map[string]struct{}, len(observedTxIDs))
 	for _, txid := range observedTxIDs {
 		observed[txid] = struct{}{}
@@ -399,8 +398,13 @@ func (a *Aggregator) ReconcileMempoolRound(chainName string, observedTxIDs []str
 	for _, txid := range staleTxs {
 		a.dropOverlayForTxLocked(txid)
 	}
+	hook := a.overlayReconciledHook
+	a.overlayMu.Unlock()
 	if len(staleTxs) > 0 {
 		log.Printf("[mrc721nft] overlay reconcile (%s): evicted %d txid(s)", chainName, len(staleTxs))
+		if hook != nil {
+			hook()
+		}
 	}
 }
 

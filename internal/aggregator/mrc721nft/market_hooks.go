@@ -83,6 +83,14 @@ func (a *Aggregator) SetTransferEventHook(hook func(TransferEvent)) {
 	a.transferEventHook = hook
 }
 
+// SetOverlayReconciledHook registers a listener fired outside overlayMu when
+// stale mempool entries are evicted during ReconcileMempoolRound.
+func (a *Aggregator) SetOverlayReconciledHook(hook func()) {
+	a.overlayMu.Lock()
+	a.overlayReconciledHook = hook
+	a.overlayMu.Unlock()
+}
+
 // SetAddressResolver wires globalMetaId -> addresses lookup for /address/* endpoints.
 func (a *Aggregator) SetAddressResolver(resolver AddressResolver) {
 	a.addressResolver = resolver
@@ -318,8 +326,62 @@ func (a *Aggregator) CollectionHolderStats(collectionPinId string, zeroConf bool
 	return len(counts), counts, err
 }
 
-// ItemTransferByTx looks up a confirmed, overlay, or pending transfer for (itemPinId, txId).
-func (a *Aggregator) ItemTransferByTx(itemPinId, txId string) (*ItemTransfer, bool) {
+// CollectionBurnedCount counts burned items in collectionPinId.
+func (a *Aggregator) CollectionBurnedCount(collectionPinId string, zeroConf bool) int {
+	if a == nil || a.db == nil || strings.TrimSpace(collectionPinId) == "" {
+		return 0
+	}
+	burned := 0
+	if zeroConf && (a.zeroConfIssuanceGate.Load() || a.zeroConfTradeGate.Load()) {
+		if view := a.albumViewByPinId(collectionPinId, viewOptions{}); view != nil {
+			for _, iv := range a.itemViewsForAlbum(view, viewOptions{}) {
+				if iv != nil && iv.item != nil && !iv.overSupply && iv.item.Burned {
+					burned++
+				}
+			}
+			return burned
+		}
+	}
+	_ = a.db.IterateCollectionItems(collectionPinId, func(_ int64, itemPinId string) bool {
+		item, getErr := a.db.GetItem(itemPinId)
+		if getErr == nil && item != nil && item.Burned {
+			burned++
+		}
+		return true
+	})
+	return burned
+}
+
+// ItemLatestConfirmedTransfer returns the latest confirmed transfer height,
+// chain time, txId, and total confirmed transferCount for itemPinId.
+func (a *Aggregator) ItemLatestConfirmedTransfer(itemPinId string) (height int64, txTime int64, txId string, transferCount int64, found bool) {
+	if a == nil || a.db == nil || strings.TrimSpace(itemPinId) == "" {
+		return 0, 0, "", 0, false
+	}
+	if item, err := a.db.GetItem(itemPinId); err == nil && item != nil {
+		transferCount = item.TransferCount
+	}
+	_ = a.db.IterateItemTransfers(itemPinId, func(tr *ItemTransfer) bool {
+		if tr == nil {
+			return true
+		}
+		trTx := tr.TxId
+		if idx := strings.Index(trTx, ":"); idx >= 0 {
+			trTx = trTx[:idx]
+		}
+		if !found || tr.Height > height || (tr.Height == height && tr.Time >= txTime) {
+			height = tr.Height
+			txTime = tr.Time
+			txId = trTx
+			found = true
+		}
+		return true
+	})
+	return height, txTime, txId, transferCount, found
+}
+
+// ItemTransferByTx looks up a confirmed or (when zeroConf is true) overlay/pending transfer for (itemPinId, txId).
+func (a *Aggregator) ItemTransferByTx(itemPinId, txId string, zeroConf bool) (*ItemTransfer, bool) {
 	if a == nil || a.db == nil {
 		return nil, false
 	}
@@ -345,7 +407,7 @@ func (a *Aggregator) ItemTransferByTx(itemPinId, txId string) (*ItemTransfer, bo
 	if found != nil {
 		return found, true
 	}
-	if a.zeroConfTradeGate.Load() {
+	if zeroConf && a.zeroConfTradeGate.Load() {
 		spends := a.overlayTransfersForItem(itemPinId)
 		sort.Slice(spends, func(i, j int) bool { return spends[i].FirstSeenAt > spends[j].FirstSeenAt })
 		for _, sp := range spends {
@@ -361,17 +423,17 @@ func (a *Aggregator) ItemTransferByTx(itemPinId, txId string) (*ItemTransfer, bo
 				}, true
 			}
 		}
-	}
-	if pt, _ := a.db.GetPendingTransfer(itemPinId); pt != nil && strings.EqualFold(pt.TxId, txId) {
-		return &ItemTransfer{
-			ItemPinId:   pt.ItemPinId,
-			FromAddress: pt.FromAddress,
-			ToAddress:   pt.ToAddress,
-			ChainName:   pt.ChainName,
-			Height:      -1,
-			TxId:        pt.TxId,
-			Time:        pt.FirstSeenAt,
-		}, true
+		if pt, _ := a.db.GetPendingTransfer(itemPinId); pt != nil && strings.EqualFold(pt.TxId, txId) {
+			return &ItemTransfer{
+				ItemPinId:   pt.ItemPinId,
+				FromAddress: pt.FromAddress,
+				ToAddress:   pt.ToAddress,
+				ChainName:   pt.ChainName,
+				Height:      -1,
+				TxId:        pt.TxId,
+				Time:        pt.FirstSeenAt,
+			}, true
+		}
 	}
 	return nil, false
 }
