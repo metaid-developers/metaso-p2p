@@ -12,6 +12,7 @@ type Data struct {
 	Persona       *Persona          `json:"persona,omitempty"`
 	Homepage      Homepage          `json:"homepage"`
 	Presence      Presence          `json:"presence"`
+	OfficialBadge *OfficialBadge    `json:"officialBadge"`
 	Services      []Service         `json:"services"`
 	Sections      []Section         `json:"sections,omitempty"`
 	Actions       []Action          `json:"actions"`
@@ -75,6 +76,14 @@ type Presence struct {
 	State     string `json:"state"`
 	UpdatedAt *int64 `json:"updatedAt"`
 	Source    string `json:"source"`
+}
+
+// OfficialBadge is the CA-verified official bot badge projected onto bot homepage.
+type OfficialBadge struct {
+	Verified   bool   `json:"verified"`
+	Role       string `json:"role"`
+	BadgeType  string `json:"badgeType"`
+	BadgeLabel string `json:"badgeLabel"`
 }
 
 type Service struct {

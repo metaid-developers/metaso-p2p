@@ -23,6 +23,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -40,6 +41,9 @@ const (
 	// (docs/nft-sell-protocol-draft.md §2.1). Pins on this path are
 	// ordinary raw pins; this index only subscribes to them.
 	PathSell = "/protocols/mrc721sell"
+
+	// PathTrade is the verified MRC-721 trade settlement receipt path (REQ-B-07).
+	PathTrade = "/protocols/mrc721trade"
 
 	// OperationCreate is the only operation the sell protocol uses: every
 	// declaration (first, re-declare, post-cancel re-list) is a CREATE pin,
@@ -65,6 +69,23 @@ type ItemOutpoint struct {
 	Satoshis int64  `json:"satoshis,omitempty"`
 }
 
+// SellPriceMe declares the ME fixed-price leg of a v2.1 sell intent (Contract C2.2).
+type SellPriceMe struct {
+	AmountMilli int64 `json:"amountMilli"`
+}
+
+// SellPriceFiat declares the fiat leg of a v2.1 sell intent (Contract C2.2).
+type SellPriceFiat struct {
+	Currency    string `json:"currency"`
+	AmountCents int64  `json:"amountCents"`
+}
+
+// SellPrices carries optional multi-currency prices on /protocols/mrc721sell v2.1.
+type SellPrices struct {
+	Me   *SellPriceMe   `json:"me,omitempty"`
+	Fiat *SellPriceFiat `json:"fiat,omitempty"`
+}
+
 // SellIntentRecord is the latest-wins projection of one itemPinId's
 // declaration log entry. Seq is the local monotonic write counter used for
 // the recency index and the pagination cursor.
@@ -72,12 +93,17 @@ type SellIntentRecord struct {
 	ItemPinId          string        `json:"itemPinId"`
 	SellPinId          string        `json:"sellPinId"`
 	Active             bool          `json:"active"`
+	InactiveReason     string        `json:"inactiveReason,omitempty"`
 	CollectionName     string        `json:"collectionName,omitempty"`
 	CollectionPinId    string        `json:"collectionPinId,omitempty"`
 	ItemOutpoint       *ItemOutpoint `json:"itemOutpoint,omitempty"`
 	SellerAddress      string        `json:"sellerAddress"`
 	SellerMetaId       string        `json:"sellerMetaId,omitempty"`
 	PriceHintSats      int64         `json:"priceHintSats,omitempty"`
+	Prices             *SellPrices   `json:"prices,omitempty"`
+	AutoFulfillMe      *bool         `json:"autoFulfillMe,omitempty"`
+	Negotiable         bool          `json:"negotiable,omitempty"`
+	ShopMetaAppPinId   string        `json:"shopMetaAppPinId,omitempty"`
 	AcceptedCurrencies []string      `json:"acceptedCurrencies,omitempty"`
 	Settlement         []string      `json:"settlement,omitempty"`
 	Note               string        `json:"note,omitempty"`
@@ -97,6 +123,49 @@ type SellIntentRecord struct {
 	// stored JSON bytes unchanged).
 	Overlay            bool  `json:"-"`
 	OverlayFirstSeenAt int64 `json:"-"`
+}
+
+// EffectiveAutoFulfillMe returns true unless explicitly set to false (Contract C2.3).
+func (r *SellIntentRecord) EffectiveAutoFulfillMe() bool {
+	if r == nil || r.AutoFulfillMe == nil {
+		return true
+	}
+	return *r.AutoFulfillMe
+}
+
+// CAReader resolves official CA certification for collections.
+type CAReader interface {
+	IsCollectionCertified(collectionPinId string) (certified bool, displayTitle string)
+}
+
+// SellerProfileSnapshot carries userinfo identity fields for market DTOs.
+type SellerProfileSnapshot struct {
+	Address       string
+	GlobalMetaId  string
+	MetaId        string
+	Name          string
+	Avatar        string
+	HasChatPubkey bool
+}
+
+// ProfileReader resolves user profiles and globalMetaId -> addresses.
+type ProfileReader interface {
+	LookupProfile(identity string) *SellerProfileSnapshot
+	ResolveAddressesByGlobalMetaId(globalMetaId string) []string
+}
+
+// PresenceReader resolves online status for an identity.
+type PresenceReader interface {
+	PresenceStatus(identity string) (online bool, lastSeenAgoSeconds *int64)
+}
+
+// NFTReader abstracts read-only queries against mrc721nft.
+type NFTReader interface {
+	ItemOwnership(itemPinId string, zeroConf bool) (ownerAddress string, outpoint string, burned bool, found bool)
+	ItemSummary(itemPinId string, zeroConf bool) *mrc721nft.ItemSummaryInfo
+	ListAllCollections(zeroConf bool) []*mrc721nft.Collection
+	CollectionHolderStats(collectionPinId string, zeroConf bool) (holderCount int, counts map[string]int, err error)
+	ItemTransferByTx(itemPinId, txId string) (*mrc721nft.ItemTransfer, bool)
 }
 
 // Aggregator is the mrc721 business-index module. It never produces socket
@@ -125,9 +194,21 @@ type Aggregator struct {
 
 	// Zero-confirmation declaration overlay state (R-F-4): in-memory only,
 	// guarded by a.mu, rebuilt from the node mempool after a restart.
-	zeroConfTrade bool
-	overlayDecls  map[string]*overlayDeclEntry // pinId → entry
-	overlayTxids  map[string]int64             // live overlay txid → firstSeenAt
+	zeroConfTrade      bool
+	overlayDecls       map[string]*overlayDeclEntry // pinId → entry
+	overlayTxids       map[string]int64             // live overlay txid → firstSeenAt
+	overlayInvalidated map[string]string            // itemPinId → inactiveReason (mempool transfer/burn)
+
+	// Cross-module readers wired at startup in main.go.
+	caReader       CAReader
+	profileReader  ProfileReader
+	presenceReader PresenceReader
+	nftReader      NFTReader
+	nowFn          func() int64
+
+	// Cached collection market summaries (invalidated on sell/transfer/trade writes).
+	marketMu    sync.RWMutex
+	marketCache *marketCacheSnapshot
 }
 
 // NativeCollectionSource abstracts the native mrc721nft collection read
@@ -179,7 +260,48 @@ func (a *Aggregator) Init(store *storage.PebbleStore, cacheProvider *cache.Cache
 	a.notifyCh = make(chan *aggregator.NotifyEvent, 16)
 	a.overlayDecls = make(map[string]*overlayDeclEntry)
 	a.overlayTxids = make(map[string]int64)
+	a.overlayInvalidated = make(map[string]string)
+	if a.nowFn == nil {
+		a.nowFn = func() int64 { return time.Now().Unix() }
+	}
 	return nil
+}
+
+// SetCAReader wires the official CA certification reader.
+func (a *Aggregator) SetCAReader(reader CAReader) {
+	a.mu.Lock()
+	a.caReader = reader
+	a.mu.Unlock()
+	a.invalidateMarketCache()
+}
+
+// SetProfileReader wires the userinfo profile reader.
+func (a *Aggregator) SetProfileReader(reader ProfileReader) {
+	a.mu.Lock()
+	a.profileReader = reader
+	a.mu.Unlock()
+}
+
+// SetPresenceReader wires the presence status reader.
+func (a *Aggregator) SetPresenceReader(reader PresenceReader) {
+	a.mu.Lock()
+	a.presenceReader = reader
+	a.mu.Unlock()
+}
+
+// SetNFTReader wires the mrc721nft read model.
+func (a *Aggregator) SetNFTReader(reader NFTReader) {
+	a.mu.Lock()
+	a.nftReader = reader
+	a.mu.Unlock()
+	a.invalidateMarketCache()
+}
+
+func (a *Aggregator) nowUnix() int64 {
+	if a != nil && a.nowFn != nil {
+		return a.nowFn()
+	}
+	return time.Now().Unix()
 }
 
 func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
@@ -192,49 +314,54 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 // latest-pin-wins rules consume.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, err := a.ingestSellPin(pin); err != nil {
+	sellChanged, err := a.ingestSellPin(pin)
+	if err != nil {
+		a.mu.Unlock()
 		return nil, err
 	}
-	if _, err := a.ingestOfferPin(pin); err != nil {
+	offerChanged, err := a.ingestOfferPin(pin)
+	if err != nil {
+		a.mu.Unlock()
+		return nil, err
+	}
+	tradeChanged, err := a.ingestTradePin(pin)
+	if err != nil {
+		a.mu.Unlock()
 		return nil, err
 	}
 	if pin != nil {
 		a.dropOverlayForTxLocked(txIdOfPinId(pin.Id))
 	}
+	a.mu.Unlock()
+	if sellChanged || offerChanged || tradeChanged {
+		a.invalidateMarketCache()
+	}
 	return nil, nil
 }
 
-// HandleBlockPin folds a confirmed pin into the sell-intent index and, when
-// the offer gate is on, the passive-offer index — then drops the pin's
-// declaration overlay entries (R-F-4 confirmation handoff, same critical
-// section: no read observes a gap and a dropped re-declaration's effects
-// never survive its own confirmation).
+// HandleMempoolPin records zero-conf declaration overlay effects.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
-	// Zero-conf declaration overlay (R-F-4): with the trade gate on,
-	// mempool sell/offer pins take effect in the merged views immediately;
-	// the confirmed latest-wins records stay untouched until the block.
-	// The overlay is recomputed, so a mempool re-declare can no longer
-	// "overwrite a confirmed cancellation with no recovery path" — evicting
-	// the re-declaration restores the confirmed record.
 	a.mu.Lock()
-	a.recordMempoolDeclarationLocked(pin)
+	changed := a.recordMempoolDeclarationLocked(pin)
 	a.mu.Unlock()
+	if changed {
+		a.invalidateMarketCache()
+	}
 	return nil, nil
 }
 
 // RegisterRoutes mounts the mrc721 query API on the given group (the /api
-// group in the daemon router; /api prefix included by the caller). The
-// passive-offer routes mount only when the offer gate is on. The gate is
-// written once at startup (SetOfferEnabled before Register) and never
-// mutated afterwards, so direct field reads are safe everywhere — the
-// ingest callers already hold a.mu, and a locked getter here would
-// dead-lock against them.
+// group in the daemon router; /api prefix included by the caller).
 func (a *Aggregator) RegisterRoutes(router *gin.RouterGroup) {
 	router.GET("/mrc721/sell/intents", a.handleSellIntents)
 	router.GET("/mrc721/sell/intent/info", a.handleSellIntentInfo)
 	router.GET("/mrc721/collection/search", a.handleCollectionSearch)
+	router.GET("/mrc721/collection/holders", a.handleCollectionHolders)
 	router.GET("/mrc721/address/collections-issued", a.handleAddressCollectionsIssued)
+	router.GET("/mrc721/market/collections", a.handleMarketCollections)
+	router.GET("/mrc721/market/collection/:collectionPinId/summary", a.handleMarketCollectionSummary)
+	router.GET("/mrc721/market/listings", a.handleMarketListings)
+	router.GET("/mrc721/market/trades", a.handleMarketTrades)
 	if a.offerIndexEnabled {
 		router.GET("/mrc721/offers", a.handleOffers)
 		router.GET("/mrc721/offer/info", a.handleOfferInfo)

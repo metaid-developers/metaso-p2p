@@ -81,6 +81,7 @@ func (a *Aggregator) ListSellIntents(filter SellIntentFilter, cursor string, siz
 		if err != nil {
 			return nil, err
 		}
+		rec = a.reconcileSellIntentReadState(rec)
 		page := &SellIntentPage{List: []*SellIntentRecord{}}
 		if rec != nil && sellIntentMatches(rec, filter) {
 			page.List = append(page.List, rec)
@@ -89,40 +90,10 @@ func (a *Aggregator) ListSellIntents(filter SellIntentFilter, cursor string, siz
 		return page, nil
 	}
 
-	matches := make([]*SellIntentRecord, 0)
-	err = a.store.ScanPrefix(Namespace, intentTimePrefix(), func(key, _ []byte) error {
-		seq, itemPinId, ok := parseIntentTimeKey(key)
-		if !ok {
-			return nil
-		}
-		rec, err := a.loadSellIntent(itemPinId)
-		if err != nil || rec == nil {
-			// Corrupt record or dangling index entry: drop the entry so the
-			// scan self-heals.
-			if err == nil && rec == nil {
-				a.deleteSellIntentIndexEntry(seq, itemPinId)
-			}
-			return nil
-		}
-		if rec.Seq != seq {
-			// Stale index position left by an interrupted overwrite; the
-			// item's newer entry covers it.
-			a.deleteSellIntentIndexEntry(seq, itemPinId)
-			return nil
-		}
-		matches = append(matches, rec)
-		return nil
-	})
+	matches, err := a.listAllEffectiveSellIntents(true)
 	if err != nil {
 		return nil, err
 	}
-
-	// Zero-conf merge (R-F-4): overlay declarations take effect on top of
-	// the confirmed latest-wins records — overlay rows lead the list (they
-	// are the freshest), covered confirmed rows drop out. Filters apply to
-	// the MERGED rows: a mempool cancellation hides the intent from an
-	// active-filtered list.
-	matches = a.mergeSellOverlay(matches)
 	filtered := make([]*SellIntentRecord, 0, len(matches))
 	for _, rec := range matches {
 		if sellIntentMatches(rec, filter) {
@@ -166,7 +137,85 @@ func (a *Aggregator) SellIntentInfo(itemPinId string) (*SellIntentRecord, error)
 		return nil, ErrInvalidParameter
 	}
 	rec, _, err := a.effectiveSellIntent(itemPinId)
-	return rec, err
+	if err != nil {
+		return nil, err
+	}
+	return a.reconcileSellIntentReadState(rec), nil
+}
+
+// listAllEffectiveSellIntents returns all sell intents (confirmed + overlay)
+// after applying read-time ownership, transfer-invalidation, and expiry checks.
+func (a *Aggregator) listAllEffectiveSellIntents(includeOverlay bool) ([]*SellIntentRecord, error) {
+	if a == nil || a.store == nil {
+		return nil, errors.New("mrc721 aggregator is not initialised")
+	}
+	matches := make([]*SellIntentRecord, 0)
+	err := a.store.ScanPrefix(Namespace, intentTimePrefix(), func(key, _ []byte) error {
+		seq, itemPinId, ok := parseIntentTimeKey(key)
+		if !ok {
+			return nil
+		}
+		rec, err := a.loadSellIntent(itemPinId)
+		if err != nil || rec == nil {
+			if err == nil && rec == nil {
+				a.deleteSellIntentIndexEntry(seq, itemPinId)
+			}
+			return nil
+		}
+		if rec.Seq != seq {
+			a.deleteSellIntentIndexEntry(seq, itemPinId)
+			return nil
+		}
+		matches = append(matches, rec)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if includeOverlay {
+		matches = a.mergeSellOverlay(matches)
+	}
+	out := make([]*SellIntentRecord, 0, len(matches))
+	for _, rec := range matches {
+		out = append(out, a.reconcileSellIntentReadState(rec))
+	}
+	return out, nil
+}
+
+func (a *Aggregator) reconcileSellIntentReadState(rec *SellIntentRecord) *SellIntentRecord {
+	if rec == nil {
+		return nil
+	}
+	cp := *rec
+	if !cp.Active {
+		return &cp
+	}
+	a.mu.Lock()
+	reason := a.overlayInvalidated[cp.ItemPinId]
+	nftReader := a.nftReader
+	zeroConf := a.zeroConfTrade
+	a.mu.Unlock()
+
+	if reason != "" {
+		cp.Active = false
+		cp.InactiveReason = reason
+		return &cp
+	}
+	if cp.ExpiresAt > 0 && cp.ExpiresAt <= a.nowUnix() {
+		cp.Active = false
+		cp.InactiveReason = "expired"
+		return &cp
+	}
+	if nftReader != nil {
+		if owner, _, burned, found := nftReader.ItemOwnership(cp.ItemPinId, zeroConf); found {
+			if burned || owner != cp.SellerAddress {
+				cp.Active = false
+				cp.InactiveReason = "transferred"
+				return &cp
+			}
+		}
+	}
+	return &cp
 }
 
 // mergeSellOverlay folds the sell declaration overlay into a newest-first

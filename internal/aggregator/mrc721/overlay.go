@@ -43,16 +43,16 @@ const overlayCap = 50000
 
 // recordMempoolDeclarationLocked records one mempool declaration pin.
 // Idempotent by pin id.
-func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscription) {
+func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscription) bool {
 	if pin == nil || a.store == nil || !a.zeroConfTrade || len(pin.Id) == 0 {
-		return
+		return false
 	}
 	if _, ok := a.overlayDecls[pin.Id]; ok {
-		return // idempotent re-delivery
+		return false // idempotent re-delivery
 	}
 	path := normalisedPinPath(pin.Path)
 	if strings.ToLower(strings.TrimSpace(pin.Operation)) != OperationCreate {
-		return // create-only protocols
+		return false // create-only protocols
 	}
 	entry := &overlayDeclEntry{
 		pinId:       pin.Id,
@@ -65,21 +65,24 @@ func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscripti
 		payload, err := parseSellIntentPayload(pinPayloadBytes(pin))
 		if err != nil {
 			log.Printf("WARNING: mrc721 overlay sell pin %s skipped: %v", pin.Id, err)
-			return
+			return false
 		}
 		entry.sell = a.synthesizeSellRecord(pin, payload)
+		if entry.sell.Active {
+			delete(a.overlayInvalidated, entry.sell.ItemPinId)
+		}
 	case PathOffer:
 		if !a.offerIndexEnabled {
-			return // the offer index is off: no offer surface at all
+			return false // the offer index is off: no offer surface at all
 		}
 		payload, err := parseOfferPayload(pinPayloadBytes(pin))
 		if err != nil {
 			log.Printf("WARNING: mrc721 overlay offer pin %s skipped: %v", pin.Id, err)
-			return
+			return false
 		}
 		entry.offer = a.synthesizeOfferRecord(pin, payload)
 	default:
-		return
+		return false
 	}
 	if entry.sell != nil {
 		entry.sell.Overlay = true
@@ -92,13 +95,14 @@ func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscripti
 	a.overlayDecls[entry.pinId] = entry
 	a.overlayTxids[entry.txid] = entry.firstSeenAt
 	a.evictOverlayCapLocked()
+	return true
 }
 
 // synthesizeSellRecord builds the provisional record of one mempool sell
 // declaration (same field mapping as the confirmed ingest).
 func (a *Aggregator) synthesizeSellRecord(pin *aggregator.PinInscription, payload *sellIntentPayload) *SellIntentRecord {
 	sellPinId := strings.TrimSpace(pin.Id)
-	return &SellIntentRecord{
+	rec := &SellIntentRecord{
 		ItemPinId:          payload.ItemPinId,
 		SellPinId:          sellPinId,
 		Active:             payload.Active,
@@ -108,6 +112,10 @@ func (a *Aggregator) synthesizeSellRecord(pin *aggregator.PinInscription, payloa
 		SellerAddress:      payload.SellerAddress,
 		SellerMetaId:       payload.SellerMetaId,
 		PriceHintSats:      payload.PriceHintSats,
+		Prices:             payload.Prices,
+		AutoFulfillMe:      payload.AutoFulfillMe,
+		Negotiable:         payload.Negotiable,
+		ShopMetaAppPinId:   payload.ShopMetaAppPinId,
 		AcceptedCurrencies: payload.AcceptedCurrencies,
 		Settlement:         payload.Settlement,
 		Note:               payload.Note,
@@ -119,6 +127,12 @@ func (a *Aggregator) synthesizeSellRecord(pin *aggregator.PinInscription, payloa
 		UpdatedAt:          unixSeconds(pin.Timestamp),
 		Seq:                0, // overlay rows carry no write sequence
 	}
+	if !rec.Active {
+		rec.InactiveReason = "canceled"
+	} else {
+		a.enrichSellRecordNFTFieldsLocked(rec)
+	}
+	return rec
 }
 
 // synthesizeOfferRecord builds the provisional record of one mempool offer

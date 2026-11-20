@@ -64,7 +64,8 @@ type sellIntentRow struct {
 	SellPinId string `json:"sellPinId,omitempty"`
 	Sellpinid string `json:"sellpinid,omitempty"`
 
-	Active bool `json:"active"`
+	Active         bool   `json:"active"`
+	InactiveReason string `json:"inactiveReason,omitempty"`
 
 	CollectionName string `json:"collectionName,omitempty"`
 	Collectionname string `json:"collectionname,omitempty"`
@@ -82,6 +83,11 @@ type sellIntentRow struct {
 
 	PriceHintSats int64 `json:"priceHintSats,omitempty"`
 	Pricehintsats int64 `json:"pricehintsats,omitempty"`
+
+	Prices           *SellPrices `json:"prices,omitempty"`
+	AutoFulfillMe    *bool       `json:"autoFulfillMe,omitempty"`
+	Negotiable       *bool       `json:"negotiable,omitempty"`
+	ShopMetaAppPinId string      `json:"shopMetaAppPinId,omitempty"`
 
 	AcceptedCurrencies []string `json:"acceptedCurrencies,omitempty"`
 	Acceptedcurrencies []string `json:"acceptedcurrencies,omitempty"`
@@ -122,6 +128,7 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		SellPinId:          rec.SellPinId,
 		Sellpinid:          rec.SellPinId,
 		Active:             rec.Active,
+		InactiveReason:     rec.InactiveReason,
 		CollectionName:     rec.CollectionName,
 		Collectionname:     rec.CollectionName,
 		CollectionPinId:    rec.CollectionPinId,
@@ -133,6 +140,8 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		Sellermetaid:       rec.SellerMetaId,
 		PriceHintSats:      rec.PriceHintSats,
 		Pricehintsats:      rec.PriceHintSats,
+		Prices:             rec.Prices,
+		ShopMetaAppPinId:   rec.ShopMetaAppPinId,
 		AcceptedCurrencies: rec.AcceptedCurrencies,
 		Acceptedcurrencies: rec.AcceptedCurrencies,
 		Settlement:         rec.Settlement,
@@ -148,6 +157,12 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		Height:             rec.Height,
 		TxId:               rec.TxID,
 		Txid:               rec.TxID,
+	}
+	if rec.Prices != nil || rec.AutoFulfillMe != nil || rec.Negotiable || rec.ShopMetaAppPinId != "" {
+		auto := rec.EffectiveAutoFulfillMe()
+		neg := rec.Negotiable
+		row.AutoFulfillMe = &auto
+		row.Negotiable = &neg
 	}
 	if rec.Overlay {
 		confirmed := false

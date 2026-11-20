@@ -32,6 +32,10 @@ type sellIntentPayload struct {
 	ItemOutpoint       *ItemOutpoint
 	SellerMetaId       string
 	PriceHintSats      int64
+	Prices             *SellPrices
+	AutoFulfillMe      *bool
+	Negotiable         bool
+	ShopMetaAppPinId   string
 	AcceptedCurrencies []string
 	Settlement         []string
 	Note               string
@@ -77,6 +81,22 @@ func parseSellIntentPayload(raw []byte) (*sellIntentPayload, error) {
 	payload.ItemOutpoint = payloadOutpoint(fields)
 	payload.SellerMetaId, _ = payloadString(fields, "sellerMetaId")
 	payload.PriceHintSats, _ = payloadInt(fields, "priceHintSats")
+	prices, err := payloadPrices(fields, payload.Active)
+	if err != nil {
+		return nil, err
+	}
+	payload.Prices = prices
+	if rawAuto, ok := payloadLookup(fields, "autoFulfillMe"); ok {
+		if val, ok := payloadBool(rawAuto); ok {
+			payload.AutoFulfillMe = &val
+		}
+	}
+	if rawNeg, ok := payloadLookup(fields, "negotiable"); ok {
+		if val, ok := payloadBool(rawNeg); ok {
+			payload.Negotiable = val
+		}
+	}
+	payload.ShopMetaAppPinId, _ = payloadString(fields, "shopMetaAppPinId")
 	payload.AcceptedCurrencies = payloadStringList(fields, "acceptedCurrencies")
 	payload.Settlement = payloadStringList(fields, "settlement")
 	payload.Note, _ = payloadString(fields, "note")
@@ -246,4 +266,51 @@ func payloadOutpoint(fields map[string]json.RawMessage) *ItemOutpoint {
 	out.Vout, _ = payloadInt(sub, "vout")
 	out.Satoshis, _ = payloadInt(sub, "satoshis")
 	return out
+}
+
+func payloadPrices(fields map[string]json.RawMessage, active bool) (*SellPrices, error) {
+	raw, ok := payloadLookup(fields, "prices")
+	if !ok {
+		return nil, nil
+	}
+	var sub map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &sub); err != nil {
+		return nil, nil
+	}
+	out := &SellPrices{}
+	if meRaw, ok := payloadLookup(sub, "me"); ok {
+		var meFields map[string]json.RawMessage
+		if err := json.Unmarshal(meRaw, &meFields); err == nil {
+			amount, hasAmount := payloadInt(meFields, "amountMilli")
+			if hasAmount && amount <= 0 && active {
+				return nil, fmt.Errorf("prices.me.amountMilli must be positive")
+			}
+			if amount > 0 {
+				out.Me = &SellPriceMe{AmountMilli: amount}
+			}
+		}
+	}
+	if fiatRaw, ok := payloadLookup(sub, "fiat"); ok {
+		var fiatFields map[string]json.RawMessage
+		if err := json.Unmarshal(fiatRaw, &fiatFields); err == nil {
+			cents, hasCents := payloadInt(fiatFields, "amountCents")
+			if hasCents && cents <= 0 && active {
+				return nil, fmt.Errorf("prices.fiat.amountCents must be positive")
+			}
+			if cents > 0 {
+				currency, _ := payloadString(fiatFields, "currency")
+				if currency == "" {
+					currency = "CNY"
+				}
+				out.Fiat = &SellPriceFiat{
+					Currency:    strings.ToUpper(currency),
+					AmountCents: cents,
+				}
+			}
+		}
+	}
+	if out.Me == nil && out.Fiat == nil {
+		return nil, nil
+	}
+	return out, nil
 }

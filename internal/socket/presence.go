@@ -26,6 +26,15 @@ type globalPresenceStatus struct {
 	Connections   int      `json:"connections,omitempty"`
 }
 
+type presenceBatchRequest struct {
+	GlobalMetaIds []string `json:"globalMetaIds"`
+}
+
+type presenceBatchEntry struct {
+	Online             bool   `json:"online"`
+	LastSeenAgoSeconds *int64 `json:"lastSeenAgoSeconds,omitempty"`
+}
+
 type idchatOnlineRow struct {
 	GlobalMetaId       string           `json:"globalMetaId"`
 	LastSeenAt         int64            `json:"lastSeenAt"`
@@ -213,6 +222,122 @@ func (s *Server) HandleGlobalPresenceByGlobalMetaId(c *gin.Context) {
 	})
 }
 
+const maxPresenceBatchSize = 100
+
+// HandlePresenceBatch resolves online status and lastSeenAgoSeconds for up to
+// 100 globalMetaIds in one request (Contract C3.6).
+func (s *Server) HandlePresenceBatch(c *gin.Context) {
+	var req presenceBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": "invalid JSON body",
+		})
+		return
+	}
+	if len(req.GlobalMetaIds) == 0 || len(req.GlobalMetaIds) > maxPresenceBatchSize {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    40000,
+			"message": "globalMetaIds must contain 1 to 100 entries",
+		})
+		return
+	}
+
+	items := s.effectivePresenceEntries()
+	nowMs := time.Now().UnixMilli()
+	out := make(map[string]presenceBatchEntry, len(req.GlobalMetaIds))
+	for _, rawGid := range req.GlobalMetaIds {
+		gid := strings.TrimSpace(rawGid)
+		if gid == "" {
+			continue
+		}
+		out[gid] = s.presenceBatchEntryFor(gid, items, nowMs)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data": gin.H{
+			"map": out,
+		},
+	})
+}
+
+// PresenceBatchLookup resolves presence for a batch of globalMetaIds for
+// internal aggregators without an HTTP round-trip.
+func (s *Server) PresenceBatchLookup(globalMetaIds []string) map[string]presenceBatchEntry {
+	items := s.effectivePresenceEntries()
+	nowMs := time.Now().UnixMilli()
+	out := make(map[string]presenceBatchEntry, len(globalMetaIds))
+	for _, rawGid := range globalMetaIds {
+		gid := strings.TrimSpace(rawGid)
+		if gid == "" {
+			continue
+		}
+		out[gid] = s.presenceBatchEntryFor(gid, items, nowMs)
+	}
+	return out
+}
+
+// PresenceStatusByGlobalMetaId resolves online + lastSeenAgoSeconds for one identity
+// (globalMetaId, metaId, or address).
+func (s *Server) PresenceStatusByGlobalMetaId(identity string) (bool, *int64) {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return false, nil
+	}
+	items := s.effectivePresenceEntries()
+	entry := s.presenceBatchEntryFor(identity, items, time.Now().UnixMilli())
+	return entry.Online, entry.LastSeenAgoSeconds
+}
+
+func (s *Server) effectivePresenceEntries() []presence.OnlineEntry {
+	local := s.manager.OnlineEntries()
+	reader := s.presenceGlobalReader()
+	if reader != nil && reader.Enabled() {
+		return s.globalPresenceEntries(reader, local)
+	}
+	out := make([]presence.OnlineEntry, 0, len(local))
+	for _, entry := range local {
+		out = append(out, presence.OnlineEntry{
+			MetaId:      entry.MetaId,
+			ConnectedAt: entry.ConnectedAt,
+			LastSeenAt:  entry.LastSeenAt,
+			Sources:     1,
+		})
+	}
+	return out
+}
+
+func (s *Server) presenceBatchEntryFor(globalMetaId string, items []presence.OnlineEntry, nowMs int64) presenceBatchEntry {
+	candidates := s.presenceIdentityCandidates(globalMetaId)
+	matches := findMatchingPresenceEntries(items, candidates)
+	if len(matches) == 0 {
+		return presenceBatchEntry{Online: false}
+	}
+	var updatedAt int64
+	for _, item := range matches {
+		t := item.LastSeenAt
+		if t == 0 {
+			t = item.ConnectedAt
+		}
+		if t > updatedAt {
+			updatedAt = t
+		}
+	}
+	var agoPtr *int64
+	if updatedAt > 0 {
+		ago := (nowMs - updatedAt) / 1000
+		if ago < 0 {
+			ago = 0
+		}
+		agoPtr = &ago
+	}
+	return presenceBatchEntry{
+		Online:             true,
+		LastSeenAgoSeconds: agoPtr,
+	}
+}
+
 func (s *Server) onlineItemsForIDChat(withUserInfo bool) []OnlineEntry {
 	scope := "local"
 	reader := s.presenceGlobalReader()
@@ -387,6 +512,7 @@ func (s *Server) RegisterPresenceRoutes(router *gin.Engine, snapshotPath ...stri
 		socketGroup.GET("/online/list", s.HandleOnlineList)
 	}
 	router.GET("/api/presence/globalmetaid/:globalMetaId", s.HandleGlobalPresenceByGlobalMetaId)
+	router.POST("/api/presence/batch", s.HandlePresenceBatch)
 
 	path := defaultPresenceSnapshotPath
 	if len(snapshotPath) > 0 && snapshotPath[0] != "" {

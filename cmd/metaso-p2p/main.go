@@ -16,6 +16,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/idbotsca"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
@@ -172,6 +173,25 @@ func main() {
 		if err := aggRegistry.Register(botHomepageAgg); err != nil {
 			log.Printf("WARNING: bothomepage aggregator init failed: %v", err)
 		}
+		idbotscaAgg := &idbotsca.Aggregator{}
+		if err := aggRegistry.Register(idbotscaAgg); err != nil {
+			log.Printf("WARNING: idbotsca aggregator init failed: %v", err)
+			idbotscaAgg = nil
+		} else {
+			userinfoAgg.SetOfficialBadgeProvider(&userInfoBadgeAdapter{ca: idbotscaAgg})
+			botHomepageAgg.SetOfficialBadgeProvider(&homepageBadgeAdapter{ca: idbotscaAgg})
+			manapiURL := strings.TrimSpace(cfg.Mrc721.Nft.MANAPIBaseURL)
+			if manapiURL == "" {
+				manapiURL = strings.TrimSpace(cfg.BotHomepageV2Backfill.MANAPIBaseURL)
+			}
+			go func(ca *idbotsca.Aggregator, baseURL string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := ca.BackfillIfEmpty(ctx, baseURL, nil); err != nil {
+					log.Printf("WARNING: idbotsca initial backfill failed: %v", err)
+				}
+			}(idbotscaAgg, manapiURL)
+		}
 		privatechatAgg.SetProfileLookup(privatechat.NewUserInfoLookupAdapter(userinfoAgg))
 		if groupChatAgg != nil {
 			groupChatAgg.SetProfileLookup(groupchat.NewUserInfoLookupAdapter(userinfoAgg))
@@ -199,6 +219,9 @@ func main() {
 		botSearchCandidate.SetSkillLister(skillserviceAgg)
 		if groupChatAgg != nil {
 			botSearchCandidate.SetGroupHistorySource(groupChatAgg)
+		}
+		if idbotscaAgg != nil {
+			botSearchCandidate.SetOfficialBadgeProvider(&botSearchBadgeAdapter{ca: idbotscaAgg})
 		}
 		if err := aggRegistry.Register(botSearchCandidate); err != nil {
 			log.Printf("WARNING: botsearch aggregator init failed: %v", err)
@@ -249,7 +272,20 @@ func main() {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {
 			mrc721Agg = mrc721Candidate
+			if idbotscaAgg != nil {
+				mrc721Agg.SetCAReader(&mrc721CAAdapter{ca: idbotscaAgg})
+			}
+			mrc721Agg.SetProfileReader(&mrc721ProfileAdapter{ui: userinfoAgg})
 		}
+		// Wire unified metaweb search document sources (including mrc721 collections & listings).
+		docSources := []metaweb.DocumentSource{skillserviceAgg}
+		if publishedAgg != nil {
+			docSources = append([]metaweb.DocumentSource{publishedAgg}, docSources...)
+		}
+		if mrc721Agg != nil {
+			docSources = append(docSources, mrc721Agg)
+		}
+		metawebCandidate.SetDocumentSources(docSources...)
 		// mrc721nft is the native /nft/mrc721 NFT aggregate (collections,
 		// items, transfer provenance) ported from man-p2p, serving the
 		// manapi-compatible /api/mrc721 collection/item query surface. It
@@ -267,6 +303,7 @@ func main() {
 				log.Printf("WARNING: mrc721nft aggregator init failed: %v", err)
 			} else {
 				nftCandidate.SetReplayClient(mrc721nft.NewUpstreamClient(cfg.Mrc721.Nft.MANAPIBaseURL, http.DefaultClient))
+				nftCandidate.SetAddressResolver(&nftAddressResolverAdapter{ui: userinfoAgg})
 				// The native aggregate is the bootstrapped read model: hand
 				// the collection search / issuer endpoints over to it (same
 				// wire contract, native source). Only meaningful after the
@@ -276,6 +313,10 @@ func main() {
 					// The native item read model also backs the offer rows'
 					// item → collection join (best-effort).
 					mrc721Agg.SetItemCollectionSource(nftCandidate)
+					mrc721Agg.SetNFTReader(nftCandidate)
+					nftCandidate.SetTransferEventHook(mrc721Agg.OnItemTransferred)
+					nftCandidate.SetCollectionMarketEnricher(mrc721Agg)
+					nftCandidate.SetItemDetailEnricher(mrc721Agg)
 				}
 			}
 		}
@@ -526,7 +567,7 @@ func main() {
 		log.Printf("federation service: node_id=%s", federationService.NodeID())
 	}
 
-	if (botHomepageAgg != nil || botSearchAgg != nil) && socketServer != nil {
+	if (botHomepageAgg != nil || botSearchAgg != nil || mrc721Agg != nil) && socketServer != nil {
 		var globalReader presence.GlobalReader
 		if federationService != nil {
 			globalReader = federationService.GlobalReader()
@@ -536,6 +577,9 @@ func main() {
 		}
 		if botSearchAgg != nil {
 			botSearchAgg.SetPresenceReaders(socketServer.Manager(), globalReader)
+		}
+		if mrc721Agg != nil {
+			mrc721Agg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})
 		}
 	}
 
@@ -721,3 +765,142 @@ func (a *socialFollowAdapter) ListFollowing(globalMetaId string) ([]string, erro
 	}
 	return ids, nil
 }
+
+type userInfoBadgeAdapter struct {
+	ca *idbotsca.Aggregator
+}
+
+func (a *userInfoBadgeAdapter) GetOfficialBotBadge(globalMetaId string) *userinfo.OfficialBadge {
+	if a == nil || a.ca == nil {
+		return nil
+	}
+	b := a.ca.GetOfficialBotBadge(globalMetaId)
+	if b == nil {
+		return nil
+	}
+	return &userinfo.OfficialBadge{
+		Verified:   b.Verified,
+		Role:       b.Role,
+		BadgeType:  b.BadgeType,
+		BadgeLabel: b.BadgeLabel,
+	}
+}
+
+type homepageBadgeAdapter struct {
+	ca *idbotsca.Aggregator
+}
+
+func (a *homepageBadgeAdapter) GetOfficialBotBadge(globalMetaId string) *bothomepage.OfficialBadge {
+	if a == nil || a.ca == nil {
+		return nil
+	}
+	b := a.ca.GetOfficialBotBadge(globalMetaId)
+	if b == nil {
+		return nil
+	}
+	return &bothomepage.OfficialBadge{
+		Verified:   b.Verified,
+		Role:       b.Role,
+		BadgeType:  b.BadgeType,
+		BadgeLabel: b.BadgeLabel,
+	}
+}
+
+type botSearchBadgeAdapter struct {
+	ca *idbotsca.Aggregator
+}
+
+func (a *botSearchBadgeAdapter) GetOfficialBotBadge(globalMetaId string) *botsearch.OfficialBadge {
+	if a == nil || a.ca == nil {
+		return nil
+	}
+	b := a.ca.GetOfficialBotBadge(globalMetaId)
+	if b == nil {
+		return nil
+	}
+	return &botsearch.OfficialBadge{
+		Verified:   b.Verified,
+		Role:       b.Role,
+		BadgeType:  b.BadgeType,
+		BadgeLabel: b.BadgeLabel,
+	}
+}
+
+type mrc721CAAdapter struct {
+	ca *idbotsca.Aggregator
+}
+
+func (a *mrc721CAAdapter) IsCollectionCertified(collectionPinId string) (bool, string) {
+	if a == nil || a.ca == nil {
+		return false, ""
+	}
+	ok, entry := a.ca.IsCollectionCertified(collectionPinId)
+	if !ok || entry == nil {
+		return false, ""
+	}
+	title := entry.DisplayTitle
+	if title == "" {
+		title = entry.CollectionName
+	}
+	return true, title
+}
+
+type mrc721ProfileAdapter struct {
+	ui *userinfo.Aggregator
+}
+
+func (a *mrc721ProfileAdapter) LookupProfile(identity string) *mrc721.SellerProfileSnapshot {
+	if a == nil || a.ui == nil {
+		return nil
+	}
+	p, _ := a.ui.LookupLocalByIdentity(identity)
+	if p == nil {
+		return nil
+	}
+	return &mrc721.SellerProfileSnapshot{
+		Address:       p.Address,
+		GlobalMetaId:  p.GlobalMetaID,
+		MetaId:        p.MetaID,
+		Name:          p.Name,
+		Avatar:        p.Avatar,
+		HasChatPubkey: strings.TrimSpace(p.ChatPublicKey) != "",
+	}
+}
+
+func (a *mrc721ProfileAdapter) ResolveAddressesByGlobalMetaId(globalMetaId string) []string {
+	if a == nil || a.ui == nil {
+		return nil
+	}
+	p, _ := a.ui.LookupLocalByIdentity(globalMetaId)
+	if p == nil || strings.TrimSpace(p.Address) == "" {
+		return nil
+	}
+	return []string{strings.TrimSpace(p.Address)}
+}
+
+type nftAddressResolverAdapter struct {
+	ui *userinfo.Aggregator
+}
+
+func (a *nftAddressResolverAdapter) ResolveAddressesByGlobalMetaId(globalMetaId string) []string {
+	if a == nil || a.ui == nil {
+		return nil
+	}
+	p, _ := a.ui.LookupLocalByIdentity(globalMetaId)
+	if p == nil || strings.TrimSpace(p.Address) == "" {
+		return nil
+	}
+	return []string{strings.TrimSpace(p.Address)}
+}
+
+type mrc721PresenceAdapter struct {
+	srv *socket.Server
+}
+
+func (a *mrc721PresenceAdapter) PresenceStatus(identity string) (bool, *int64) {
+	if a == nil || a.srv == nil {
+		return false, nil
+	}
+	return a.srv.PresenceStatusByGlobalMetaId(identity)
+}
+

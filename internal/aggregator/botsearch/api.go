@@ -17,6 +17,7 @@ import (
 type searchRequest struct {
 	Query                string   `json:"query"`
 	RoleHint             string   `json:"roleHint"`
+	OfficialRole         string   `json:"officialRole"`
 	Skills               []string `json:"skills"`
 	Language             string   `json:"language"`
 	OnlineOnly           *bool    `json:"onlineOnly"`
@@ -59,10 +60,11 @@ type candidate struct {
 	Homepage           string        `json:"homepage"`
 	IsOnline           bool          `json:"isOnline"`
 	LastSeenAgoSeconds *int64        `json:"lastSeenAgoSeconds"`
-	GroupTaskCount     int           `json:"groupTaskCount"`
-	RecentGroupTasks   []groupTask   `json:"recentGroupTasks"`
-	Score              float64       `json:"score"`
-	MatchReasons       []matchReason `json:"matchReasons"`
+	GroupTaskCount     int            `json:"groupTaskCount"`
+	RecentGroupTasks   []groupTask    `json:"recentGroupTasks"`
+	OfficialBadge      *OfficialBadge `json:"officialBadge"`
+	Score              float64        `json:"score"`
+	MatchReasons       []matchReason  `json:"matchReasons"`
 }
 
 type searchResponse struct {
@@ -80,6 +82,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 
 	query := strings.TrimSpace(req.Query)
 	roleHint := strings.ToLower(strings.TrimSpace(req.RoleHint))
+	officialRole := strings.ToLower(strings.TrimSpace(req.OfficialRole))
 	if roleHint != "" {
 		if _, ok := roleHintSynonyms[roleHint]; !ok {
 			api.RespErr(c, codeInvalidQuery, "invalid roleHint")
@@ -92,8 +95,8 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			skills = append(skills, trimmed)
 		}
 	}
-	if query == "" && len(skills) == 0 && roleHint == "" {
-		api.RespErr(c, codeInvalidQuery, "query, skills and roleHint are all empty")
+	if query == "" && len(skills) == 0 && roleHint == "" && officialRole == "" {
+		api.RespErr(c, codeInvalidQuery, "query, skills, roleHint and officialRole are all empty")
 		return
 	}
 	limit := req.Limit
@@ -147,6 +150,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 	type scoredCandidate struct {
 		profile    userinfo.BotSearchProfile
 		history    []groupchat.GroupHistoryItem
+		badge      *OfficialBadge
 		score      float64
 		reasons    []matchReason
 		online     bool
@@ -162,6 +166,14 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			if _, skip := excluded[strings.ToLower(profile.GlobalMetaID)]; skip {
 				continue
 			}
+		}
+
+		var badge *OfficialBadge
+		if a.officialBadgeProvider != nil && strings.TrimSpace(profile.GlobalMetaID) != "" {
+			badge = a.officialBadgeProvider.GetOfficialBotBadge(profile.GlobalMetaID)
+		}
+		if officialRole != "" && (badge == nil || !strings.EqualFold(badge.Role, officialRole)) {
+			continue
 		}
 
 		online := false
@@ -184,12 +196,22 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 		}
 
 		result := scoreCandidate(profile, history, tokens, roleHint, query)
-		if result.score <= 0 {
+		if officialRole != "" && len(tokens) == 0 && roleHint == "" {
+			if result.score <= 0 {
+				result.score = 1.0
+			}
+			result.reasons = append(result.reasons, matchReason{
+				Field:  "officialRole",
+				Token:  officialRole,
+				Weight: 1.0,
+			})
+		} else if result.score <= 0 {
 			continue
 		}
 		matches = append(matches, scoredCandidate{
 			profile:    profile,
 			history:    history,
+			badge:      badge,
 			score:      result.score,
 			reasons:    result.reasons,
 			online:     online,
@@ -272,6 +294,7 @@ func (a *Aggregator) handleSearch(c *gin.Context) {
 			LastSeenAgoSeconds: lastSeenAgo,
 			GroupTaskCount:     len(match.history),
 			RecentGroupTasks:   recent,
+			OfficialBadge:      match.badge,
 			Score:              match.score,
 			MatchReasons:       match.reasons,
 		})

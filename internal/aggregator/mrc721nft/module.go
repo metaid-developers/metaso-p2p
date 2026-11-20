@@ -82,6 +82,13 @@ type Aggregator struct {
 	// repairs entities from (set once at startup before serving, nil
 	// disables the endpoint; unsynchronized by design).
 	replayClient *UpstreamClient
+
+	// Cross-module hooks wired at daemon startup (main.go) without importing
+	// sibling aggregator packages.
+	transferEventHook      func(TransferEvent)
+	addressResolver        AddressResolver
+	collectionMarketEnrich CellEnricherRef
+	itemDetailEnrich       ItemDetailEnricher
 }
 
 // SetReplayClient wires the upstream client used by the admin replay-pins

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
@@ -191,6 +192,10 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 		SellerAddress:      payload.SellerAddress,
 		SellerMetaId:       payload.SellerMetaId,
 		PriceHintSats:      payload.PriceHintSats,
+		Prices:             payload.Prices,
+		AutoFulfillMe:      payload.AutoFulfillMe,
+		Negotiable:         payload.Negotiable,
+		ShopMetaAppPinId:   payload.ShopMetaAppPinId,
 		AcceptedCurrencies: payload.AcceptedCurrencies,
 		Settlement:         payload.Settlement,
 		Note:               payload.Note,
@@ -201,6 +206,12 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 		TxID:               txIdOfPinId(sellPinId),
 		UpdatedAt:          updatedAt,
 		Seq:                seq,
+	}
+	if !rec.Active {
+		rec.InactiveReason = "canceled"
+	} else {
+		a.enrichSellRecordNFTFieldsLocked(rec)
+		delete(a.overlayInvalidated, itemPinId)
 	}
 	if existing != nil && existing.Seq > 0 {
 		// Overwrite: clear the previous index position before writing the
@@ -213,6 +224,44 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 		return false, err
 	}
 	return true, nil
+}
+
+func (a *Aggregator) enrichSellRecordNFTFieldsLocked(rec *SellIntentRecord) {
+	if rec == nil || a.nftReader == nil {
+		return
+	}
+	if rec.ItemOutpoint == nil || rec.ItemOutpoint.TxID == "" {
+		if _, outpoint, burned, found := a.nftReader.ItemOwnership(rec.ItemPinId, a.zeroConfTrade); found && !burned && outpoint != "" {
+			if parsed := parseOutpointStr(outpoint); parsed != nil {
+				rec.ItemOutpoint = parsed
+			}
+		}
+	}
+	if rec.CollectionPinId == "" || rec.CollectionName == "" {
+		if info := a.nftReader.ItemSummary(rec.ItemPinId, a.zeroConfTrade); info != nil {
+			if rec.CollectionPinId == "" {
+				rec.CollectionPinId = info.CollectionPinId
+			}
+			if rec.CollectionName == "" {
+				rec.CollectionName = info.CollectionName
+			}
+		}
+	}
+}
+
+func parseOutpointStr(outpoint string) *ItemOutpoint {
+	parts := strings.SplitN(strings.TrimSpace(outpoint), ":", 2)
+	if len(parts) != 2 || !hex64Pattern.MatchString(parts[0]) {
+		return nil
+	}
+	vout, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || vout < 0 {
+		return nil
+	}
+	return &ItemOutpoint{
+		TxID: strings.ToLower(parts[0]),
+		Vout: vout,
+	}
 }
 
 // chainOrderNewer reports whether the (height, chainTime, pinId) triple of a
