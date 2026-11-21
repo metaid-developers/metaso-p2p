@@ -63,6 +63,7 @@ var protocolPriors = map[string]float64{
 	"metaprotocol":   1.2, // curated knowledge carrier
 	"simplequestion": 1.2, // curated knowledge carrier (on-chain Q&A)
 	"simpleanswer":   1.2, // curated knowledge carrier (on-chain Q&A)
+	"paybuzz":        1.2, // curated encrypted long-form article
 	"simplebuzz":     0.9, // stream content
 	"metaapp":        1.0, // neutral
 	"metabot-skill":  1.0, // neutral

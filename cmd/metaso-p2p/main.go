@@ -21,6 +21,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/notify"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/paybuzz"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/preference"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/privatechat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/publishedcontent"
@@ -78,6 +79,7 @@ func main() {
 	var blockAgg *block.Aggregator
 	var notifyAgg *notify.Aggregator
 	var mrc721Agg *mrc721.Aggregator
+	var paybuzzAgg *paybuzz.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -280,13 +282,27 @@ func main() {
 			}
 			mrc721Agg.SetProfileReader(&mrc721ProfileAdapter{ui: userinfoAgg})
 		}
-		// Wire unified metaweb search document sources (including mrc721 collections & listings).
+		// paybuzz indexes /protocols/paybuzz encrypted articles (create/modify
+		// version folding + owner identity verification), serving
+		// GET /api/paybuzz/info and GET /api/paybuzz/list and feeding unified
+		// MetaWeb search (protocol = "paybuzz").
+		paybuzzCandidate := &paybuzz.Aggregator{}
+		paybuzzCandidate.SetProfileLookup(paybuzz.NewUserInfoLookupAdapter(userinfoAgg))
+		if err := aggRegistry.Register(paybuzzCandidate); err != nil {
+			log.Printf("WARNING: paybuzz aggregator init failed: %v", err)
+		} else {
+			paybuzzAgg = paybuzzCandidate
+		}
+		// Wire unified metaweb search document sources (including mrc721 collections & listings and paybuzz).
 		docSources := []metaweb.DocumentSource{skillserviceAgg}
 		if publishedAgg != nil {
 			docSources = append([]metaweb.DocumentSource{publishedAgg}, docSources...)
 		}
 		if mrc721Agg != nil {
 			docSources = append(docSources, mrc721Agg)
+		}
+		if paybuzzAgg != nil {
+			docSources = append(docSources, paybuzzAgg)
 		}
 		metawebCandidate.SetDocumentSources(docSources...)
 		// mrc721nft is the native /nft/mrc721 NFT aggregate (collections,
