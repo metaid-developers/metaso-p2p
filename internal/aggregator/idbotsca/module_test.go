@@ -255,3 +255,228 @@ func TestStaleMempoolCleanupAndOnChangeCallback(t *testing.T) {
 		t.Fatal("expected mempool with older UpdatedAt than confirmed to be evicted")
 	}
 }
+
+func TestLiveMVCAddressPublisherAndTransferredPinRejection(t *testing.T) {
+	agg := newTestCAAggregator(t)
+
+	// 1. Live MVC ZMQ mempool pin where mvc/indexer.go populates Address,
+	// CreateAddress, MetaId, and GlobalMetaId all with Bob's raw Base58 MVC address.
+	rawPayload, _ := json.Marshal(map[string]any{
+		"collections": []map[string]any{{
+			"collectionPinId": "26b335096639b7f049138501bd10ed6f1a315efd081d787a1c7b74ae6d70ffd8i0",
+			"collectionName":  "metabot-avatar",
+			"displayTitle":    "MetaBot Avatar",
+		}},
+		"officialBots": []map[string]any{{
+			"globalMetaId": "idq1gtxzx45ktj8s738s6wjak0ha27d98g8h2n059n",
+			"mvcAddress":   "176C9RPWDggnvdVcWG3wrZEJcm1bHTcKM5",
+			"role":         "swap_station",
+			"badgeType":    "official_swap_station",
+			"badgeLabel":   "官方兑换站",
+			"active":       true,
+		}},
+	})
+	liveMempoolPin := &aggregator.PinInscription{
+		Id:            "651cf54aa6b3f0e5bf651a2cb94c0e6c5479378df0118bbe180847c27916be88i0",
+		Operation:     "create",
+		Path:          PathCA,
+		ChainName:     "mvc",
+		GenesisHeight: -1,
+		Timestamp:     1795249500,
+		Address:       OfficialMVCAddress,
+		CreateAddress: OfficialMVCAddress,
+		MetaId:        OfficialMVCAddress,
+		GlobalMetaId:  OfficialMVCAddress,
+		ContentBody:   rawPayload,
+	}
+	if _, err := agg.HandleMempoolPin(liveMempoolPin); err != nil {
+		t.Fatalf("live MVC mempool pin failed: %v", err)
+	}
+	if ok, _ := agg.IsCollectionCertified("26b335096639b7f049138501bd10ed6f1a315efd081d787a1c7b74ae6d70ffd8i0"); !ok {
+		t.Fatal("expected collection certified from live MVC mempool pin")
+	}
+	if badge := agg.GetOfficialBotBadge("idq1gtxzx45ktj8s738s6wjak0ha27d98g8h2n059n"); badge == nil || !badge.Verified {
+		t.Fatalf("expected official swap_station badge from live MVC mempool pin, got %+v", badge)
+	}
+
+	// 2. Live MVC block confirmation with the same address-only identity shape persists cleanly.
+	liveBlockPin := *liveMempoolPin
+	liveBlockPin.GenesisHeight = 199735
+	if _, err := agg.HandleBlockPin(&liveBlockPin); err != nil {
+		t.Fatalf("live MVC block pin failed: %v", err)
+	}
+	if !agg.HasConfirmedRegistry() {
+		t.Fatal("expected confirmed registry after live MVC block pin")
+	}
+
+	// 3. Attacker pin transferred to Bob (owner Address/MetaId == Bob, but Creator/CreateMetaId == Attacker) must fail closed.
+	spoofPayload, _ := json.Marshal(map[string]any{
+		"collections": []map[string]any{{
+			"collectionPinId": "spoofedcol0001i0",
+		}},
+	})
+	transferredSpoofPin := &aggregator.PinInscription{
+		Id:            "spoofedtx0001i0",
+		Operation:     "create",
+		Path:          PathCA,
+		ChainName:     "mvc",
+		GenesisHeight: 199999,
+		Timestamp:     1796000000,
+		Address:       OfficialMVCAddress,
+		MetaId:        OfficialMetaID,
+		GlobalMetaId:  OfficialGlobalMetaID,
+		Creator:       "1AttackerAddress11111111111111111",
+		CreateMetaId:  "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		ContentBody:   spoofPayload,
+	}
+	if _, err := agg.HandleBlockPin(transferredSpoofPin); err != nil {
+		t.Fatalf("transferred spoof pin returned error: %v", err)
+	}
+	if ok, _ := agg.IsCollectionCertified("spoofedcol0001i0"); ok {
+		t.Fatal("transferred attacker pin must never be accepted as Bob CA registry")
+	}
+}
+
+func TestSyncFromMANAPIUpgradesExistingBaselineAndHydratesTruncatedBody(t *testing.T) {
+	dir := t.TempDir()
+	store := storage.NewPebbleStore(dir)
+
+	agg := &Aggregator{}
+	if err := agg.Init(store, nil); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Seed an older empty baseline (simulating d0c042b3... at height 197309).
+	oldPin := makeCAPin(
+		"d0c042b3b54982322203fa1245f12bc3dd128c95fc74aca27f3f5b5004a38a65i0",
+		"create",
+		OfficialMetaID,
+		OfficialGlobalMetaID,
+		OfficialMVCAddress,
+		197309,
+		map[string]any{"collections": []any{}},
+	)
+	oldPin.Timestamp = 1793775354
+	if _, err := agg.HandleBlockPin(oldPin); err != nil {
+		t.Fatalf("seed old pin: %v", err)
+	}
+	_ = store.Close()
+
+	// Reopen from Pebble (verifies persisted Height + non-nil empty arrays) and sync newer MANAPI pin.
+	store2 := storage.NewPebbleStore(dir)
+	t.Cleanup(func() { _ = store2.Close() })
+	agg2 := &Aggregator{}
+	if err := agg2.Init(store2, nil); err != nil {
+		t.Fatalf("re-init: %v", err)
+	}
+	initialSnap := agg2.Registry()
+	if initialSnap.Collections == nil || initialSnap.OfficialBots == nil {
+		t.Fatal("expected non-nil empty slices after reloading empty registry from Pebble")
+	}
+
+	newPinID := "651cf54aa6b3f0e5bf651a2cb94c0e6c5479378df0118bbe180847c27916be88i0"
+	fullV11Raw, _ := json.Marshal(map[string]any{
+		"collections": []map[string]any{{
+			"collectionPinId": "26b335096639b7f049138501bd10ed6f1a315efd081d787a1c7b74ae6d70ffd8i0",
+			"collectionName":  "metabot-avatar",
+			"displayTitle":    "MetaBot 官方初代头像",
+		}},
+		"officialBots": []map[string]any{{
+			"globalMetaId": "idq1gtxzx45ktj8s738s6wjak0ha27d98g8h2n059n",
+			"mvcAddress":   "176C9RPWDggnvdVcWG3wrZEJcm1bHTcKM5",
+			"role":         "swap_station",
+			"badgeType":    "official_swap_station",
+			"badgeLabel":   "官方兑换站",
+			"active":       true,
+		}},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pin/path/list":
+			// Simulate MANAPI returning lowercase "metaid", empty contentBody, and truncated contentSummary.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":    1,
+				"message": "ok",
+				"data": map[string]any{
+					"list": []map[string]any{
+						{
+							"id":             newPinID,
+							"operation":      "create",
+							"path":           PathCA,
+							"metaid":         OfficialMetaID,
+							"createMetaId":   OfficialMetaID,
+							"creator":        OfficialMVCAddress,
+							"globalMetaId":   OfficialGlobalMetaID,
+							"address":        OfficialMVCAddress,
+							"genesisHeight":  199735,
+							"timestamp":      1795249500,
+							"contentBody":    "",
+							"contentLength":  len(fullV11Raw),
+							"contentSummary": string(fullV11Raw[:48]), // truncated summary!
+						},
+						{
+							"id":             oldPin.Id,
+							"operation":      "create",
+							"path":           PathCA,
+							"metaid":         OfficialMetaID,
+							"createMetaId":   OfficialMetaID,
+							"creator":        OfficialMVCAddress,
+							"globalMetaId":   OfficialGlobalMetaID,
+							"address":        OfficialMVCAddress,
+							"genesisHeight":  197309,
+							"timestamp":      1793775354,
+							"contentBody":    "",
+							"contentLength":  18,
+							"contentSummary": `{"collections":[]}`,
+						},
+					},
+				},
+			})
+		case "/content/" + newPinID:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fullV11Raw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	if err := agg2.BackfillIfEmpty(nil, srv.URL, srv.Client()); err != nil {
+		t.Fatalf("SyncFromMANAPI failed: %v", err)
+	}
+
+	updated := agg2.Registry()
+	if updated.PinId != newPinID {
+		t.Fatalf("expected registry upgraded to %s, got %s", newPinID, updated.PinId)
+	}
+	if len(updated.Collections) != 1 || len(updated.OfficialBots) != 1 {
+		t.Fatalf("expected 1 collection and 1 officialBot after hydration, got cols=%d bots=%d", len(updated.Collections), len(updated.OfficialBots))
+	}
+
+	// Verify that a newer confirmed block pin (height 200100) is NOT downgraded if MANAPI still serves 199735.
+	newerPin := makeCAPin(
+		"newerpin200100i0",
+		"create",
+		OfficialMetaID,
+		OfficialGlobalMetaID,
+		OfficialMVCAddress,
+		200100,
+		map[string]any{
+			"collections": []map[string]any{{
+				"collectionPinId": "col200100i0",
+				"displayTitle":    "Newer Block State",
+			}},
+		},
+	)
+	newerPin.Timestamp = 1796000000
+	if _, err := agg2.HandleBlockPin(newerPin); err != nil {
+		t.Fatalf("apply newer block pin: %v", err)
+	}
+	if err := agg2.SyncFromMANAPI(nil, srv.URL, srv.Client()); err != nil {
+		t.Fatalf("re-sync against lagging MANAPI failed: %v", err)
+	}
+	if got := agg2.Registry().PinId; got != "newerpin200100i0" {
+		t.Fatalf("lagging MANAPI must not downgrade newer confirmed block state, got %s", got)
+	}
+}

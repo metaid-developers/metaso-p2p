@@ -187,8 +187,8 @@ func main() {
 			go func(ca *idbotsca.Aggregator, baseURL string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
-				if err := ca.BackfillIfEmpty(ctx, baseURL, nil); err != nil {
-					log.Printf("WARNING: idbotsca initial backfill failed: %v", err)
+				if err := ca.SyncFromMANAPI(ctx, baseURL, nil); err != nil {
+					log.Printf("WARNING: idbotsca initial sync failed: %v", err)
 				}
 			}(idbotscaAgg, manapiURL)
 		}
