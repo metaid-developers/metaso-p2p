@@ -907,3 +907,76 @@ func TestP11SummaryBurnedCountSearchRowsAndListingAliases(t *testing.T) {
 		t.Fatalf("expected 1 listing matching all P1-1 filters/aliases, got %+v", aliasPage)
 	}
 }
+
+func TestSameBlockIncomingTransferAndHistoricalReplayHeal(t *testing.T) {
+	agg, nftAgg, router := setupMarketFixture(t)
+	item1, _, _, _ := seedCollectionAndItems(t, nftAgg)
+
+	// Simulate the pre-fix stale index state on block #199754/#199755:
+	// item1 hopped u0 -> u1 (seller2) in H=199754, missed u1 -> u2 (seller1) in
+	// H=199754 and u2 -> u3 (seller2) in H=199755, while seller2's sell pin at
+	// H=199755 was ingested against stale outpoint u1:0.
+	u1 := hexOf("hop-u1")
+	u2 := hexOf("hop-u2")
+	u3 := hexOf("hop-u3")
+	nftAgg.HandleBlockTransfers("mvc", 199754, map[string]aggregator.TransferNotice{
+		hexOf("item1") + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      u1 + ":0",
+			OutputValue: 1,
+			Location:    u1 + ":0:0",
+		},
+	})
+	sellPin := &aggregator.PinInscription{
+		Id:            testSellPinId("alice-sell-199755", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller2,
+		GenesisHeight: 199755,
+		Timestamp:     1760000100, // earlier than wall-clock transfer ingest time
+		ContentBody:   []byte(`{"itemPinId":"` + item1 + `","sellerAddress":"` + testSeller2 + `","active":true,"prices":{"me":{"amountMilli":1000}},"autoFulfillMe":true}`),
+	}
+	if _, err := agg.HandleBlockPin(sellPin); err != nil {
+		t.Fatalf("initial sell pin: %v", err)
+	}
+
+	// Height-reset replay from 199754..199755:
+	// 1) H=199754 folds missed hop u1 -> u2 (to seller1): older block must NOT clobber H=199755 sell intent.
+	nftAgg.HandleBlockTransfers("mvc", 199754, map[string]aggregator.TransferNotice{
+		u1 + ":0": {
+			FromAddress: testSeller2,
+			ToAddress:   testSeller1,
+			Output:      u2 + ":0",
+			OutputValue: 1,
+			Location:    u2 + ":0:0",
+		},
+	})
+	// 2) H=199755 pre-pin transfer folds u2 -> u3 (incoming to seller2), then re-routes sellPin.
+	nftAgg.HandleBlockTransfers("mvc", 199755, map[string]aggregator.TransferNotice{
+		u2 + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      u3 + ":0",
+			OutputValue: 1,
+			Location:    u3 + ":0:0",
+		},
+	})
+	if _, err := agg.HandleBlockPin(sellPin); err != nil {
+		t.Fatalf("replay sell pin: %v", err)
+	}
+
+	info, err := agg.SellIntentInfo(item1)
+	if err != nil || info == nil || !info.Active || info.ItemOutpoint == nil || info.ItemOutpoint.TxID != u3 {
+		t.Fatalf("expected healed active listing at u3:0, got %+v (err=%v)", info, err)
+	}
+	_, listEnv := doMrc721Request(t, router, "/api/mrc721/market/listings?collectionPinId="+url.QueryEscape(testCollection))
+	var page struct {
+		List  []ListingDTO `json:"list"`
+		Total int          `json:"total"`
+	}
+	_ = json.Unmarshal(listEnv.Data, &page)
+	if page.Total != 1 || page.List[0].ItemPinId != item1 {
+		t.Fatalf("expected active listing in /market/listings after replay heal, got %+v", page)
+	}
+}

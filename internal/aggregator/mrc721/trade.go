@@ -434,7 +434,16 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 	// 1. Auto-invalidate active sell intents on transfer or burn.
 	if ev.Confirmed {
 		if rec, err := a.loadSellIntent(ev.ItemPinId); err == nil && rec != nil && rec.Active {
-			if ev.Burned || ev.ToAddress != rec.SellerAddress || rec.Height <= 0 || ev.Height >= rec.Height {
+			olderReplay := rec.Height > 0 && ev.Height > 0 && ev.Height < rec.Height
+			sameBlockIncoming := !ev.Burned &&
+				rec.Height > 0 &&
+				ev.Height == rec.Height &&
+				ev.ToAddress == rec.SellerAddress &&
+				rec.ItemOutpoint != nil &&
+				rec.ItemOutpoint.TxID != "" &&
+				strings.EqualFold(ev.NewOutpoint, fmt.Sprintf("%s:%d", rec.ItemOutpoint.TxID, rec.ItemOutpoint.Vout))
+			if !olderReplay && !sameBlockIncoming &&
+				(ev.Burned || ev.ToAddress != rec.SellerAddress || rec.Height <= 0 || ev.Height >= rec.Height) {
 				rec.Active = false
 				rec.InactiveReason = "transferred"
 				if err := a.saveSellIntent(rec); err != nil {
