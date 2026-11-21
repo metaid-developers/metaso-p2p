@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ type sellIntentPayload struct {
 	PriceHintSats      int64
 	Prices             *SellPrices
 	AutoFulfillMe      *bool
+	AutoFulfillTokens  *bool
 	Negotiable         bool
 	ShopMetaAppPinId   string
 	AcceptedCurrencies []string
@@ -89,6 +91,11 @@ func parseSellIntentPayload(raw []byte) (*sellIntentPayload, error) {
 	if rawAuto, ok := payloadLookup(fields, "autoFulfillMe"); ok {
 		if val, ok := payloadBool(rawAuto); ok {
 			payload.AutoFulfillMe = &val
+		}
+	}
+	if rawAutoTokens, ok := payloadLookup(fields, "autoFulfillTokens"); ok {
+		if val, ok := payloadBool(rawAutoTokens); ok {
+			payload.AutoFulfillTokens = &val
 		}
 	}
 	if rawNeg, ok := payloadLookup(fields, "negotiable"); ok {
@@ -309,7 +316,185 @@ func payloadPrices(fields map[string]json.RawMessage, active bool) (*SellPrices,
 			}
 		}
 	}
-	if out.Me == nil && out.Fiat == nil {
+	if tokensRaw, ok := payloadLookup(sub, "tokens"); ok {
+		tokens, err := payloadTokenPrices(tokensRaw, active)
+		if err != nil {
+			return nil, err
+		}
+		out.Tokens = tokens
+	}
+	if out.Me == nil && out.Fiat == nil && len(out.Tokens) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func normalizeTokenAssetKey(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func payloadDecimalIntString(fields map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := payloadLookup(fields, key)
+	if !ok {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		text = strings.TrimSpace(text)
+		return text, text != ""
+	}
+	var num json.Number
+	if err := json.Unmarshal(raw, &num); err == nil {
+		text = strings.TrimSpace(string(num))
+		return text, text != ""
+	}
+	return "", false
+}
+
+func payloadTokenPrices(raw json.RawMessage, active bool) ([]SellPriceToken, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(trimmed, &entries); err != nil {
+		if active {
+			return nil, fmt.Errorf("prices.tokens must be a JSON array")
+		}
+		return nil, nil
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make([]SellPriceToken, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for i, entry := range entries {
+		var tf map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &tf); err != nil {
+			if active {
+				return nil, fmt.Errorf("prices.tokens[%d] must be an object", i)
+			}
+			continue
+		}
+		mrc20Id, _ := payloadString(tf, "mrc20Id")
+		codehash, _ := payloadString(tf, "codehash")
+		genesis, _ := payloadString(tf, "genesis")
+		codehash = strings.ToLower(codehash)
+		genesis = strings.ToLower(genesis)
+		mrc20Id = strings.ToLower(mrc20Id)
+
+		assetKey, _ := payloadString(tf, "assetKey")
+		assetKey = normalizeTokenAssetKey(assetKey)
+		if assetKey == "" {
+			if mrc20Id != "" {
+				assetKey = "mrc20:" + mrc20Id
+			} else if codehash != "" && genesis != "" {
+				assetKey = "mvc-ft:" + codehash + ":" + genesis
+			}
+		}
+		if assetKey == "" {
+			if active {
+				return nil, fmt.Errorf("prices.tokens[%d].assetKey is required", i)
+			}
+			continue
+		}
+		if !strings.HasPrefix(assetKey, "mrc20:") && !strings.HasPrefix(assetKey, "mvc-ft:") {
+			if active {
+				return nil, fmt.Errorf("prices.tokens[%d].assetKey %q must start with mrc20: or mvc-ft:", i, assetKey)
+			}
+			continue
+		}
+
+		amountBase, hasAmount := payloadDecimalIntString(tf, "amountBase")
+		if active {
+			if !hasAmount {
+				return nil, fmt.Errorf("prices.tokens[%d].amountBase is required", i)
+			}
+			bi, ok := new(big.Int).SetString(amountBase, 10)
+			if !ok || bi.Sign() <= 0 || strings.HasPrefix(amountBase, "+") {
+				return nil, fmt.Errorf("prices.tokens[%d].amountBase must be a positive unsigned integer string", i)
+			}
+			amountBase = bi.String()
+		} else if hasAmount {
+			if bi, ok := new(big.Int).SetString(amountBase, 10); ok && bi.Sign() > 0 {
+				amountBase = bi.String()
+			}
+		}
+
+		decimals := int64(0)
+		if decVal, hasDec := payloadInt(tf, "decimals"); hasDec {
+			if decVal < 0 {
+				if active {
+					return nil, fmt.Errorf("prices.tokens[%d].decimals must be non-negative", i)
+				}
+				decVal = 0
+			}
+			decimals = decVal
+		}
+
+		chain, _ := payloadString(tf, "chain")
+		chain = strings.ToLower(chain)
+		if chain == "" {
+			if strings.HasPrefix(assetKey, "mrc20:") {
+				chain = "btc"
+			} else if strings.HasPrefix(assetKey, "mvc-ft:") {
+				chain = "mvc"
+			}
+		}
+		standard, _ := payloadString(tf, "standard")
+		if standard == "" {
+			if chain == "btc" {
+				standard = "mrc20"
+			} else if chain == "mvc" {
+				standard = "metacontract-ft"
+			}
+		}
+		if mrc20Id == "" && strings.HasPrefix(assetKey, "mrc20:") {
+			mrc20Id = strings.TrimPrefix(assetKey, "mrc20:")
+		}
+		if (codehash == "" || genesis == "") && strings.HasPrefix(assetKey, "mvc-ft:") {
+			parts := strings.SplitN(strings.TrimPrefix(assetKey, "mvc-ft:"), ":", 2)
+			if len(parts) == 2 {
+				if codehash == "" {
+					codehash = parts[0]
+				}
+				if genesis == "" {
+					genesis = parts[1]
+				}
+			}
+		}
+		symbol, _ := payloadString(tf, "symbol")
+		amountDisplay, _ := payloadString(tf, "amountDisplay")
+		if amountDisplay == "" {
+			if dispNum, ok := payloadDecimalIntString(tf, "amountDisplay"); ok {
+				amountDisplay = dispNum
+			}
+		}
+		recvAddr, ok := payloadString(tf, "sellerReceiveAddress")
+		if !ok {
+			recvAddr, _ = payloadString(tf, "receiveAddress")
+		}
+
+		if _, dup := seen[assetKey]; dup {
+			continue
+		}
+		seen[assetKey] = struct{}{}
+
+		out = append(out, SellPriceToken{
+			AssetKey:             assetKey,
+			Chain:                chain,
+			Standard:             standard,
+			Mrc20Id:              mrc20Id,
+			Codehash:             codehash,
+			Genesis:              genesis,
+			Symbol:               symbol,
+			Decimals:             int(decimals),
+			AmountBase:           amountBase,
+			AmountDisplay:        amountDisplay,
+			SellerReceiveAddress: recvAddr,
+		})
+	}
+	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil

@@ -25,6 +25,7 @@ const (
 	PathMetaProtocol   = "/protocols/metaprotocol"
 	PathSimpleQuestion = "/protocols/simplequestion"
 	PathSimpleAnswer   = "/protocols/simpleanswer"
+	PathPayBuzz        = "/protocols/paybuzz"
 )
 
 // Protocol keys of the unified search contract.
@@ -37,6 +38,7 @@ const (
 	KeyMetaProtocol     = "metaprotocol"
 	KeySimpleQuestion   = "simplequestion"
 	KeySimpleAnswer     = "simpleanswer"
+	KeyPayBuzz          = "paybuzz"
 	KeyMrc721Collection = "mrc721-collection"
 	KeyMrc721Listing    = "mrc721-listing"
 	KeyFtToken          = "ft-token"
@@ -44,14 +46,15 @@ const (
 )
 
 var protocolKeysByPath = map[string]string{
-	PathSimpleNote:        KeySimpleNote,
-	PathSimpleBuzz:        KeySimpleBuzz,
-	PathMetaApp:           KeyMetaApp,
-	PathMetaBotSkill:      KeyMetaBotSkill,
-	PathSkillService:      KeySkillService,
-	PathMetaProtocol:      KeyMetaProtocol,
-	PathSimpleQuestion:    KeySimpleQuestion,
-	PathSimpleAnswer:      KeySimpleAnswer,
+	PathSimpleNote:           KeySimpleNote,
+	PathSimpleBuzz:           KeySimpleBuzz,
+	PathMetaApp:              KeyMetaApp,
+	PathMetaBotSkill:         KeyMetaBotSkill,
+	PathSkillService:         KeySkillService,
+	PathMetaProtocol:         KeyMetaProtocol,
+	PathSimpleQuestion:       KeySimpleQuestion,
+	PathSimpleAnswer:         KeySimpleAnswer,
+	PathPayBuzz:              KeyPayBuzz,
 	"/protocols/mrc721sell": KeyMrc721Listing,
 	"/protocols/ft-sell":    KeyFtListing,
 }

@@ -156,6 +156,7 @@ func (a *Aggregator) synthesizeSellRecord(pin *aggregator.PinInscription, payloa
 		PriceHintSats:      payload.PriceHintSats,
 		Prices:             payload.Prices,
 		AutoFulfillMe:      payload.AutoFulfillMe,
+		AutoFulfillTokens:  payload.AutoFulfillTokens,
 		Negotiable:         payload.Negotiable,
 		ShopMetaAppPinId:   payload.ShopMetaAppPinId,
 		AcceptedCurrencies: payload.AcceptedCurrencies,

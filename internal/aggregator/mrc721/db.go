@@ -17,14 +17,16 @@ import (
 //	meta:seq                        global write-sequence counter (8-byte BE)
 //	intent:<itemPinId>              latest sell-intent record per item (JSON)
 //	itime:<invSeq16>:<itemPinId>    sell-intent recency index, newest first
+//	itoken:<assetKey>\x00<itemPinId> active sell-intent secondary index by token assetKey
 //	coll:<collectionPinId>          collection read-model row per pinid (JSON)
 //	ctime:<invSeq16>:<collectionPinId> collection recency index, newest first
 const (
-	keySeq        = "meta:seq"
-	keyIntent     = "intent:"
-	keyIntentTime = "itime:"
-	keyColl       = "coll:"
-	keyCollTime   = "ctime:"
+	keySeq         = "meta:seq"
+	keyIntent      = "intent:"
+	keyIntentTime  = "itime:"
+	keyIntentToken = "itoken:"
+	keyColl        = "coll:"
+	keyCollTime    = "ctime:"
 )
 
 func intentKey(itemPinId string) []byte {
@@ -37,6 +39,14 @@ func intentTimeKey(seq uint64, itemPinId string) []byte {
 
 func intentTimePrefix() []byte {
 	return []byte(keyIntentTime)
+}
+
+func intentTokenKey(assetKey, itemPinId string) []byte {
+	return []byte(keyIntentToken + normalizeTokenAssetKey(assetKey) + "\x00" + itemPinId)
+}
+
+func intentTokenPrefix(assetKey string) []byte {
+	return []byte(keyIntentToken + normalizeTokenAssetKey(assetKey) + "\x00")
 }
 
 func collectionKey(pinId string) []byte {
@@ -135,6 +145,54 @@ func (a *Aggregator) deleteSellIntentIndexEntry(seq uint64, itemPinId string) {
 	_ = a.store.Delete(Namespace, intentTimeKey(seq, itemPinId))
 }
 
+func (a *Aggregator) deleteSellIntentTokenIndex(rec *SellIntentRecord) {
+	if a == nil || a.store == nil || rec == nil || rec.Prices == nil {
+		return
+	}
+	for _, tok := range rec.Prices.Tokens {
+		if k := normalizeTokenAssetKey(tok.AssetKey); k != "" {
+			_ = a.store.Delete(Namespace, intentTokenKey(k, rec.ItemPinId))
+		}
+	}
+}
+
+func (a *Aggregator) syncSellIntentTokenIndex(prev, next *SellIntentRecord) {
+	if a == nil || a.store == nil {
+		return
+	}
+	if prev != nil {
+		a.deleteSellIntentTokenIndex(prev)
+	}
+	if next == nil || !next.Active || next.Prices == nil {
+		return
+	}
+	for _, tok := range next.Prices.Tokens {
+		if k := normalizeTokenAssetKey(tok.AssetKey); k != "" {
+			_ = a.store.Set(Namespace, intentTokenKey(k, next.ItemPinId), []byte("1"))
+		}
+	}
+}
+
+func (a *Aggregator) listTokenIndexedItemPinIds(assetKey string) (map[string]struct{}, error) {
+	key := normalizeTokenAssetKey(assetKey)
+	if a == nil || a.store == nil || key == "" {
+		return nil, nil
+	}
+	prefix := intentTokenPrefix(key)
+	out := make(map[string]struct{})
+	err := a.store.ScanPrefix(Namespace, prefix, func(rawKey, _ []byte) error {
+		itemPinId := strings.TrimPrefix(string(rawKey), string(prefix))
+		if itemPinId != "" {
+			out[itemPinId] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ingestSellPin folds one confirmed pin into the sell-intent index. It
 // returns whether the pin changed the read model. Non-sell-path pins and
 // non-create operations are ignored (create-only protocol); unparseable or
@@ -209,6 +267,7 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 		PriceHintSats:      payload.PriceHintSats,
 		Prices:             payload.Prices,
 		AutoFulfillMe:      payload.AutoFulfillMe,
+		AutoFulfillTokens:  payload.AutoFulfillTokens,
 		Negotiable:         payload.Negotiable,
 		ShopMetaAppPinId:   payload.ShopMetaAppPinId,
 		AcceptedCurrencies: payload.AcceptedCurrencies,
@@ -244,6 +303,7 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	if err := a.saveSellIntent(rec); err != nil {
 		return false, err
 	}
+	a.syncSellIntentTokenIndex(existing, rec)
 	return true, nil
 }
 

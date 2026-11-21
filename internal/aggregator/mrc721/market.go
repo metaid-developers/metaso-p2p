@@ -71,6 +71,7 @@ type ListingDTO struct {
 	Metadata           string        `json:"metadata"`
 	Prices             *SellPrices   `json:"prices"`
 	AutoFulfillMe      bool          `json:"autoFulfillMe"`
+	AutoFulfillTokens  bool          `json:"autoFulfillTokens"`
 	Negotiable         bool          `json:"negotiable"`
 	AcceptedCurrencies []string      `json:"acceptedCurrencies"`
 	Settlement         []string      `json:"settlement"`
@@ -208,6 +209,7 @@ func (a *Aggregator) computeAllCollectionSummaries(nowSec int64, includeZeroConf
 	cnyPricesByCol := make(map[string][]int64)
 	floorListingByCol := make(map[string]*SellIntentRecord)
 	floorListingCnyByCol := make(map[string]*SellIntentRecord)
+	floorListingAnyByCol := make(map[string]*SellIntentRecord)
 
 	for _, rec := range intents {
 		if rec == nil || !rec.Active {
@@ -232,6 +234,9 @@ func (a *Aggregator) computeAllCollectionSummaries(nowSec int64, includeZeroConf
 			continue
 		}
 		s.ListedCount++
+		if floorListingAnyByCol[key] == nil {
+			floorListingAnyByCol[key] = rec
+		}
 		if rec.Prices != nil && rec.Prices.Me != nil && rec.Prices.Me.AmountMilli > 0 {
 			p := rec.Prices.Me.AmountMilli
 			s.ListedMeCount++
@@ -272,6 +277,9 @@ func (a *Aggregator) computeAllCollectionSummaries(nowSec int64, includeZeroConf
 		floorRec := floorListingByCol[key]
 		if floorRec == nil {
 			floorRec = floorListingCnyByCol[key]
+		}
+		if floorRec == nil {
+			floorRec = floorListingAnyByCol[key]
 		}
 		if floorRec != nil {
 			s.FloorSeller = a.buildFloorSellerDTO(floorRec)
@@ -491,10 +499,7 @@ func (a *Aggregator) listingDTOFromRecord(rec *SellIntentRecord) *ListingDTO {
 	if caReader != nil && colPinId != "" {
 		caVerified, _ = caReader.IsCollectionCertified(colPinId)
 	}
-	accepted := rec.AcceptedCurrencies
-	if accepted == nil {
-		accepted = []string{}
-	}
+	accepted := mergeAcceptedCurrenciesWithTokens(rec.AcceptedCurrencies, rec.Prices)
 	settlement := rec.Settlement
 	if settlement == nil {
 		settlement = []string{}
@@ -511,6 +516,7 @@ func (a *Aggregator) listingDTOFromRecord(rec *SellIntentRecord) *ListingDTO {
 		Metadata:           metadata,
 		Prices:             rec.Prices,
 		AutoFulfillMe:      rec.EffectiveAutoFulfillMe(),
+		AutoFulfillTokens:  rec.EffectiveAutoFulfillTokens(),
 		Negotiable:         rec.Negotiable,
 		AcceptedCurrencies: accepted,
 		Settlement:         settlement,
@@ -664,9 +670,12 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		sellerFilter = strings.TrimSpace(c.Query("sellerGlobalMetaId"))
 	}
 	shopMetaAppPinId := strings.TrimSpace(c.Query("shopMetaAppPinId"))
+	tokenAssetKey := normalizeTokenAssetKey(c.Query("tokenAssetKey"))
 	currency := strings.ToLower(strings.TrimSpace(c.DefaultQuery("currency", "any")))
 	if currency == "cny" {
 		currency = "fiat:cny"
+	} else if strings.HasPrefix(currency, "ft:") && tokenAssetKey == "" {
+		tokenAssetKey = normalizeTokenAssetKey(strings.TrimPrefix(currency, "ft:"))
 	}
 	onlineOnly := parseBoolQuery(c.Query("onlineOnly"))
 	caOnly := parseBoolQuery(c.Query("caOnly"))
@@ -692,6 +701,11 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 	autoFulfillFilter, err := parseOptionalBoolQuery(c.Query("autoFulfillMe"))
 	if err != nil {
 		respondMarketErr(c, 40000, "invalid parameter: autoFulfillMe")
+		return
+	}
+	autoFulfillTokensFilter, err := parseOptionalBoolQuery(c.Query("autoFulfillTokens"))
+	if err != nil {
+		respondMarketErr(c, 40000, "invalid parameter: autoFulfillTokens")
 		return
 	}
 	negotiableFilter, err := parseOptionalBoolQuery(c.Query("negotiable"))
@@ -736,6 +750,11 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		sellerAddrs = a.resolvePartyAddresses(sellerFilter)
 	}
 
+	var tokenIndexedItems map[string]struct{}
+	if tokenAssetKey != "" {
+		tokenIndexedItems, _ = a.listTokenIndexedItemPinIds(tokenAssetKey)
+	}
+
 	confirmedOnly := zeroConfOnly(c)
 	intents, err := a.listAllEffectiveSellIntents(!confirmedOnly)
 	if err != nil {
@@ -750,6 +769,15 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 		if confirmedOnly && rec.Overlay {
 			continue
 		}
+		if tokenAssetKey != "" {
+			_, inIndex := tokenIndexedItems[rec.ItemPinId]
+			if !inIndex && !recordHasTokenAssetKey(rec, tokenAssetKey) {
+				continue
+			}
+			if !recordHasTokenAssetKey(rec, tokenAssetKey) {
+				continue
+			}
+		}
 		dto := a.listingDTOFromRecord(rec)
 		if collectionPinId != "" && !strings.EqualFold(dto.CollectionPinId, collectionPinId) {
 			continue
@@ -758,6 +786,9 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 			continue
 		}
 		if autoFulfillFilter != nil && dto.AutoFulfillMe != *autoFulfillFilter {
+			continue
+		}
+		if autoFulfillTokensFilter != nil && dto.AutoFulfillTokens != *autoFulfillTokensFilter {
 			continue
 		}
 		if negotiableFilter != nil && dto.Negotiable != *negotiableFilter {
@@ -904,7 +935,11 @@ func listingMatchesPriceFilter(dto *ListingDTO, currency string, minPrice, maxPr
 	case "fiat:cny":
 		p, ok := listingCnyPrice(dto)
 		return ok && inRange(p)
-	default: // "any"
+	default: // "any" or "ft:<assetKey>"
+		if strings.HasPrefix(strings.ToLower(currency), "ft:") {
+			target := normalizeTokenAssetKey(strings.TrimPrefix(currency, "ft:"))
+			return listingHasTokenAssetKey(dto, target)
+		}
 		if minPrice == nil && maxPrice == nil {
 			return true
 		}
@@ -930,6 +965,51 @@ func listingMatchesKeyword(dto *ListingDTO, keyword string) bool {
 	if dto.ItemNumber > 0 {
 		numStr := strconv.FormatInt(dto.ItemNumber, 10)
 		if keyword == numStr || keyword == "#"+numStr || strings.Contains("#"+numStr, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeAcceptedCurrenciesWithTokens(raw []string, prices *SellPrices) []string {
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, entry := range raw {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if _, dup := seen[lower]; dup {
+			continue
+		}
+		seen[lower] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if prices != nil {
+		for _, tok := range prices.Tokens {
+			key := normalizeTokenAssetKey(tok.AssetKey)
+			if key == "" {
+				continue
+			}
+			cur := "ft:" + key
+			if _, dup := seen[cur]; dup {
+				continue
+			}
+			seen[cur] = struct{}{}
+			out = append(out, cur)
+		}
+	}
+	return out
+}
+
+func listingHasTokenAssetKey(dto *ListingDTO, assetKey string) bool {
+	target := normalizeTokenAssetKey(assetKey)
+	if dto == nil || dto.Prices == nil || target == "" {
+		return false
+	}
+	for _, tok := range dto.Prices.Tokens {
+		if normalizeTokenAssetKey(tok.AssetKey) == target {
 			return true
 		}
 	}

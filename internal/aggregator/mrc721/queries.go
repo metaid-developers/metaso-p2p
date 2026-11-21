@@ -16,6 +16,7 @@ type SellIntentFilter struct {
 	CollectionName  string
 	ItemPinId       string
 	SellerAddress   string
+	TokenAssetKey   string
 	Active          *bool
 }
 
@@ -325,5 +326,21 @@ func sellIntentMatches(rec *SellIntentRecord, filter SellIntentFilter) bool {
 	if filter.Active != nil && rec.Active != *filter.Active {
 		return false
 	}
+	if filter.TokenAssetKey != "" && !recordHasTokenAssetKey(rec, filter.TokenAssetKey) {
+		return false
+	}
 	return true
+}
+
+func recordHasTokenAssetKey(rec *SellIntentRecord, assetKey string) bool {
+	target := normalizeTokenAssetKey(assetKey)
+	if rec == nil || rec.Prices == nil || target == "" {
+		return false
+	}
+	for _, tok := range rec.Prices.Tokens {
+		if normalizeTokenAssetKey(tok.AssetKey) == target {
+			return true
+		}
+	}
+	return false
 }

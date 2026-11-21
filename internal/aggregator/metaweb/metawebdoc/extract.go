@@ -119,6 +119,15 @@ func ExtractPublished(protocolPath string, payload map[string]any, payloadText s
 		out.Tags = stringSliceField(payload, "tags")
 		out.ContentExcerpt = CapRunes(plain, ContentMaxRunes)
 		setNonEmpty(out.Extra, "answerTo", stringField(payload, "answerTo"))
+	case KeyPayBuzz:
+		out.Title = stringField(payload, "title")
+		preview := StripMarkdown(stringField(payload, "preview"))
+		out.Summary = CapRunes(preview, 300)
+		out.ContentExcerpt = CapRunes(preview, 300)
+		if contentType := stringField(payload, "contentType"); contentType != "" {
+			out.Extra["contentType"] = contentType
+		}
+		return out
 	default:
 		// Unknown paths (pin-read remote fallback): best-effort generic fields.
 		out.Title = firstNonEmpty(stringField(payload, "title"), stringField(payload, "name"))
@@ -166,6 +175,8 @@ func TextForProtocol(protocolKey string, payload map[string]any, payloadText str
 		return stringField(payload, "description")
 	case KeyMetaApp:
 		return stringField(payload, "intro")
+	case KeyPayBuzz:
+		return stringField(payload, "preview")
 	default:
 		// The known content protocols (simplenote/simplebuzz/metaprotocol/
 		// simplequestion/simpleanswer) plus the generic JSON-protocol

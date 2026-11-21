@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -978,5 +979,229 @@ func TestSameBlockIncomingTransferAndHistoricalReplayHeal(t *testing.T) {
 	_ = json.Unmarshal(listEnv.Data, &page)
 	if page.Total != 1 || page.List[0].ItemPinId != item1 {
 		t.Fatalf("expected active listing in /market/listings after replay heal, got %+v", page)
+	}
+}
+
+func TestSellV22TokenPricesAndTokenAssetKeyFilter(t *testing.T) {
+	agg, nftAgg, router := setupMarketFixture(t)
+	item1, item2, item3, item4 := seedCollectionAndItems(t, nftAgg)
+
+	assetMetaid := "mrc20:4f92aaaa00000000000000000000000000000000000000000000000000000000i0"
+	assetShow := "mvc-ft:a24201:005d49"
+
+	// item1: legacy v2.1 listing (no tokens field) -> backward compatible
+	_, err := agg.HandleBlockPin(mrc721SellPin(testSellPinId("v21-item1", 0), 210, 1760000500, sellContent(t, map[string]any{
+		"itemPinId":       item1,
+		"sellerAddress":   testSeller1,
+		"collectionPinId": testCollection,
+		"active":          true,
+		"prices": map[string]any{
+			"me": map[string]any{"amountMilli": 15000},
+		},
+	}), "create"))
+	if err != nil {
+		t.Fatalf("v21-item1: %v", err)
+	}
+
+	// item2: v2.2 listing with both BTC MRC-20 and MVC FT prices + default autoFulfillTokens=true
+	_, err = agg.HandleBlockPin(mrc721SellPin(testSellPinId("v22-item2", 0), 211, 1760000600, sellContent(t, map[string]any{
+		"itemPinId":       item2,
+		"sellerAddress":   testSeller1,
+		"collectionPinId": testCollection,
+		"active":          true,
+		"prices": map[string]any{
+			"me": map[string]any{"amountMilli": 20000},
+			"tokens": []map[string]any{
+				{
+					"assetKey":             assetMetaid,
+					"chain":                "btc",
+					"standard":             "mrc20",
+					"mrc20Id":              "4f92aaaa00000000000000000000000000000000000000000000000000000000i0",
+					"symbol":               "METAID",
+					"decimals":             8,
+					"amountBase":           "20000000000",
+					"amountDisplay":        "200",
+					"sellerReceiveAddress": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+				},
+				{
+					"assetKey":             assetShow,
+					"chain":                "mvc",
+					"standard":             "metacontract-ft",
+					"codehash":             "a24201",
+					"genesis":              "005d49",
+					"symbol":               "SHOW",
+					"decimals":             8,
+					"amountBase":           "50000000000",
+					"amountDisplay":        "500",
+					"sellerReceiveAddress": testSeller1,
+				},
+			},
+		},
+	}), "create"))
+	if err != nil {
+		t.Fatalf("v22-item2: %v", err)
+	}
+
+	// item3: v2.2 token-only listing (only METAID, autoFulfillTokens=false)
+	_, err = agg.HandleBlockPin(&aggregator.PinInscription{
+		Id:            testSellPinId("v22-item3", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller2,
+		GenesisHeight: 212,
+		Timestamp:     1760000700,
+		ContentBody: sellContent(t, map[string]any{
+			"itemPinId":         item3,
+			"sellerAddress":     testSeller2,
+			"collectionPinId":   testCollection,
+			"active":            true,
+			"autoFulfillTokens": false,
+			"prices": map[string]any{
+				"tokens": []map[string]any{
+					{
+						"assetKey":             assetMetaid,
+						"chain":                "btc",
+						"standard":             "mrc20",
+						"symbol":               "METAID",
+						"decimals":             8,
+						"amountBase":           "15000000000",
+						"amountDisplay":        "150",
+						"sellerReceiveAddress": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("v22-item3: %v", err)
+	}
+
+	// item4: 0-conf mempool v2.2 listing with SHOW token (arrives after confirmed transfer wall-clock time)
+	_, err = agg.HandleMempoolPin(&aggregator.PinInscription{
+		Id:            testSellPinId("v22-mp-item4", 0),
+		Path:          PathSell,
+		Operation:     "create",
+		Address:       testSeller2,
+		GenesisHeight: -1,
+		Timestamp:     time.Now().Unix() + 10,
+		ContentBody: sellContent(t, map[string]any{
+			"itemPinId":       item4,
+			"sellerAddress":   testSeller2,
+			"collectionPinId": testCollection,
+			"active":          true,
+			"prices": map[string]any{
+				"tokens": []map[string]any{
+					{
+						"assetKey":             assetShow,
+						"chain":                "mvc",
+						"standard":             "metacontract-ft",
+						"symbol":               "SHOW",
+						"decimals":             8,
+						"amountBase":           "30000000000",
+						"amountDisplay":        "300",
+						"sellerReceiveAddress": testSeller2,
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("v22-mp-item4: %v", err)
+	}
+
+	// Check uniform envelope {code:0, data:..., message:"", processingTime:>0}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/mrc721/market/listings?tokenAssetKey="+url.QueryEscape(assetMetaid), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var rawEnv struct {
+		Code           int             `json:"code"`
+		Message        string          `json:"message"`
+		ProcessingTime *int64          `json:"processingTime"`
+		Data           json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawEnv); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if rawEnv.Code != 0 || rawEnv.Message != "" || rawEnv.ProcessingTime == nil {
+		t.Fatalf("unexpected uniform envelope: code=%d msg=%q pt=%v", rawEnv.Code, rawEnv.Message, rawEnv.ProcessingTime)
+	}
+
+	var metaidPage struct {
+		List  []ListingDTO `json:"list"`
+		Total int          `json:"total"`
+	}
+	if err := json.Unmarshal(rawEnv.Data, &metaidPage); err != nil {
+		t.Fatalf("decode metaidPage: %v", err)
+	}
+	if metaidPage.Total != 2 || len(metaidPage.List) != 2 {
+		t.Fatalf("expected 2 listings supporting METAID (item3, item2), got total=%d len=%d", metaidPage.Total, len(metaidPage.List))
+	}
+	// Verify acceptedCurrencies includes ft:<assetKey> and autoFulfillTokens flags
+	foundItem2, foundItem3 := false, false
+	for _, row := range metaidPage.List {
+		hasFtTag := false
+		for _, c := range row.AcceptedCurrencies {
+			if c == "ft:"+assetMetaid {
+				hasFtTag = true
+			}
+		}
+		if !hasFtTag {
+			t.Fatalf("expected acceptedCurrencies to include ft:%s, got %+v", assetMetaid, row.AcceptedCurrencies)
+		}
+		if row.ItemPinId == item2 {
+			foundItem2 = true
+			if !row.AutoFulfillTokens {
+				t.Fatalf("expected item2 autoFulfillTokens=true by default")
+			}
+		}
+		if row.ItemPinId == item3 {
+			foundItem3 = true
+			if row.AutoFulfillTokens {
+				t.Fatalf("expected item3 autoFulfillTokens=false")
+			}
+		}
+	}
+	if !foundItem2 || !foundItem3 {
+		t.Fatalf("missing item2 or item3 in filtered results")
+	}
+
+	// Filter by autoFulfillTokens=true + tokenAssetKey=assetMetaid -> only item2
+	_, autoEnv := doMrc721Request(t, router, "/api/mrc721/market/listings?tokenAssetKey="+url.QueryEscape(assetMetaid)+"&autoFulfillTokens=true")
+	_ = json.Unmarshal(autoEnv.Data, &metaidPage)
+	if metaidPage.Total != 1 || metaidPage.List[0].ItemPinId != item2 {
+		t.Fatalf("expected only item2 when autoFulfillTokens=true, got %+v", metaidPage)
+	}
+
+	// Filter by SHOW token -> item4 (mempool) + item2 (confirmed)
+	_, showEnv := doMrc721Request(t, router, "/api/mrc721/market/listings?tokenAssetKey="+url.QueryEscape(assetShow))
+	var showPage struct {
+		List  []ListingDTO `json:"list"`
+		Total int          `json:"total"`
+	}
+	_ = json.Unmarshal(showEnv.Data, &showPage)
+	if showPage.Total != 2 {
+		t.Fatalf("expected 2 listings supporting SHOW (item4 overlay + item2 confirmed), got %+v", showPage)
+	}
+
+	// Transfer item2 away -> secondary index cleaned up, SHOW listings drop to 1 (item4)
+	nftAgg.HandleBlockTransfers("mvc", 220, map[string]aggregator.TransferNotice{
+		hexOf("item2") + ":0": {
+			FromAddress: testSeller1,
+			ToAddress:   testSeller2,
+			Output:      hexOf("xfer-item2") + ":0",
+			OutputValue: 1000,
+			Location:    hexOf("xfer-item2") + ":0:0",
+		},
+	})
+	indexedShow, _ := agg.listTokenIndexedItemPinIds(assetShow)
+	if _, stillIndexed := indexedShow[item2]; stillIndexed {
+		t.Fatalf("expected item2 removed from PebbleDB itoken secondary index on transfer")
+	}
+	_, showAfterXfer := doMrc721Request(t, router, "/api/mrc721/market/listings?tokenAssetKey="+url.QueryEscape(assetShow))
+	_ = json.Unmarshal(showAfterXfer.Data, &showPage)
+	if showPage.Total != 1 || showPage.List[0].ItemPinId != item4 {
+		t.Fatalf("expected only item4 remaining for SHOW after item2 transfer, got %+v", showPage)
 	}
 }

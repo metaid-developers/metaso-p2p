@@ -80,10 +80,26 @@ type SellPriceFiat struct {
 	AmountCents int64  `json:"amountCents"`
 }
 
-// SellPrices carries optional multi-currency prices on /protocols/mrc721sell v2.1.
+// SellPriceToken declares one fungible-token fixed-price leg of a v2.2 sell intent (Contract C5.1).
+type SellPriceToken struct {
+	AssetKey             string `json:"assetKey"`
+	Chain                string `json:"chain"`
+	Standard             string `json:"standard,omitempty"`
+	Mrc20Id              string `json:"mrc20Id,omitempty"`
+	Codehash             string `json:"codehash,omitempty"`
+	Genesis              string `json:"genesis,omitempty"`
+	Symbol               string `json:"symbol,omitempty"`
+	Decimals             int    `json:"decimals"`
+	AmountBase           string `json:"amountBase"`
+	AmountDisplay        string `json:"amountDisplay,omitempty"`
+	SellerReceiveAddress string `json:"sellerReceiveAddress,omitempty"`
+}
+
+// SellPrices carries optional multi-currency prices on /protocols/mrc721sell v2.1/v2.2.
 type SellPrices struct {
-	Me   *SellPriceMe   `json:"me,omitempty"`
-	Fiat *SellPriceFiat `json:"fiat,omitempty"`
+	Me     *SellPriceMe     `json:"me,omitempty"`
+	Fiat   *SellPriceFiat   `json:"fiat,omitempty"`
+	Tokens []SellPriceToken `json:"tokens,omitempty"`
 }
 
 // SellIntentRecord is the latest-wins projection of one itemPinId's
@@ -102,6 +118,7 @@ type SellIntentRecord struct {
 	PriceHintSats      int64         `json:"priceHintSats,omitempty"`
 	Prices             *SellPrices   `json:"prices,omitempty"`
 	AutoFulfillMe      *bool         `json:"autoFulfillMe,omitempty"`
+	AutoFulfillTokens  *bool         `json:"autoFulfillTokens,omitempty"`
 	Negotiable         bool          `json:"negotiable,omitempty"`
 	ShopMetaAppPinId   string        `json:"shopMetaAppPinId,omitempty"`
 	AcceptedCurrencies []string      `json:"acceptedCurrencies,omitempty"`
@@ -131,6 +148,18 @@ func (r *SellIntentRecord) EffectiveAutoFulfillMe() bool {
 		return true
 	}
 	return *r.AutoFulfillMe
+}
+
+// EffectiveAutoFulfillTokens returns the effective token auto-fulfill flag (Contract C5.1).
+// Defaults to true when prices.tokens is non-empty unless explicitly set to false.
+func (r *SellIntentRecord) EffectiveAutoFulfillTokens() bool {
+	if r == nil {
+		return false
+	}
+	if r.AutoFulfillTokens != nil {
+		return *r.AutoFulfillTokens
+	}
+	return r.Prices != nil && len(r.Prices.Tokens) > 0
 }
 
 // CAReader resolves official CA certification and official bot roles.

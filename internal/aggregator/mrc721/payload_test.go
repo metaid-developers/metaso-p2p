@@ -125,3 +125,92 @@ func TestPayloadBoolStringTolerance(t *testing.T) {
 		t.Fatal("garbage string accepted as bool")
 	}
 }
+
+func TestParseSellIntentPayloadV22TokensAndAutoFulfill(t *testing.T) {
+	body := `{
+		"active": true,
+		"itemPinId": "` + validItemPinId + `",
+		"sellerAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+		"autoFulfillTokens": true,
+		"prices": {
+			"me": { "amountMilli": 15000 },
+			"tokens": [
+				{
+					"assetKey": "mrc20:4f92aaaa00000000000000000000000000000000000000000000000000000000i0",
+					"chain": "btc",
+					"standard": "mrc20",
+					"mrc20Id": "4f92aaaa00000000000000000000000000000000000000000000000000000000i0",
+					"symbol": "METAID",
+					"decimals": 8,
+					"amountBase": "20000000000",
+					"amountDisplay": "200",
+					"sellerReceiveAddress": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+				},
+				{
+					"assetKey": "mvc-ft:A24201:005D49",
+					"chain": "mvc",
+					"standard": "metacontract-ft",
+					"symbol": "SHOW",
+					"decimals": 8,
+					"amountBase": "50000000000",
+					"amountDisplay": "500",
+					"sellerReceiveAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+				}
+			]
+		}
+	}`
+	payload, err := parseSellIntentPayload([]byte(body))
+	if err != nil {
+		t.Fatalf("parse v2.2 payload: %v", err)
+	}
+	if payload.Prices == nil || len(payload.Prices.Tokens) != 2 {
+		t.Fatalf("expected 2 token prices, got %+v", payload.Prices)
+	}
+	if payload.AutoFulfillTokens == nil || !*payload.AutoFulfillTokens {
+		t.Fatalf("expected autoFulfillTokens=true, got %v", payload.AutoFulfillTokens)
+	}
+	if payload.Prices.Tokens[1].AssetKey != "mvc-ft:a24201:005d49" || payload.Prices.Tokens[1].Codehash != "a24201" || payload.Prices.Tokens[1].Genesis != "005d49" {
+		t.Fatalf("expected normalized mvc-ft assetKey/codehash/genesis, got %+v", payload.Prices.Tokens[1])
+	}
+
+	// Token-only listing (no me/fiat) must also parse cleanly.
+	tokenOnlyBody := `{
+		"active": true,
+		"itemPinId": "` + validItemPinId + `",
+		"sellerAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+		"prices": {
+			"tokens": [
+				{
+					"assetKey": "mrc20:4f92i0",
+					"decimals": 8,
+					"amountBase": "100000000",
+					"amountDisplay": "1"
+				}
+			]
+		}
+	}`
+	tokOnly, err := parseSellIntentPayload([]byte(tokenOnlyBody))
+	if err != nil || tokOnly.Prices == nil || len(tokOnly.Prices.Tokens) != 1 {
+		t.Fatalf("expected token-only listing valid, err=%v prices=%+v", err, tokOnly.Prices)
+	}
+
+	// Invalid active token entries must be rejected.
+	badZeroBase := `{
+		"active": true,
+		"itemPinId": "` + validItemPinId + `",
+		"sellerAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+		"prices": { "tokens": [{ "assetKey": "mrc20:4f92i0", "decimals": 8, "amountBase": "0" }] }
+	}`
+	if _, err := parseSellIntentPayload([]byte(badZeroBase)); err == nil {
+		t.Fatal("expected error for amountBase=0 on active listing")
+	}
+	badAssetKey := `{
+		"active": true,
+		"itemPinId": "` + validItemPinId + `",
+		"sellerAddress": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+		"prices": { "tokens": [{ "assetKey": "unknown:foo", "decimals": 8, "amountBase": "100" }] }
+	}`
+	if _, err := parseSellIntentPayload([]byte(badAssetKey)); err == nil {
+		t.Fatal("expected error for unsupported assetKey prefix on active listing")
+	}
+}

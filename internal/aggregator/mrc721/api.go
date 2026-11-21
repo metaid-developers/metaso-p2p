@@ -84,10 +84,11 @@ type sellIntentRow struct {
 	PriceHintSats int64 `json:"priceHintSats,omitempty"`
 	Pricehintsats int64 `json:"pricehintsats,omitempty"`
 
-	Prices           *SellPrices `json:"prices,omitempty"`
-	AutoFulfillMe    *bool       `json:"autoFulfillMe,omitempty"`
-	Negotiable       *bool       `json:"negotiable,omitempty"`
-	ShopMetaAppPinId string      `json:"shopMetaAppPinId,omitempty"`
+	Prices            *SellPrices `json:"prices,omitempty"`
+	AutoFulfillMe     *bool       `json:"autoFulfillMe,omitempty"`
+	AutoFulfillTokens *bool       `json:"autoFulfillTokens,omitempty"`
+	Negotiable        *bool       `json:"negotiable,omitempty"`
+	ShopMetaAppPinId  string      `json:"shopMetaAppPinId,omitempty"`
 
 	AcceptedCurrencies []string `json:"acceptedCurrencies,omitempty"`
 	Acceptedcurrencies []string `json:"acceptedcurrencies,omitempty"`
@@ -164,6 +165,10 @@ func sellIntentRowFrom(rec *SellIntentRecord) *sellIntentRow {
 		row.AutoFulfillMe = &auto
 		row.Negotiable = &neg
 	}
+	if rec.AutoFulfillTokens != nil || (rec.Prices != nil && len(rec.Prices.Tokens) > 0) {
+		autoTok := rec.EffectiveAutoFulfillTokens()
+		row.AutoFulfillTokens = &autoTok
+	}
 	if rec.Overlay {
 		confirmed := false
 		row.Confirmed = &confirmed
@@ -184,6 +189,7 @@ func (a *Aggregator) handleSellIntents(c *gin.Context) {
 		CollectionName:  strings.TrimSpace(c.Query("collectionName")),
 		ItemPinId:       strings.TrimSpace(c.Query("itemPinId")),
 		SellerAddress:   strings.TrimSpace(c.Query("sellerAddress")),
+		TokenAssetKey:   normalizeTokenAssetKey(c.Query("tokenAssetKey")),
 	}
 	if activeRaw := strings.TrimSpace(c.Query("active")); activeRaw != "" {
 		switch strings.ToLower(activeRaw) {

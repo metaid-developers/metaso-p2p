@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/idbotsca"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/mrc721nft"
+	"github.com/metaid-developers/metaso-p2p/internal/api"
 )
 
 const (
@@ -449,6 +449,7 @@ func (a *Aggregator) OnItemTransferred(ev mrc721nft.TransferEvent) {
 				if err := a.saveSellIntent(rec); err != nil {
 					log.Printf("WARNING: mrc721 invalidate sell intent %s on transfer: %v", ev.ItemPinId, err)
 				} else {
+					a.deleteSellIntentTokenIndex(rec)
 					changed = true
 				}
 			}
@@ -765,16 +766,9 @@ func tradeMatchesParty(tr *TradeRecord, raw string, addrs map[string]struct{}) b
 }
 
 func respondMarketOK(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    data,
-	})
+	api.RespSuccess(c, data)
 }
 
 func respondMarketErr(c *gin.Context, code int, message string) {
-	c.JSON(http.StatusOK, gin.H{
-		"code":    code,
-		"message": message,
-	})
+	api.RespErr(c, code, message)
 }

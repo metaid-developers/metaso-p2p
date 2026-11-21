@@ -98,6 +98,15 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 		if dto.Prices != nil && dto.Prices.Fiat != nil && dto.Prices.Fiat.AmountCents > 0 {
 			priceParts = append(priceParts, fmt.Sprintf("%.2f %s", float64(dto.Prices.Fiat.AmountCents)/100.0, dto.Prices.Fiat.Currency))
 		}
+		if dto.Prices != nil {
+			for _, tok := range dto.Prices.Tokens {
+				label := firstNonEmpty(tok.AmountDisplay, tok.AmountBase)
+				sym := firstNonEmpty(tok.Symbol, tok.AssetKey)
+				if label != "" && sym != "" {
+					priceParts = append(priceParts, label+" "+sym)
+				}
+			}
+		}
 		summary := strings.Join(priceParts, " / ")
 		if dto.Note != "" {
 			if summary != "" {
@@ -114,6 +123,16 @@ func (a *Aggregator) SearchDocuments() []metawebdoc.Document {
 		}
 		if dto.Seller.IsOnline {
 			tags = append(tags, "online")
+		}
+		if dto.Prices != nil {
+			for _, tok := range dto.Prices.Tokens {
+				if tok.Symbol != "" {
+					tags = append(tags, tok.Symbol)
+				}
+				if tok.AssetKey != "" {
+					tags = append(tags, tok.AssetKey)
+				}
+			}
 		}
 		docs = append(docs, metawebdoc.Document{
 			ProtocolKey:           metawebdoc.KeyMrc721Listing,
@@ -150,6 +169,7 @@ func formatListingVersionToken(dto *ListingDTO) string {
 	}
 	var meMilli, cnyCents int64
 	var fiatCur string
+	var tokenFingerprints []string
 	if dto.Prices != nil {
 		if dto.Prices.Me != nil {
 			meMilli = dto.Prices.Me.AmountMilli
@@ -158,13 +178,18 @@ func formatListingVersionToken(dto *ListingDTO) string {
 			fiatCur = dto.Prices.Fiat.Currency
 			cnyCents = dto.Prices.Fiat.AmountCents
 		}
+		for _, tok := range dto.Prices.Tokens {
+			tokenFingerprints = append(tokenFingerprints, tok.AssetKey+"="+tok.AmountBase)
+		}
 	}
-	return fmt.Sprintf("%s#%s#%d#%s#%d#%t#%t#%t#%d#%d",
+	return fmt.Sprintf("%s#%s#%d#%s#%d#%s#%t#%t#%t#%t#%d#%d",
 		dto.IntentPinId,
 		dto.ItemPinId,
 		meMilli,
 		fiatCur,
 		cnyCents,
+		strings.Join(tokenFingerprints, ","),
+		dto.AutoFulfillTokens,
 		dto.CaVerified,
 		dto.Seller.IsOnline,
 		dto.Confirmed,

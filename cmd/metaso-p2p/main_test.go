@@ -215,3 +215,20 @@ func TestMainWiresFtMarketAggregator(t *testing.T) {
 	}
 }
 
+func TestMainWiresPaybuzzAggregatorAndMetawebSource(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(raw)
+	for _, required := range []string{
+		`"github.com/metaid-developers/metaso-p2p/internal/aggregator/paybuzz"`,
+		`paybuzzCandidate.SetProfileLookup(paybuzz.NewUserInfoLookupAdapter(userinfoAgg))`,
+		`aggRegistry.Register(paybuzzCandidate)`,
+		`docSources = append(docSources, paybuzzAgg)`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("cmd/metaso-p2p/main.go missing paybuzz wiring: %q", required)
+		}
+	}
+}
