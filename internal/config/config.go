@@ -29,6 +29,17 @@ type Config struct {
 	ChatRateLimit         ChatRateLimit               `json:"chatRateLimit"`
 	ProtocolRegistry      ProtocolRegistryConfig      `json:"protocolRegistry"`
 	Mrc721                Mrc721Config                `json:"mrc721"`
+	FtMarket              FtMarketConfig              `json:"ftMarket"`
+}
+
+// FtMarketConfig configures the FT token sell-listing index & three-rail market aggregator.
+type FtMarketConfig struct {
+	Enabled             bool          `json:"enabled"`
+	ZeroConfTrade       bool          `json:"zeroConfTrade"`
+	HigunBaseURL        string        `json:"higunBaseUrl"`
+	ManBaseURL          string        `json:"manBaseUrl"`
+	MetaidMarketBaseURL string        `json:"metaidMarketBaseUrl"`
+	UTXOSweepInterval   time.Duration `json:"utxoSweepInterval"`
 }
 
 // Mrc721Config groups the MRC-721 business-index knobs (docs/specs/
@@ -503,6 +514,14 @@ func Default() Config {
 			ZeroConfIssuance: true,
 			ZeroConfTrade:    true,
 		},
+		FtMarket: FtMarketConfig{
+			Enabled:             true,
+			ZeroConfTrade:       true,
+			HigunBaseURL:        "",
+			ManBaseURL:          "https://manapi.metaid.io",
+			MetaidMarketBaseURL: "https://api.metaid.market",
+			UTXOSweepInterval:   60 * time.Second,
+		},
 	}
 }
 
@@ -662,6 +681,13 @@ func Load() (Config, error) {
 	applyBoolEnv("METASO_P2P_MRC721_OFFER_ENABLED", &cfg.Mrc721.Offer.Enabled)
 	applyBoolEnv("METASO_P2P_MRC721_ZERO_CONF_ISSUANCE", &cfg.Mrc721.ZeroConfIssuance)
 	applyBoolEnv("METASO_P2P_MRC721_ZERO_CONF_TRADE", &cfg.Mrc721.ZeroConfTrade)
+
+	applyBoolEnv("METASO_P2P_FT_MARKET_ENABLED", &cfg.FtMarket.Enabled)
+	applyBoolEnv("METASO_P2P_FT_MARKET_ZERO_CONF_TRADE", &cfg.FtMarket.ZeroConfTrade)
+	applyStringEnv("METASO_P2P_FT_MARKET_HIGUN_BASE_URL", &cfg.FtMarket.HigunBaseURL)
+	applyStringEnv("METASO_P2P_FT_MARKET_MAN_BASE_URL", &cfg.FtMarket.ManBaseURL)
+	applyStringEnv("METASO_P2P_FT_MARKET_METAID_MARKET_BASE_URL", &cfg.FtMarket.MetaidMarketBaseURL)
+	applyDurationEnv("METASO_P2P_FT_MARKET_UTXO_SWEEP_INTERVAL", &cfg.FtMarket.UTXOSweepInterval)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

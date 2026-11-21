@@ -193,3 +193,25 @@ func TestMainWiresPreferenceAggregator(t *testing.T) {
 		}
 	}
 }
+
+func TestMainWiresFtMarketAggregator(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	source := string(raw)
+	for _, required := range []string{
+		`"github.com/metaid-developers/metaso-p2p/internal/aggregator/ftmarket"`,
+		`aggRegistry.Register(ftmarketCandidate)`,
+		`ftmarketAgg.SetCAReader(&ftmarketCAAdapter{ca: idbotscaAgg})`,
+		`ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})`,
+		`ftmarketAgg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})`,
+		`ftmarketAgg.RefreshMarketCache()`,
+		`docSources = append(docSources, ftmarketAgg)`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("cmd/metaso-p2p/main.go lost the ftmarket wiring: missing %q", required)
+		}
+	}
+}
+

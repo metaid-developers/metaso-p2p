@@ -107,20 +107,36 @@ type OfficialBadgeDTO struct {
 	BadgeLabel string `json:"badgeLabel"`
 }
 
+// TokenCertEntry is one certified fungible token entry in the CA registry.
+type TokenCertEntry struct {
+	AssetKey    string `json:"assetKey"`
+	Chain       string `json:"chain,omitempty"`
+	Standard    string `json:"standard,omitempty"`
+	Symbol      string `json:"symbol,omitempty"`
+	TokenName   string `json:"tokenName,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Decimals    int    `json:"decimals,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	Note        string `json:"note,omitempty"`
+	CertifiedAt int64  `json:"certifiedAt,omitempty"`
+}
+
 // RegistrySnapshot is the latest active CA registry state.
 type RegistrySnapshot struct {
-	Verified       bool                  `json:"verified"`
-	PinId          string                `json:"pinId"`
-	OfficialMetaId string                `json:"officialMetaId"`
-	UpdatedAt      int64                 `json:"updatedAt"`
-	Height         int64                 `json:"-"`
-	Collections    []CollectionCertEntry `json:"collections"`
-	OfficialBots   []OfficialBotEntry    `json:"officialBots"`
+	Verified        bool                  `json:"verified"`
+	PinId           string                `json:"pinId"`
+	OfficialMetaId  string                `json:"officialMetaId"`
+	UpdatedAt       int64                 `json:"updatedAt"`
+	Height          int64                 `json:"-"`
+	Collections     []CollectionCertEntry `json:"collections"`
+	OfficialBots    []OfficialBotEntry    `json:"officialBots"`
+	CertifiedTokens []TokenCertEntry      `json:"certifiedTokens,omitempty"`
 }
 
 type caPayload struct {
-	Collections  []CollectionCertEntry `json:"collections"`
-	OfficialBots []OfficialBotEntry    `json:"officialBots"`
+	Collections     []CollectionCertEntry `json:"collections"`
+	OfficialBots    []OfficialBotEntry    `json:"officialBots"`
+	CertifiedTokens []TokenCertEntry      `json:"certifiedTokens,omitempty"`
 }
 
 // Aggregator indexes /protocols/idbots-nft-ca and serves CA lookups and HTTP routes.
@@ -135,6 +151,7 @@ type Aggregator struct {
 	effective     *RegistrySnapshot
 	colByPinId    map[string]CollectionCertEntry
 	botByGlobal   map[string]OfficialBotEntry
+	tokenByAsset  map[string]TokenCertEntry
 	onChange      func()
 	nowFn         func() int64
 }
@@ -337,6 +354,10 @@ func (a *Aggregator) Registry() RegistrySnapshot {
 	copy(cp.Collections, a.effective.Collections)
 	cp.OfficialBots = make([]OfficialBotEntry, len(a.effective.OfficialBots))
 	copy(cp.OfficialBots, a.effective.OfficialBots)
+	if len(a.effective.CertifiedTokens) > 0 {
+		cp.CertifiedTokens = make([]TokenCertEntry, len(a.effective.CertifiedTokens))
+		copy(cp.CertifiedTokens, a.effective.CertifiedTokens)
+	}
 	return cp
 }
 
@@ -363,6 +384,26 @@ func (a *Aggregator) IsCollectionCertified(collectionPinId string) (bool, *Colle
 		return false, nil
 	}
 	entry, ok := a.colByPinId[strings.ToLower(collectionPinId)]
+	if !ok {
+		return false, nil
+	}
+	cp := entry
+	return true, &cp
+}
+
+// IsTokenCertified reports whether assetKey is certified in the latest registry.
+func (a *Aggregator) IsTokenCertified(assetKey string) (bool, *TokenCertEntry) {
+	assetKey = strings.ToLower(strings.TrimSpace(assetKey))
+	if a == nil || assetKey == "" {
+		return false, nil
+	}
+	a.cleanupStaleMempoolIfNeeded()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.tokenByAsset == nil {
+		return false, nil
+	}
+	entry, ok := a.tokenByAsset[assetKey]
 	if !ok {
 		return false, nil
 	}
@@ -430,6 +471,7 @@ func (a *Aggregator) rebuildEffectiveLocked() {
 	a.effective = active
 	a.colByPinId = make(map[string]CollectionCertEntry)
 	a.botByGlobal = make(map[string]OfficialBotEntry)
+	a.tokenByAsset = make(map[string]TokenCertEntry)
 	if active == nil {
 		return
 	}
@@ -446,6 +488,14 @@ func (a *Aggregator) rebuildEffectiveLocked() {
 			continue
 		}
 		a.botByGlobal[gid] = bot
+	}
+	for _, tok := range active.CertifiedTokens {
+		key := strings.ToLower(strings.TrimSpace(tok.AssetKey))
+		if key == "" {
+			continue
+		}
+		tok.AssetKey = key
+		a.tokenByAsset[key] = tok
 	}
 }
 
@@ -532,13 +582,14 @@ func buildSnapshotFromPin(pin *aggregator.PinInscription, payload *caPayload) *R
 		bots = []OfficialBotEntry{}
 	}
 	return &RegistrySnapshot{
-		Verified:       true,
-		PinId:          strings.TrimSpace(pin.Id),
-		OfficialMetaId: OfficialMetaID,
-		UpdatedAt:      unixSeconds(pin.Timestamp),
-		Height:         pin.GenesisHeight,
-		Collections:    cols,
-		OfficialBots:   bots,
+		Verified:        true,
+		PinId:           strings.TrimSpace(pin.Id),
+		OfficialMetaId:  OfficialMetaID,
+		UpdatedAt:       unixSeconds(pin.Timestamp),
+		Height:          pin.GenesisHeight,
+		Collections:     cols,
+		OfficialBots:    bots,
+		CertifiedTokens: payload.CertifiedTokens,
 	}
 }
 
