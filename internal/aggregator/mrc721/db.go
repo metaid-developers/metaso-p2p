@@ -171,9 +171,24 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	updatedAt := unixSeconds(pin.Timestamp)
 	if existing != nil {
 		if existing.SellPinId == sellPinId {
-			return false, nil // idempotent re-apply (live + backfill overlap)
-		}
-		if !chainOrderNewer(existing.Height, existing.UpdatedAt, existing.SellPinId, height, updatedAt, sellPinId) {
+			// Idempotent re-apply, except when an omitted itemOutpoint was
+			// enriched from a pre-repair UTXO and height-reset rescans the block
+			// after folding the missing intra-block transfer hops.
+			needsOutpointHeal := payload.Active && payload.ItemOutpoint == nil && a.nftReader != nil && func() bool {
+				owner, outpoint, burned, found := a.nftReader.ItemOwnership(itemPinId, false)
+				if !found || burned || owner != payload.SellerAddress || outpoint == "" {
+					return false
+				}
+				if existing.ItemOutpoint == nil || existing.ItemOutpoint.TxID == "" {
+					return !existing.Active
+				}
+				declared := fmt.Sprintf("%s:%d", strings.ToLower(existing.ItemOutpoint.TxID), existing.ItemOutpoint.Vout)
+				return !strings.EqualFold(outpoint, declared) || !existing.Active
+			}()
+			if !needsOutpointHeal {
+				return false, nil // idempotent re-apply (live + backfill overlap)
+			}
+		} else if !chainOrderNewer(existing.Height, existing.UpdatedAt, existing.SellPinId, height, updatedAt, sellPinId) {
 			return false, nil // older declaration re-arriving; latest stays
 		}
 	}

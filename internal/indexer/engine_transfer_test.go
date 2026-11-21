@@ -305,3 +305,103 @@ func TestProcessMempoolTransfersSkipsOnFetchError(t *testing.T) {
 		t.Fatalf("failed fetch must skip the round: %+v", consumer.mempoolRounds)
 	}
 }
+
+type chainedBlockDetector struct {
+	mockIndexer
+	spends map[string]aggregator.TransferNotice
+	pins   []*aggregator.PinInscription
+}
+
+func (d *chainedBlockDetector) CatchPins(height int64) ([]*aggregator.PinInscription, []string, error) {
+	return d.pins, nil, nil
+}
+
+func (d *chainedBlockDetector) DetectTransfers(idMap map[string]string) (map[string]aggregator.TransferNotice, error) {
+	out := make(map[string]aggregator.TransferNotice)
+	for outpoint := range idMap {
+		if notice, ok := d.spends[outpoint]; ok {
+			out[outpoint] = notice
+		}
+	}
+	return out, nil
+}
+
+type advancingConsumer struct {
+	consumerAggregator
+	mintOnPin map[string]aggregator.TrackedOutput
+}
+
+func (c *advancingConsumer) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if out, ok := c.mintOnPin[pin.Id]; ok {
+		c.tracked[pin.Id[:len(pin.Id)-2]+":0"] = out
+	}
+	return nil, nil
+}
+
+func (c *advancingConsumer) HandleBlockTransfers(chainName string, height int64, transfers map[string]aggregator.TransferNotice) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.consumedAt = append(c.consumedAt, height)
+	if c.consumed == nil {
+		c.consumed = make(map[string]aggregator.TransferNotice)
+	}
+	for outpoint, notice := range transfers {
+		ref, ok := c.tracked[outpoint]
+		if !ok {
+			continue
+		}
+		delete(c.tracked, outpoint)
+		c.tracked[notice.Output] = aggregator.TrackedOutput{Owner: notice.ToAddress, Ref: ref.Ref}
+		c.consumed[outpoint] = notice
+	}
+}
+
+func TestProcessTransfersFollowsMultiHopIntraBlockChain(t *testing.T) {
+	// Mainnet regression (MVC block #199754): an MRC-721 item transferred 4
+	// times in the same 10-minute block (u0 -> u1 -> u2 -> u3 -> u4). A single
+	// DetectTransfers pass stopped at u1 and permanently orphaned u4.
+	store := storage.NewPebbleStore(t.TempDir())
+	defer func() { _ = store.Close() }()
+	registry := aggregator.NewRegistry(store, cache.New(store))
+
+	consumer := &advancingConsumer{
+		consumerAggregator: consumerAggregator{
+			tracked: map[string]aggregator.TrackedOutput{
+				"u0:0": {Owner: "addr0", Ref: "item-2671"},
+			},
+		},
+		mintOnPin: map[string]aggregator.TrackedOutput{
+			"minttxi0": {Owner: "station", Ref: "item-1310"},
+		},
+	}
+	if err := registry.Register(consumer); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	detector := &chainedBlockDetector{
+		pins: []*aggregator.PinInscription{{Id: "minttxi0", Path: "/nft/mrc721/metabot-avatar/item-1310"}},
+		spends: map[string]aggregator.TransferNotice{
+			"u0:0":     {FromAddress: "addr0", ToAddress: "addr1", Output: "u1:0", OutputValue: 1, Location: "u1:0:0"},
+			"u1:0":     {FromAddress: "addr1", ToAddress: "addr2", Output: "u2:0", OutputValue: 1, Location: "u2:0:0"},
+			"u2:0":     {FromAddress: "addr2", ToAddress: "addr3", Output: "u3:0", OutputValue: 1, Location: "u3:0:0"},
+			"u3:0":     {FromAddress: "addr3", ToAddress: "addr4", Output: "u4:0", OutputValue: 1, Location: "u4:0:0"},
+			"minttx:0": {FromAddress: "station", ToAddress: "buyer", Output: "deliver:0", OutputValue: 1, Location: "deliver:0:0"},
+		},
+	}
+	engine := NewEngine(store, registry)
+	entry := &chainEntry{chain: &mockChain{name: "mvc"}, indexer: detector, lastHeight: 199753}
+	engine.chains["mvc"] = entry
+
+	engine.scanRange(entry, 199754, 199754)
+
+	final4, ok := consumer.tracked["u4:0"]
+	if !ok || final4.Owner != "addr4" {
+		t.Fatalf("expected 4-hop intra-block chain to land at u4:0/addr4, got %+v", consumer.tracked)
+	}
+	delivered, ok := consumer.tracked["deliver:0"]
+	if !ok || delivered.Owner != "buyer" {
+		t.Fatalf("expected same-block mint+transfer to land at deliver:0/buyer, got %+v", consumer.tracked)
+	}
+}

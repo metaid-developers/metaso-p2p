@@ -236,7 +236,7 @@ func hasSubsequentTransfer(nftReader NFTReader, rec *SellIntentRecord) bool {
 	if nftReader == nil || rec == nil {
 		return false
 	}
-	lastH, lastTime, _, count, found := nftReader.ItemLatestConfirmedTransfer(rec.ItemPinId)
+	lastH, lastTime, lastTxId, count, found := nftReader.ItemLatestConfirmedTransfer(rec.ItemPinId)
 	if !found || count == 0 {
 		return false
 	}
@@ -245,6 +245,21 @@ func hasSubsequentTransfer(nftReader NFTReader, rec *SellIntentRecord) bool {
 			return true
 		}
 		if lastH == rec.Height && lastTime > rec.UpdatedAt {
+			// When an item is transferred TO the seller and listed in the same
+			// block, HandleBlockTransfers stamps lastTime with wall-clock ingest
+			// time (> pin.Timestamp). If the block's latest transfer tx IS the
+			// exact UTXO the listing points to (or, before enrichment when
+			// itemOutpoint was omitted, the current confirmed UTXO held by the
+			// seller), no spend happened after it.
+			if rec.ItemOutpoint != nil && rec.ItemOutpoint.TxID != "" {
+				return !strings.EqualFold(lastTxId, rec.ItemOutpoint.TxID)
+			}
+			if lastTxId != "" {
+				if owner, outpoint, burned, ok := nftReader.ItemOwnership(rec.ItemPinId, false); ok && !burned && owner == rec.SellerAddress &&
+					strings.HasPrefix(strings.ToLower(outpoint), strings.ToLower(lastTxId)+":") {
+					return false
+				}
+			}
 			return true
 		}
 		return false

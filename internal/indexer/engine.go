@@ -207,8 +207,15 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 			continue
 		}
 
+		seenSpends := make(map[string]struct{})
 		var events []*aggregator.NotifyEvent
 		if len(pins) > 0 {
+			// Fold spends of pre-existing tracked outputs before routing pins so
+			// same-block protocol declarations (e.g. a buyer/recipient listing an
+			// item transferred to them earlier in the same block) observe the
+			// updated confirmed UTXO and owner.
+			e.processTransfersWithSeen(entry, h, seenSpends)
+
 			log.Printf("[indexer] %s block %d: %d pins parsed", chainName, h, len(pins))
 
 			// Route confirmed pins to aggregators
@@ -218,9 +225,9 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 			}
 		}
 
-		// Detect spends of tracked outputs every block — a transfer block
-		// can contain no new pins at all (plain UTXO spends).
-		e.processTransfers(entry, h)
+		// Detect spends of tracked outputs every block — covers pinless transfer
+		// blocks as well as same-block transfers of items minted by RouteBlockPin.
+		e.processTransfersWithSeen(entry, h, seenSpends)
 
 		entry.lastHeight = h
 		e.persistHeight(chainName, h)
@@ -239,7 +246,13 @@ func (e *Engine) scanRange(entry *chainEntry, fromHeight, toHeight int64) {
 // (chain.TransferDetector, optional per chain); the tracked-output set
 // comes from the consumers themselves. Chains without a transfer detector
 // and runs without consumers are no-ops.
+const maxIntraBlockTransferHops = 64
+
 func (e *Engine) processTransfers(entry *chainEntry, height int64) {
+	e.processTransfersWithSeen(entry, height, make(map[string]struct{}))
+}
+
+func (e *Engine) processTransfersWithSeen(entry *chainEntry, height int64, seenOutpoints map[string]struct{}) {
 	consumers := e.registry.TransferConsumers()
 	if len(consumers) == 0 {
 		return
@@ -248,40 +261,55 @@ func (e *Engine) processTransfers(entry *chainEntry, height int64) {
 	if !ok {
 		return
 	}
-	idMap := make(map[string]string)
-	for _, consumer := range consumers {
-		// The CONFIRMED block path detects against the base tracked set:
-		// the overlay-aware view hides outpoints with an in-flight mempool
-		// spend, and that spend's own confirmation block must still settle
-		// it (the mempool reconcile only evicts the overlay evidence after
-		// the block — whichever order, detection must not depend on it).
-		// See aggregator.BaseTrackedOutputsProvider.
-		trackedProvider, ok := consumer.(aggregator.BaseTrackedOutputsProvider)
-		outs := consumer.TrackedOutputs()
-		if ok {
-			outs = trackedProvider.BaseTrackedOutputs()
-		}
-		for outpoint, tracked := range outs {
-			if tracked.Owner != "" {
-				idMap[outpoint] = tracked.Owner
-			}
-		}
-	}
-	if len(idMap) == 0 {
-		return
-	}
-	notices, err := detector.DetectTransfers(idMap)
-	if err != nil {
-		log.Printf("[indexer] %s block %d: DetectTransfers error: %v", entry.chain.Name(), height, err)
-		return
-	}
-	if len(notices) == 0 {
-		return
+	if seenOutpoints == nil {
+		seenOutpoints = make(map[string]struct{})
 	}
 	chainName := entry.chain.Name()
-	log.Printf("[indexer] %s block %d: %d tracked-output spends", chainName, height, len(notices))
-	for _, consumer := range consumers {
-		consumer.HandleBlockTransfers(chainName, height, notices)
+	for hop := 0; hop < maxIntraBlockTransferHops; hop++ {
+		idMap := make(map[string]string)
+		for _, consumer := range consumers {
+			// The CONFIRMED block path detects against the base tracked set:
+			// the overlay-aware view hides outpoints with an in-flight mempool
+			// spend, and that spend's own confirmation block must still settle
+			// it (the mempool reconcile only evicts the overlay evidence after
+			// the block — whichever order, detection must not depend on it).
+			// See aggregator.BaseTrackedOutputsProvider.
+			trackedProvider, ok := consumer.(aggregator.BaseTrackedOutputsProvider)
+			outs := consumer.TrackedOutputs()
+			if ok {
+				outs = trackedProvider.BaseTrackedOutputs()
+			}
+			for outpoint, tracked := range outs {
+				if _, alreadyHandled := seenOutpoints[outpoint]; alreadyHandled {
+					continue
+				}
+				if tracked.Owner != "" {
+					idMap[outpoint] = tracked.Owner
+				}
+			}
+		}
+		if len(idMap) == 0 {
+			return
+		}
+		notices, err := detector.DetectTransfers(idMap)
+		if err != nil {
+			log.Printf("[indexer] %s block %d: DetectTransfers error: %v", chainName, height, err)
+			return
+		}
+		fresh := make(map[string]aggregator.TransferNotice, len(notices))
+		for outpoint, notice := range notices {
+			if _, alreadyHandled := seenOutpoints[outpoint]; !alreadyHandled {
+				seenOutpoints[outpoint] = struct{}{}
+				fresh[outpoint] = notice
+			}
+		}
+		if len(fresh) == 0 {
+			return
+		}
+		log.Printf("[indexer] %s block %d (hop %d): %d tracked-output spends", chainName, height, hop+1, len(fresh))
+		for _, consumer := range consumers {
+			consumer.HandleBlockTransfers(chainName, height, fresh)
+		}
 	}
 }
 
