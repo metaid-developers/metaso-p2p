@@ -15,6 +15,7 @@ import (
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/block"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/bothomepage"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/botsearch"
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator/ftmarket"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/groupchat"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/idbotsca"
 	"github.com/metaid-developers/metaso-p2p/internal/aggregator/metaweb"
@@ -78,6 +79,7 @@ func main() {
 	var blockAgg *block.Aggregator
 	var notifyAgg *notify.Aggregator
 	var mrc721Agg *mrc721.Aggregator
+	var ftmarketAgg *ftmarket.Aggregator
 	if store != nil && cacheProvider != nil {
 		aggRegistry = aggregator.NewRegistry(store, cacheProvider)
 
@@ -272,21 +274,62 @@ func main() {
 			log.Printf("WARNING: mrc721 aggregator init failed: %v", err)
 		} else {
 			mrc721Agg = mrc721Candidate
-			if idbotscaAgg != nil {
-				mrc721Agg.SetCAReader(&mrc721CAAdapter{ca: idbotscaAgg})
-				idbotscaAgg.SetOnChange(func() {
-					mrc721Agg.RefreshMarketCache()
-				})
-			}
 			mrc721Agg.SetProfileReader(&mrc721ProfileAdapter{ui: userinfoAgg})
 		}
-		// Wire unified metaweb search document sources (including mrc721 collections & listings).
+		if cfg.FtMarket.Enabled {
+			ftmarketCandidate := &ftmarket.Aggregator{}
+			ftmarketCandidate.SetZeroConfTrade(cfg.FtMarket.ZeroConfTrade)
+			ftmarketCandidate.SetAssetBaseURL(cfg.BotHub.AssetBaseURL)
+			if err := aggRegistry.Register(ftmarketCandidate); err != nil {
+				log.Printf("WARNING: ftmarket aggregator init failed: %v", err)
+			} else {
+				ftmarketAgg = ftmarketCandidate
+				if idbotscaAgg != nil {
+					ftmarketAgg.SetCAReader(&ftmarketCAAdapter{ca: idbotscaAgg})
+				}
+				ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})
+				higunURL := strings.TrimSpace(cfg.FtMarket.HigunBaseURL)
+				manURL := strings.TrimSpace(cfg.FtMarket.ManBaseURL)
+				if manURL == "" {
+					manURL = strings.TrimSpace(cfg.Mrc721.Nft.MANAPIBaseURL)
+				}
+				if higunURL != "" || manURL != "" {
+					ftmarketAgg.SetUTXOVerifier(ftmarket.NewUpstreamUTXOVerifier(higunURL, manURL, nil))
+					ftmarketAgg.SetTokenMetadataProvider(ftmarket.NewUpstreamTokenMetadataProvider(higunURL, manURL, nil))
+				}
+				if mmURL := strings.TrimSpace(cfg.FtMarket.MetaidMarketBaseURL); mmURL != "" {
+					ftmarketAgg.SetBtcFloorProvider(ftmarket.NewMetaidMarketFloorProvider(mmURL, nil))
+				}
+				if cfg.FtMarket.UTXOSweepInterval > 0 && (higunURL != "" || manURL != "") {
+					ftSweepStop := make(chan struct{})
+					defer close(ftSweepStop)
+					ftmarketAgg.StartUTXOSweeper(cfg.FtMarket.UTXOSweepInterval, ftSweepStop)
+				}
+			}
+		}
+		if idbotscaAgg != nil {
+			if mrc721Agg != nil {
+				mrc721Agg.SetCAReader(&mrc721CAAdapter{ca: idbotscaAgg})
+			}
+			idbotscaAgg.SetOnChange(func() {
+				if mrc721Agg != nil {
+					mrc721Agg.RefreshMarketCache()
+				}
+				if ftmarketAgg != nil {
+					ftmarketAgg.RefreshMarketCache()
+				}
+			})
+		}
+		// Wire unified metaweb search document sources (including mrc721 & ftmarket).
 		docSources := []metaweb.DocumentSource{skillserviceAgg}
 		if publishedAgg != nil {
 			docSources = append([]metaweb.DocumentSource{publishedAgg}, docSources...)
 		}
 		if mrc721Agg != nil {
 			docSources = append(docSources, mrc721Agg)
+		}
+		if ftmarketAgg != nil {
+			docSources = append(docSources, ftmarketAgg)
 		}
 		metawebCandidate.SetDocumentSources(docSources...)
 		// mrc721nft is the native /nft/mrc721 NFT aggregate (collections,
@@ -571,7 +614,7 @@ func main() {
 		log.Printf("federation service: node_id=%s", federationService.NodeID())
 	}
 
-	if (botHomepageAgg != nil || botSearchAgg != nil || mrc721Agg != nil) && socketServer != nil {
+	if (botHomepageAgg != nil || botSearchAgg != nil || mrc721Agg != nil || ftmarketAgg != nil) && socketServer != nil {
 		var globalReader presence.GlobalReader
 		if federationService != nil {
 			globalReader = federationService.GlobalReader()
@@ -584,6 +627,9 @@ func main() {
 		}
 		if mrc721Agg != nil {
 			mrc721Agg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})
+		}
+		if ftmarketAgg != nil {
+			ftmarketAgg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})
 		}
 	}
 
@@ -919,3 +965,68 @@ func (a *mrc721PresenceAdapter) PresenceStatus(identity string) (bool, *int64) {
 	return a.srv.PresenceStatusByGlobalMetaId(identity)
 }
 
+type ftmarketCAAdapter struct {
+	ca *idbotsca.Aggregator
+}
+
+func (a *ftmarketCAAdapter) IsTokenCertified(assetKey string) (bool, *ftmarket.CertifiedTokenInfo) {
+	if a == nil || a.ca == nil {
+		return false, nil
+	}
+	ok, entry := a.ca.IsTokenCertified(assetKey)
+	if !ok || entry == nil {
+		return false, nil
+	}
+	return true, &ftmarket.CertifiedTokenInfo{
+		AssetKey:    entry.AssetKey,
+		DisplayName: entry.DisplayName,
+		Symbol:      entry.Symbol,
+		TokenName:   entry.TokenName,
+		Decimals:    entry.Decimals,
+		Icon:        entry.Icon,
+	}
+}
+
+func (a *ftmarketCAAdapter) GetOfficialBotRole(globalMetaId string) (bool, string) {
+	if a == nil || a.ca == nil {
+		return false, ""
+	}
+	badge := a.ca.GetOfficialBotBadge(globalMetaId)
+	if badge == nil || !badge.Verified {
+		return false, ""
+	}
+	return true, badge.Role
+}
+
+type ftmarketProfileAdapter struct {
+	ui *userinfo.Aggregator
+}
+
+func (a *ftmarketProfileAdapter) LookupProfile(identity string) *ftmarket.SellerProfileSnapshot {
+	if a == nil || a.ui == nil {
+		return nil
+	}
+	p, _ := a.ui.LookupLocalByIdentity(identity)
+	if p == nil {
+		return nil
+	}
+	return &ftmarket.SellerProfileSnapshot{
+		Address:       p.Address,
+		GlobalMetaId:  p.GlobalMetaID,
+		MetaId:        p.MetaID,
+		Name:          p.Name,
+		Avatar:        p.Avatar,
+		HasChatPubkey: strings.TrimSpace(p.ChatPublicKey) != "",
+	}
+}
+
+func (a *ftmarketProfileAdapter) ResolveAddressesByGlobalMetaId(globalMetaId string) []string {
+	if a == nil || a.ui == nil {
+		return nil
+	}
+	p, _ := a.ui.LookupLocalByIdentity(globalMetaId)
+	if p == nil || strings.TrimSpace(p.Address) == "" {
+		return nil
+	}
+	return []string{strings.TrimSpace(p.Address)}
+}

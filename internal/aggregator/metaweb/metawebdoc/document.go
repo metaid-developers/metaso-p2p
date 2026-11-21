@@ -39,6 +39,8 @@ const (
 	KeySimpleAnswer     = "simpleanswer"
 	KeyMrc721Collection = "mrc721-collection"
 	KeyMrc721Listing    = "mrc721-listing"
+	KeyFtToken          = "ft-token"
+	KeyFtListing        = "ft-listing"
 )
 
 var protocolKeysByPath = map[string]string{
@@ -51,6 +53,7 @@ var protocolKeysByPath = map[string]string{
 	PathSimpleQuestion:    KeySimpleQuestion,
 	PathSimpleAnswer:      KeySimpleAnswer,
 	"/protocols/mrc721sell": KeyMrc721Listing,
+	"/protocols/ft-sell":    KeyFtListing,
 }
 
 // Document is one searchable projection of an indexed record. Derived fields
@@ -103,7 +106,7 @@ func ProtocolKeyForPath(path string) string {
 
 // ValidProtocolKey reports whether key is one of the supported unified-search protocol keys.
 func ValidProtocolKey(key string) bool {
-	if key == KeyMrc721Collection || key == KeyMrc721Listing {
+	if key == KeyMrc721Collection || key == KeyMrc721Listing || key == KeyFtToken || key == KeyFtListing {
 		return true
 	}
 	for _, known := range protocolKeysByPath {

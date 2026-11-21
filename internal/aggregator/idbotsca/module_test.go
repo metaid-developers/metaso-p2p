@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -480,3 +481,41 @@ func TestSyncFromMANAPIUpgradesExistingBaselineAndHydratesTruncatedBody(t *testi
 		t.Fatalf("lagging MANAPI must not downgrade newer confirmed block state, got %s", got)
 	}
 }
+
+func TestCertifiedTokensLookupAndRegistryProjection(t *testing.T) {
+	agg := newTestCAAggregator(t)
+	assetKey := "mrc20:4f92000000000000000000000000000000000000000000000000000000000001i0"
+	pin := makeCAPin(
+		"tokenca1i0",
+		"create",
+		OfficialMetaID,
+		OfficialGlobalMetaID,
+		OfficialMVCAddress,
+		300,
+		map[string]any{
+			"collections":  []any{},
+			"officialBots": []any{},
+			"certifiedTokens": []map[string]any{{
+				"assetKey":    assetKey,
+				"chain":       "btc",
+				"standard":    "mrc20",
+				"symbol":      "METAID",
+				"tokenName":   "MetaID Coin",
+				"displayName": "MetaID Official",
+				"decimals":    8,
+				"icon":        "metafile://icon01i0",
+			}},
+		},
+	)
+	if _, err := agg.HandleBlockPin(pin); err != nil {
+		t.Fatalf("HandleBlockPin: %v", err)
+	}
+	ok, entry := agg.IsTokenCertified(strings.ToUpper(assetKey))
+	if !ok || entry == nil || entry.DisplayName != "MetaID Official" || entry.Decimals != 8 {
+		t.Fatalf("expected certified token entry, got ok=%v entry=%+v", ok, entry)
+	}
+	if okUnknown, _ := agg.IsTokenCertified("mrc20:unknown"); okUnknown {
+		t.Fatal("expected unknown token not certified")
+	}
+}
+
