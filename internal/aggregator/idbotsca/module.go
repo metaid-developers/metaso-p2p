@@ -4,7 +4,9 @@ package idbotsca
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -196,16 +198,20 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 	a.mu.Lock()
 	if a.confirmed != nil {
 		if a.confirmed.PinId == snap.PinId {
-			a.mu.Unlock()
-			return nil, nil
-		}
-		if !chainOrderNewer(a.confirmed.Height, a.confirmed.UpdatedAt, a.confirmed.PinId, snap.Height, snap.UpdatedAt, snap.PinId) {
+			if a.confirmed.Height > 0 || snap.Height <= 0 {
+				a.mu.Unlock()
+				return nil, nil
+			}
+		} else if !chainOrderNewer(a.confirmed.Height, a.confirmed.UpdatedAt, a.confirmed.PinId, snap.Height, snap.UpdatedAt, snap.PinId) {
 			a.mu.Unlock()
 			return nil, nil
 		}
 	}
 	if a.store != nil {
-		raw, err := json.Marshal(snap)
+		raw, err := json.Marshal(persistedRegistrySnapshot{
+			RegistrySnapshot: *snap,
+			PersistedHeight:  snap.Height,
+		})
 		if err != nil {
 			a.mu.Unlock()
 			return nil, err
@@ -327,8 +333,10 @@ func (a *Aggregator) Registry() RegistrySnapshot {
 		return emptyRegistrySnapshot()
 	}
 	cp := *a.effective
-	cp.Collections = append([]CollectionCertEntry(nil), a.effective.Collections...)
-	cp.OfficialBots = append([]OfficialBotEntry(nil), a.effective.OfficialBots...)
+	cp.Collections = make([]CollectionCertEntry, len(a.effective.Collections))
+	copy(cp.Collections, a.effective.Collections)
+	cp.OfficialBots = make([]OfficialBotEntry, len(a.effective.OfficialBots))
+	copy(cp.OfficialBots, a.effective.OfficialBots)
 	return cp
 }
 
@@ -386,6 +394,11 @@ func (a *Aggregator) GetOfficialBotBadge(globalMetaId string) *OfficialBadgeDTO 
 	}
 }
 
+type persistedRegistrySnapshot struct {
+	RegistrySnapshot
+	PersistedHeight int64 `json:"height,omitempty"`
+}
+
 func (a *Aggregator) loadConfirmed() (*RegistrySnapshot, error) {
 	if a.store == nil {
 		return nil, nil
@@ -394,9 +407,17 @@ func (a *Aggregator) loadConfirmed() (*RegistrySnapshot, error) {
 	if err != nil || len(raw) == 0 {
 		return nil, nil
 	}
-	var snap RegistrySnapshot
-	if err := json.Unmarshal(raw, &snap); err != nil {
+	var persisted persistedRegistrySnapshot
+	if err := json.Unmarshal(raw, &persisted); err != nil {
 		return nil, fmt.Errorf("corrupt idbotsca registry: %w", err)
+	}
+	snap := persisted.RegistrySnapshot
+	snap.Height = persisted.PersistedHeight
+	if snap.Collections == nil {
+		snap.Collections = []CollectionCertEntry{}
+	}
+	if snap.OfficialBots == nil {
+		snap.OfficialBots = []OfficialBotEntry{}
 	}
 	return &snap, nil
 }
@@ -450,28 +471,46 @@ func isCAPin(pin *aggregator.PinInscription) bool {
 	return op == "create" || op == "modify"
 }
 
+func isOfficialBobIdentityValue(raw string) bool {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return false
+	}
+	if strings.EqualFold(v, OfficialMetaID) || strings.EqualFold(v, OfficialGlobalMetaID) {
+		return true
+	}
+	if v == OfficialMVCAddress {
+		return true
+	}
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:]) == OfficialMetaID
+}
+
 func isTrustedPublisher(pin *aggregator.PinInscription) bool {
 	if pin == nil {
 		return false
 	}
-	metaId := strings.TrimSpace(pin.MetaId)
-	if metaId == "" {
-		metaId = strings.TrimSpace(pin.CreateMetaId)
+	creatorFields := []string{
+		pin.CreateMetaId,
+		pin.Creator,
+		pin.CreateAddress,
+		pin.MetaId,
+		pin.GlobalMetaId,
 	}
-	globalMetaId := strings.TrimSpace(pin.GlobalMetaId)
-
-	metaMatch := metaId != "" && strings.EqualFold(metaId, OfficialMetaID)
-	globalMatch := globalMetaId != "" && strings.EqualFold(globalMetaId, OfficialGlobalMetaID)
-	if !metaMatch && !globalMatch {
-		return false
+	matched := false
+	for _, field := range creatorFields {
+		if strings.TrimSpace(field) == "" {
+			continue
+		}
+		if !isOfficialBobIdentityValue(field) {
+			return false
+		}
+		matched = true
 	}
-	if metaId != "" && !metaMatch {
-		return false
+	if matched {
+		return true
 	}
-	if globalMetaId != "" && !globalMatch {
-		return false
-	}
-	return true
+	return isOfficialBobIdentityValue(pin.Address)
 }
 
 func isValidOfficialRole(role string) bool {
@@ -559,11 +598,17 @@ func unixSeconds(ts int64) int64 {
 }
 
 func chainOrderNewer(curHeight, curTime int64, curPinId string, newHeight, newTime int64, newPinId string) bool {
-	if newHeight != curHeight {
+	if newHeight < 0 && curHeight >= 0 {
+		return false
+	}
+	if curHeight > 0 && newHeight > 0 && newHeight != curHeight {
 		return newHeight > curHeight
 	}
 	if newTime != curTime {
 		return newTime > curTime
+	}
+	if newHeight != curHeight {
+		return newHeight > curHeight
 	}
 	return newPinId > curPinId
 }
