@@ -886,6 +886,213 @@ func TestSearchMetawebAndFiltersAndZeroConfOverlay(t *testing.T) {
 	}
 }
 
+func TestMvcTokenSellSeedFieldsAndIDBotsAliasCompat(t *testing.T) {
+	agg, _ := newTestAggregator(t)
+	now := int64(1795300500)
+	agg.nowFn = func() int64 { return now }
+
+	// 1. Explicit seedTxid/seedVout/prevTokenTxid/contractAddress/tokenSellJson on MvcTokenSellRail.
+	sellTx1 := testHex64("sellseed1")
+	seedTx1 := testHex64("seedtx1")
+	prevTx1 := testHex64("prevtok1")
+	tokenSellJSON1 := fmt.Sprintf(`{"sell_txid":%q,"sell_output_index":0,"seed_txid":%q,"seed_vout":1,"price":50000000}`, sellTx1, seedTx1)
+	pinExplicit := makeSellPin(testPinId("seedexp", 0), 200, now, "mvc", map[string]any{
+		"active":     true,
+		"listingKey": "listing-seed-explicit",
+		"asset": map[string]any{
+			"assetKey":  testMvcAssetKey,
+			"chain":     "mvc",
+			"standard":  "metacontract-ft",
+			"codehash":  testMvcCodehash,
+			"genesis":   testMvcGenesis,
+			"symbol":    "METAID",
+			"tokenName": "MetaID Token",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "10000000000",
+			"amountDisplay": "100",
+			"utxoOutpoint":  sellTx1 + ":0",
+		},
+		"sellerAddress": testSellerMvcAddr,
+		"rails": map[string]any{
+			"mvcTokenSell": map[string]any{
+				"sellTxid":             sellTx1,
+				"tokenListTxid":        sellTx1,
+				"tokenListOutputIndex": 0,
+				"priceSats":            50000000,
+				"sellerAddress":        testSellerMvcAddr,
+				"seedTxid":             seedTx1,
+				"seedVout":             1,
+				"prevTokenTxid":        prevTx1,
+				"contractAddress":      "1ContractAddr1111111111111111111111",
+				"tokenSellJson":        tokenSellJSON1,
+			},
+		},
+		"createdAt": now,
+	})
+	if _, err := agg.HandleBlockPin(pinExplicit); err != nil {
+		t.Fatalf("pinExplicit: %v", err)
+	}
+
+	// 2. IDBots host alias payload: nested seller, standard="mvc-ft", rails.mvcTokenSell.txid,
+	//    and tokenSellJson fallback for omitted tokenListTxid/tokenListOutputIndex/seedTxid/seedVout.
+	sellTx2 := testHex64("sellalias2")
+	seedTx2 := testHex64("seedtx2")
+	tokenSellJSON2 := fmt.Sprintf(`{"sell_txid":%q,"sell_output_index":1,"seed_txid":%q,"seed_vout":2,"price":45000000}`, sellTx2, seedTx2)
+	pinHostTokenSell := makeSellPin(testPinId("hostts", 0), 201, now+1, "mvc", map[string]any{
+		"active":     true,
+		"listingKey": "Listing-Host-TokenSell",
+		"asset": map[string]any{
+			"assetKey":  testMvcAssetKey,
+			"chain":     "mvc",
+			"standard":  "mvc-ft",
+			"codehash":  testMvcCodehash,
+			"genesis":   testMvcGenesis,
+			"symbol":    "METAID",
+			"tokenName": "MetaID Token",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "10000000000",
+			"amountDisplay": "100",
+			"utxoOutpoint":  sellTx2 + ":1",
+		},
+		"seller": map[string]any{
+			"globalMetaId":  testSellerGlobal,
+			"botMvcAddress": testSellerMvcAddr,
+			"botBtcAddress": testSellerBtcAddr,
+		},
+		"rails": map[string]any{
+			"mvcTokenSell": map[string]any{
+				"txid":          sellTx2,
+				"priceSats":     45000000,
+				"sellerAddress": testSellerMvcAddr,
+				"tokenSellJson": tokenSellJSON2,
+			},
+		},
+		"createdAt": now + 1,
+	})
+	if _, err := agg.HandleBlockPin(pinHostTokenSell); err != nil {
+		t.Fatalf("pinHostTokenSell: %v", err)
+	}
+
+	// 3. IDBots host alias payload on ME rail (rails.me.priceMeMilli, standard="mvc-ft", nested seller),
+	//    plus host-style cancellation using nested seller and uppercase listingKey.
+	meOutpoint := testHex64("hostme") + ":0"
+	pinHostMe := makeSellPin(testPinId("hostme", 0), 202, now+2, "mvc", map[string]any{
+		"active":     true,
+		"listingKey": "Listing-Host-Me",
+		"asset": map[string]any{
+			"assetKey":  testMvcAssetKey,
+			"standard":  "mvc-ft",
+			"codehash":  testMvcCodehash,
+			"genesis":   testMvcGenesis,
+			"symbol":    "METAID",
+			"tokenName": "MetaID Token",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "10000000000",
+			"amountDisplay": "100",
+			"utxoOutpoint":  meOutpoint,
+		},
+		"seller": map[string]any{
+			"globalMetaId": testSellerGlobal2,
+			"address":      testSellerMvcAddr2,
+		},
+		"rails": map[string]any{
+			"me": map[string]any{
+				"priceMeMilli": 18000,
+				"autoFulfill":  true,
+			},
+		},
+		"createdAt": now + 2,
+	})
+	if _, err := agg.HandleBlockPin(pinHostMe); err != nil {
+		t.Fatalf("pinHostMe: %v", err)
+	}
+
+	r := setupRouter(agg)
+	var listResp struct {
+		Code int `json:"code"`
+		Data struct {
+			List  []ListingDTO `json:"list"`
+			Total int          `json:"total"`
+		} `json:"data"`
+	}
+	doJSONGet(t, r, "/api/ft/market/listings?sort=newest", &listResp)
+	if listResp.Data.Total != 3 {
+		t.Fatalf("expected 3 active listings, got %d (%+v)", listResp.Data.Total, listResp.Data.List)
+	}
+
+	byKey := map[string]ListingDTO{}
+	for _, item := range listResp.Data.List {
+		byKey[item.ListingKey] = item
+	}
+
+	exp := byKey["listing-seed-explicit"]
+	if exp.Rails == nil || exp.Rails.MvcTokenSell == nil {
+		t.Fatalf("expected mvcTokenSell rail on explicit listing")
+	}
+	if exp.Rails.MvcTokenSell.SeedTxid != seedTx1 || exp.Rails.MvcTokenSell.SeedVout != 1 ||
+		exp.Rails.MvcTokenSell.PrevTokenTxid != prevTx1 ||
+		exp.Rails.MvcTokenSell.ContractAddress != "1ContractAddr1111111111111111111111" ||
+		exp.Rails.MvcTokenSell.TokenSellJson != tokenSellJSON1 {
+		t.Fatalf("explicit seed fields mismatch: %+v", exp.Rails.MvcTokenSell)
+	}
+
+	hostTS := byKey["listing-host-tokensell"]
+	if hostTS.Asset.Standard != "metacontract-ft" {
+		t.Fatalf("expected standard normalized to metacontract-ft, got %q", hostTS.Asset.Standard)
+	}
+	if hostTS.Seller.Address != testSellerMvcAddr || hostTS.Seller.BtcAddress != testSellerBtcAddr || hostTS.Seller.GlobalMetaId != testSellerGlobal {
+		t.Fatalf("expected seller mapped from nested host seller, got %+v", hostTS.Seller)
+	}
+	if hostTS.Rails == nil || hostTS.Rails.MvcTokenSell == nil {
+		t.Fatalf("expected mvcTokenSell rail on host listing")
+	}
+	if hostTS.Rails.MvcTokenSell.SellTxid != sellTx2 ||
+		hostTS.Rails.MvcTokenSell.TokenListTxid != sellTx2 ||
+		hostTS.Rails.MvcTokenSell.TokenListOutputIndex != 1 ||
+		hostTS.Rails.MvcTokenSell.SeedTxid != seedTx2 ||
+		hostTS.Rails.MvcTokenSell.SeedVout != 2 ||
+		hostTS.Rails.MvcTokenSell.TokenSellJson != tokenSellJSON2 {
+		t.Fatalf("host tokenSellJson fallback fields mismatch: %+v", hostTS.Rails.MvcTokenSell)
+	}
+
+	hostME := byKey["listing-host-me"]
+	if hostME.Asset.Standard != "metacontract-ft" {
+		t.Fatalf("expected ME listing standard normalized to metacontract-ft, got %q", hostME.Asset.Standard)
+	}
+	if hostME.Rails == nil || hostME.Rails.Me == nil || hostME.Rails.Me.AmountMilli != 18000 {
+		t.Fatalf("expected ME amountMilli=18000 from priceMeMilli fallback, got %+v", hostME.Rails)
+	}
+
+	// Host-style cancellation Pin using nested seller and no asset/lot fields.
+	pinCancelHostMe := makeSellPin(testPinId("cancelhostme", 0), 203, now+3, "mvc", map[string]any{
+		"active":     false,
+		"listingKey": "Listing-Host-Me",
+		"seller": map[string]any{
+			"globalMetaId":  testSellerGlobal2,
+			"botMvcAddress": testSellerMvcAddr2,
+		},
+	})
+	if _, err := agg.HandleBlockPin(pinCancelHostMe); err != nil {
+		t.Fatalf("pinCancelHostMe: %v", err)
+	}
+
+	doJSONGet(t, r, "/api/ft/market/listings?sort=newest", &listResp)
+	if listResp.Data.Total != 2 {
+		t.Fatalf("expected 2 listings after host-style cancel, got %d", listResp.Data.Total)
+	}
+	for _, item := range listResp.Data.List {
+		if item.ListingKey == "listing-host-me" {
+			t.Fatalf("expected listing-host-me canceled")
+		}
+	}
+}
+
 type testCAAdapter struct {
 	ca *idbotsca.Aggregator
 }

@@ -71,6 +71,11 @@ type MvcTokenSellRail struct {
 	TokenListOutputIndex int64  `json:"tokenListOutputIndex"`
 	PriceSats            int64  `json:"priceSats"`
 	SellerAddress        string `json:"sellerAddress"`
+	SeedTxid             string `json:"seedTxid,omitempty"`
+	SeedVout             int64  `json:"seedVout"`
+	PrevTokenTxid        string `json:"prevTokenTxid,omitempty"`
+	ContractAddress      string `json:"contractAddress,omitempty"`
+	TokenSellJson        string `json:"tokenSellJson,omitempty"`
 }
 
 // BtcPsbtRail describes an optional mirrored metaid.market PSBT rail.

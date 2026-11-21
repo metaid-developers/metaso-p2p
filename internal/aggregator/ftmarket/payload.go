@@ -59,17 +59,39 @@ func parseSellPayload(raw []byte) (*sellPayload, error) {
 	}
 	p.ListingKey = strings.TrimSpace(p.ListingKey)
 
-	if p.SellerAddress, ok = getStringField(fields, "sellerAddress"); !ok {
+	var sellerObj struct {
+		Address       string `json:"address"`
+		BotMvcAddress string `json:"botMvcAddress"`
+		BotBtcAddress string `json:"botBtcAddress"`
+		BtcAddress    string `json:"btcAddress"`
+		GlobalMetaId  string `json:"globalMetaId"`
+		MetaId        string `json:"metaId"`
+	}
+	if rawSeller, hasSeller := fields["seller"]; hasSeller && !isJSONNull(rawSeller) {
+		_ = json.Unmarshal(rawSeller, &sellerObj)
+	}
+
+	p.SellerAddress, _ = getStringField(fields, "sellerAddress")
+	if p.SellerAddress == "" {
+		p.SellerAddress = strings.TrimSpace(firstNonEmpty(sellerObj.BotMvcAddress, sellerObj.Address))
+	}
+	if p.SellerAddress == "" {
 		return nil, fmt.Errorf("missing sellerAddress")
 	}
 	if !isValidChainAddress(p.SellerAddress) {
 		return nil, fmt.Errorf("invalid sellerAddress %q", p.SellerAddress)
 	}
 	p.SellerBtcAddress, _ = getStringField(fields, "sellerBtcAddress")
+	if p.SellerBtcAddress == "" {
+		p.SellerBtcAddress = strings.TrimSpace(firstNonEmpty(sellerObj.BotBtcAddress, sellerObj.BtcAddress))
+	}
 	if p.SellerBtcAddress != "" && !isValidChainAddress(p.SellerBtcAddress) {
 		return nil, fmt.Errorf("invalid sellerBtcAddress %q", p.SellerBtcAddress)
 	}
 	p.SellerMetaId, _ = getStringField(fields, "sellerMetaId")
+	if p.SellerMetaId == "" {
+		p.SellerMetaId = strings.TrimSpace(firstNonEmpty(sellerObj.GlobalMetaId, sellerObj.MetaId))
+	}
 	p.BatchGroupId, _ = getStringField(fields, "batchGroupId")
 	p.BatchIndex, _ = getIntField(fields, "batchIndex")
 	p.BatchTotal, _ = getIntField(fields, "batchTotal")
@@ -91,6 +113,11 @@ func parseSellPayload(raw []byte) (*sellPayload, error) {
 			if lot, lErr := parseLotInfo(rawLot, 0, false); lErr == nil {
 				p.Lot = lot
 			}
+		}
+		if p.Asset != nil && p.Lot != nil {
+			p.ListingKey = canonicalizeListingKey(p.ListingKey, p.Asset.AssetKey, p.Lot.UtxoOutpoint)
+		} else {
+			p.ListingKey = strings.ToLower(p.ListingKey)
 		}
 		return p, nil
 	}
@@ -164,6 +191,9 @@ func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 
 	chain := strings.ToLower(strings.TrimSpace(in.Chain))
 	standard := strings.ToLower(strings.TrimSpace(in.Standard))
+	if standard == "mvc-ft" {
+		standard = "metacontract-ft"
+	}
 	if chain == "" {
 		switch standard {
 		case "mrc20":
@@ -305,9 +335,100 @@ func parseLotInfo(raw json.RawMessage, decimals int, requireAll bool) (*LotInfo,
 }
 
 func parseSellRails(raw json.RawMessage, chain string) (*SellRails, error) {
-	var rails SellRails
-	if err := json.Unmarshal(raw, &rails); err != nil {
+	var in struct {
+		MvcTokenSell *struct {
+			SellTxid             string `json:"sellTxid"`
+			Txid                 string `json:"txid"`
+			TokenListTxid        string `json:"tokenListTxid"`
+			TokenListOutputIndex *int64 `json:"tokenListOutputIndex"`
+			PriceSats            int64  `json:"priceSats"`
+			SellerAddress        string `json:"sellerAddress"`
+			SeedTxid             string `json:"seedTxid"`
+			SeedVout             *int64 `json:"seedVout"`
+			PrevTokenTxid        string `json:"prevTokenTxid"`
+			ContractAddress      string `json:"contractAddress"`
+			TokenSellJson        string `json:"tokenSellJson"`
+		} `json:"mvcTokenSell"`
+		BtcPsbt *BtcPsbtRail `json:"btcPsbt"`
+		Me      *struct {
+			AmountMilli  int64 `json:"amountMilli"`
+			PriceMeMilli int64 `json:"priceMeMilli"`
+			AutoFulfill  bool  `json:"autoFulfill"`
+		} `json:"me"`
+		Fiat *FiatRail `json:"fiat"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
+	}
+
+	var rails SellRails
+	rails.BtcPsbt = in.BtcPsbt
+	rails.Fiat = in.Fiat
+
+	if in.MvcTokenSell != nil {
+		m := &MvcTokenSellRail{
+			SellTxid:        strings.ToLower(strings.TrimSpace(firstNonEmpty(in.MvcTokenSell.SellTxid, in.MvcTokenSell.Txid))),
+			TokenListTxid:   strings.ToLower(strings.TrimSpace(in.MvcTokenSell.TokenListTxid)),
+			PriceSats:       in.MvcTokenSell.PriceSats,
+			SellerAddress:   strings.TrimSpace(in.MvcTokenSell.SellerAddress),
+			SeedTxid:        strings.ToLower(strings.TrimSpace(in.MvcTokenSell.SeedTxid)),
+			PrevTokenTxid:   strings.ToLower(strings.TrimSpace(in.MvcTokenSell.PrevTokenTxid)),
+			ContractAddress: strings.TrimSpace(in.MvcTokenSell.ContractAddress),
+			TokenSellJson:   strings.TrimSpace(in.MvcTokenSell.TokenSellJson),
+		}
+		hasOutIdx := false
+		if in.MvcTokenSell.TokenListOutputIndex != nil {
+			m.TokenListOutputIndex = *in.MvcTokenSell.TokenListOutputIndex
+			hasOutIdx = true
+		}
+		hasSeedVout := false
+		if in.MvcTokenSell.SeedVout != nil {
+			m.SeedVout = *in.MvcTokenSell.SeedVout
+			hasSeedVout = true
+		}
+
+		// Fallback extraction from tokenSellJson when explicit fields are omitted.
+		if m.TokenSellJson != "" {
+			var tsFields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(m.TokenSellJson), &tsFields); err == nil && tsFields != nil {
+				if sellTx, ok := getStringField(tsFields, "sell_txid"); ok {
+					sellTx = strings.ToLower(sellTx)
+					if m.SellTxid == "" {
+						m.SellTxid = sellTx
+					}
+					if m.TokenListTxid == "" {
+						m.TokenListTxid = sellTx
+					}
+				}
+				if !hasOutIdx {
+					if outIdx, ok := getInt64Field(tsFields, "sell_output_index"); ok {
+						m.TokenListOutputIndex = outIdx
+					}
+				}
+				if m.SeedTxid == "" {
+					if seedTx, ok := getStringField(tsFields, "seed_txid"); ok {
+						m.SeedTxid = strings.ToLower(seedTx)
+					}
+				}
+				if !hasSeedVout {
+					if seedVout, ok := getInt64Field(tsFields, "seed_vout"); ok {
+						m.SeedVout = seedVout
+					}
+				}
+			}
+		}
+		rails.MvcTokenSell = m
+	}
+
+	if in.Me != nil {
+		amtMilli := in.Me.AmountMilli
+		if amtMilli == 0 && in.Me.PriceMeMilli > 0 {
+			amtMilli = in.Me.PriceMeMilli
+		}
+		rails.Me = &MeRail{
+			AmountMilli: amtMilli,
+			AutoFulfill: in.Me.AutoFulfill,
+		}
 	}
 
 	// Contract C1.3 hard constraint: on the same utxoOutpoint, mvcTokenSell (contract lock rail)
@@ -323,11 +444,11 @@ func parseSellRails(raw json.RawMessage, chain string) (*SellRails, error) {
 		if rails.MvcTokenSell.PriceSats <= 0 {
 			return nil, fmt.Errorf("mvcTokenSell.priceSats must be > 0")
 		}
-		rails.MvcTokenSell.SellTxid = strings.ToLower(strings.TrimSpace(rails.MvcTokenSell.SellTxid))
-		rails.MvcTokenSell.TokenListTxid = strings.ToLower(strings.TrimSpace(rails.MvcTokenSell.TokenListTxid))
-		rails.MvcTokenSell.SellerAddress = strings.TrimSpace(rails.MvcTokenSell.SellerAddress)
 		if rails.MvcTokenSell.TokenListOutputIndex < 0 {
 			return nil, fmt.Errorf("mvcTokenSell.tokenListOutputIndex must be >= 0")
+		}
+		if rails.MvcTokenSell.SeedVout < 0 {
+			return nil, fmt.Errorf("mvcTokenSell.seedVout must be >= 0")
 		}
 	}
 
