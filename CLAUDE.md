@@ -69,6 +69,10 @@ Key principles:
 
 The project follows a 7-phase goal-driven development plan (see `docs/GOAL_DRIVEN.md`). All HTTP endpoints return a uniform JSON envelope: `{code: 0, data: ..., message: "", processingTime: <ms>}` for success, or `{code: 1, message: "..."}` for errors.
 
+## Documentation and Comment Language
+
+- Write all documentation (specs, guides, READMEs, and any other Markdown files) and all code comments in English, regardless of the conversation language.
+
 ## Commit and Merge Rules
 
 - If you notice unfamiliar or unrelated file changes, continue working and stay focused on your own scoped edits unless the user asks you to inspect them.
@@ -76,7 +80,7 @@ The project follows a 7-phase goal-driven development plan (see `docs/GOAL_DRIVE
 - For deletion changes, wait until the user explicitly says "commit" before staging and committing those deletions.
 - Prefer small, frequent commits. Commit each independent, verifiable unit of work as soon as it is complete.
 - For every modification or newly added feature, create one commit.
-- For every commit, use the `metabot-post-buzz` skill with the Eric identity to post a detailed development-journal entry on-chain describing the change.
+- For every commit, use the `metabot-post-buzz` skill to post a detailed development-journal entry in English on-chain describing the change.
 - Use commit messages in the format `<type>: <short description>`, where `<type>` is one of `feat`, `fix`, `refactor`, `docs`, or `chore`.
 - Before committing, make sure the relevant local tests or verification steps pass for your changes.
 - When merging completed work into `main`, use `git merge --no-ff` to preserve the feature merge point.
