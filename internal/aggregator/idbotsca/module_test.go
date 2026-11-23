@@ -514,6 +514,10 @@ func TestCertifiedTokensLookupAndRegistryProjection(t *testing.T) {
 	if !ok || entry == nil || entry.DisplayName != "MetaID Official" || entry.Decimals != 8 {
 		t.Fatalf("expected certified token entry, got ok=%v entry=%+v", ok, entry)
 	}
+	list := agg.ListCertifiedTokens()
+	if len(list) != 1 || list[0].AssetKey != assetKey {
+		t.Fatalf("expected ListCertifiedTokens to return %s, got %+v", assetKey, list)
+	}
 	if okUnknown, _ := agg.IsTokenCertified("mrc20:unknown"); okUnknown {
 		t.Fatal("expected unknown token not certified")
 	}

@@ -101,6 +101,20 @@ func (a *Aggregator) recordMempoolDeclarationLocked(pin *aggregator.PinInscripti
 			log.Printf("WARNING: ftmarket overlay sell pin %s skipped: %v", pin.Id, err)
 			return false
 		}
+		if payload.Asset != nil && payload.Asset.Chain == "mvc" && payload.Asset.Codehash != nil && payload.Asset.Genesis != nil && !hex40Pattern.MatchString(*payload.Asset.Genesis) {
+			canonGen, sid := a.resolveMvcSensibleIfNeededLocked(context.Background(), *payload.Asset.Codehash, *payload.Asset.Genesis)
+			if canonGen != *payload.Asset.Genesis {
+				payload.Asset.Genesis = &canonGen
+				payload.Asset.AssetKey = "mvc-ft:" + *payload.Asset.Codehash + ":" + canonGen
+				if sid != "" {
+					payload.Asset.SensibleId = &sid
+				}
+				payload.ListingKey = normalizeListingKeyAssetPrefix(payload.ListingKey)
+				if payload.Lot != nil {
+					payload.ListingKey = canonicalizeListingKey(payload.ListingKey, payload.Asset.AssetKey, payload.Lot.UtxoOutpoint)
+				}
+			}
+		}
 		if existing, _ := a.loadListing(payload.ListingKey); existing != nil && existing.SellerAddress != "" {
 			if !sameSellerAddress(existing.SellerAddress, payload.SellerAddress) {
 				log.Printf("WARNING: ftmarket overlay sell pin %s skipped: seller mismatch", pin.Id)

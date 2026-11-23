@@ -286,6 +286,7 @@ func main() {
 				log.Printf("WARNING: ftmarket aggregator init failed: %v", err)
 			} else {
 				ftmarketAgg = ftmarketCandidate
+				ftmarketAgg.SetBuiltinCertifiedTokens(ftmarket.DefaultMainnetCertifiedTokens())
 				if idbotscaAgg != nil {
 					ftmarketAgg.SetCAReader(&ftmarketCAAdapter{ca: idbotscaAgg})
 				}
@@ -994,13 +995,41 @@ func (a *ftmarketCAAdapter) IsTokenCertified(assetKey string) (bool, *ftmarket.C
 		return false, nil
 	}
 	return true, &ftmarket.CertifiedTokenInfo{
-		AssetKey:    entry.AssetKey,
-		DisplayName: entry.DisplayName,
-		Symbol:      entry.Symbol,
-		TokenName:   entry.TokenName,
-		Decimals:    entry.Decimals,
-		Icon:        entry.Icon,
+		AssetKey:            entry.AssetKey,
+		DisplayName:         entry.DisplayName,
+		Symbol:              entry.Symbol,
+		TokenName:           entry.TokenName,
+		Decimals:            entry.Decimals,
+		Icon:                entry.Icon,
+		SensibleId:          entry.SensibleId,
+		BridgedPeerAssetKey: entry.BridgedPeerAssetKey,
+		BridgedDualChain:    entry.BridgedDualChain,
 	}
+}
+
+func (a *ftmarketCAAdapter) ListCertifiedTokens() []ftmarket.CertifiedTokenInfo {
+	if a == nil || a.ca == nil {
+		return nil
+	}
+	entries := a.ca.ListCertifiedTokens()
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]ftmarket.CertifiedTokenInfo, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, ftmarket.CertifiedTokenInfo{
+			AssetKey:            entry.AssetKey,
+			DisplayName:         entry.DisplayName,
+			Symbol:              entry.Symbol,
+			TokenName:           entry.TokenName,
+			Decimals:            entry.Decimals,
+			Icon:                entry.Icon,
+			SensibleId:          entry.SensibleId,
+			BridgedPeerAssetKey: entry.BridgedPeerAssetKey,
+			BridgedDualChain:    entry.BridgedDualChain,
+		})
+	}
+	return out
 }
 
 func (a *ftmarketCAAdapter) GetOfficialBotRole(globalMetaId string) (bool, string) {

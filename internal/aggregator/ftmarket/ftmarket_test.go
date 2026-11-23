@@ -1103,13 +1103,38 @@ func (a *testCAAdapter) IsTokenCertified(assetKey string) (bool, *CertifiedToken
 		return false, nil
 	}
 	return true, &CertifiedTokenInfo{
-		AssetKey:    entry.AssetKey,
-		DisplayName: entry.DisplayName,
-		Symbol:      entry.Symbol,
-		TokenName:   entry.TokenName,
-		Decimals:    entry.Decimals,
-		Icon:        entry.Icon,
+		AssetKey:            entry.AssetKey,
+		DisplayName:         entry.DisplayName,
+		Symbol:              entry.Symbol,
+		TokenName:           entry.TokenName,
+		Decimals:            entry.Decimals,
+		Icon:                entry.Icon,
+		SensibleId:          entry.SensibleId,
+		BridgedPeerAssetKey: entry.BridgedPeerAssetKey,
+		BridgedDualChain:    entry.BridgedDualChain,
 	}
+}
+
+func (a *testCAAdapter) ListCertifiedTokens() []CertifiedTokenInfo {
+	if a == nil || a.ca == nil {
+		return nil
+	}
+	entries := a.ca.ListCertifiedTokens()
+	out := make([]CertifiedTokenInfo, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, CertifiedTokenInfo{
+			AssetKey:            entry.AssetKey,
+			DisplayName:         entry.DisplayName,
+			Symbol:              entry.Symbol,
+			TokenName:           entry.TokenName,
+			Decimals:            entry.Decimals,
+			Icon:                entry.Icon,
+			SensibleId:          entry.SensibleId,
+			BridgedPeerAssetKey: entry.BridgedPeerAssetKey,
+			BridgedDualChain:    entry.BridgedDualChain,
+		})
+	}
+	return out
 }
 
 func (a *testCAAdapter) GetOfficialBotRole(globalMetaId string) (bool, string) {
@@ -1130,6 +1155,17 @@ func (f *fakeCAReader) IsTokenCertified(assetKey string) (bool, *CertifiedTokenI
 		return true, &c
 	}
 	return false, nil
+}
+
+func (f *fakeCAReader) ListCertifiedTokens() []CertifiedTokenInfo {
+	if f == nil || len(f.tokens) == 0 {
+		return nil
+	}
+	out := make([]CertifiedTokenInfo, 0, len(f.tokens))
+	for _, c := range f.tokens {
+		out = append(out, c)
+	}
+	return out
 }
 
 func (f *fakeCAReader) GetOfficialBotRole(globalMetaId string) (bool, string) {
@@ -1178,3 +1214,206 @@ func (f *fakePresenceReader) PresenceStatus(identity string) (bool, *int64) {
 	ago := int64(5)
 	return on, &ago
 }
+
+func TestBuiltinCertifiedSeedsOctopusBridgeAndCAReaderList(t *testing.T) {
+	agg, store := newTestAggregator(t)
+	now := int64(1798000000)
+	agg.nowFn = func() int64 { return now }
+	agg.SetAssetBaseURL("https://file.metaid.io/metafile-indexer/content")
+	agg.SetBuiltinCertifiedTokens(DefaultMainnetCertifiedTokens())
+
+	// Also certify an extra token via idbotsca with zero local listings to verify CAReader.ListCertifiedTokens() seeding.
+	extraAssetKey := "mrc20:9999000000000000000000000000000000000000000000000000000000000009i0"
+	caAgg := &idbotsca.Aggregator{}
+	if err := caAgg.Init(store, nil); err != nil {
+		t.Fatalf("init idbotsca: %v", err)
+	}
+	caPayload, _ := json.Marshal(map[string]any{
+		"collections":  []any{},
+		"officialBots": []any{},
+		"certifiedTokens": []map[string]any{{
+			"assetKey":    extraAssetKey,
+			"chain":       "btc",
+			"standard":    "mrc20",
+			"symbol":      "EXTCA",
+			"tokenName":   "Extra Official",
+			"displayName": "Extra Official",
+			"decimals":    8,
+		}},
+	})
+	caPin := &aggregator.PinInscription{
+		Id:             testPinId("caextra", 0),
+		Operation:      "create",
+		Path:           idbotsca.PathCA,
+		MetaId:         idbotsca.OfficialMetaID,
+		GlobalMetaId:   idbotsca.OfficialGlobalMetaID,
+		Address:        idbotsca.OfficialMVCAddress,
+		GenesisHeight:  300,
+		Timestamp:      now,
+		ContentBody:    caPayload,
+		ContentSummary: string(caPayload),
+		ChainName:      "mvc",
+	}
+	if _, err := caAgg.HandleBlockPin(caPin); err != nil {
+		t.Fatalf("HandleBlockPin CA: %v", err)
+	}
+	agg.SetCAReader(&testCAAdapter{ca: caAgg})
+
+	r := setupRouter(agg)
+
+	// 1. Even with zero listings in PebbleDB, all 5 mainnet seeds + 1 CA-only token resolve 200 code=0 with caVerified=true.
+	for _, key := range []string{
+		AssetKeyMetaidBtc,
+		AssetKeyMetaidMvc,
+		AssetKeyMcBtc,
+		AssetKeyMcMvc,
+		AssetKeyIdcoinBtc,
+		extraAssetKey,
+	} {
+		var sumResp struct {
+			Code int                `json:"code"`
+			Data TokenMarketSummary `json:"data"`
+		}
+		httpCode := doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(key)+"/summary", &sumResp)
+		if httpCode != http.StatusOK || sumResp.Code != 0 {
+			t.Fatalf("expected 200 code=0 for %s without local listings, got http=%d code=%d", key, httpCode, sumResp.Code)
+		}
+		if !sumResp.Data.Asset.CaVerified {
+			t.Fatalf("expected caVerified=true for %s, got %+v", key, sumResp.Data.Asset)
+		}
+	}
+
+	// 2. Verify Octopus dual-chain bridge fields and peerSummary on $METAID BTC & MVC.
+	var btcSum, mvcSum struct {
+		Code int                `json:"code"`
+		Data TokenMarketSummary `json:"data"`
+	}
+	doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(AssetKeyMetaidBtc)+"/summary", &btcSum)
+	if !btcSum.Data.Asset.BridgedDualChain || btcSum.Data.Asset.BridgedPeerAssetKey != AssetKeyMetaidMvc {
+		t.Fatalf("unexpected BTC METAID bridge fields: %+v", btcSum.Data.Asset)
+	}
+	if btcSum.Data.PeerSummary == nil || btcSum.Data.PeerSummary.Asset.AssetKey != AssetKeyMetaidMvc {
+		t.Fatalf("expected PeerSummary pointing to MVC METAID, got %+v", btcSum.Data.PeerSummary)
+	}
+
+	doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(AssetKeyMetaidMvc)+"/summary", &mvcSum)
+	if !mvcSum.Data.Asset.BridgedDualChain || mvcSum.Data.Asset.BridgedPeerAssetKey != AssetKeyMetaidBtc {
+		t.Fatalf("unexpected MVC METAID bridge fields: %+v", mvcSum.Data.Asset)
+	}
+	if mvcSum.Data.Asset.SensibleId == nil || *mvcSum.Data.Asset.SensibleId != SensibleIdMetaidMvc {
+		t.Fatalf("expected MVC METAID sensibleId=%s, got %v", SensibleIdMetaidMvc, mvcSum.Data.Asset.SensibleId)
+	}
+	if mvcSum.Data.PeerSummary == nil || mvcSum.Data.PeerSummary.Asset.AssetKey != AssetKeyMetaidBtc {
+		t.Fatalf("expected PeerSummary pointing to BTC METAID, got %+v", mvcSum.Data.PeerSummary)
+	}
+}
+
+func TestMvcSensibleIdNormalizationAndLegacyBucketMigration(t *testing.T) {
+	agg, store := newTestAggregator(t)
+	now := int64(1798000100)
+	agg.nowFn = func() int64 { return now }
+	agg.SetBuiltinCertifiedTokens(DefaultMainnetCertifiedTokens())
+
+	// Simulate the exact mainnet /protocols/ft-sell pin that supplied 72-hex sensibleId as genesis & assetKey.
+	legacyAssetKey := "mvc-ft:c9cc7bbd1010b44873959a8b1a2bcedeb62302b7:" + SensibleIdMetaidMvc
+	outpoint := "b2bb8aac8c8c5e3a4bc1e8a7d65f8bb0dc181d18a496f3bfdc60179b0efdd0b3:0"
+	legacyListingKey := legacyAssetKey + ":" + outpoint
+
+	sellPin := makeSellPin(testPinId("sensible72", 0), 148500, now, "mvc", map[string]any{
+		"active":     true,
+		"listingKey": legacyListingKey,
+		"asset": map[string]any{
+			"assetKey":  legacyAssetKey,
+			"chain":     "mvc",
+			"standard":  "mvc-ft",
+			"codehash":  "c9cc7bbd1010b44873959a8b1a2bcedeb62302b7",
+			"genesis":   SensibleIdMetaidMvc,
+			"symbol":    "METAID",
+			"tokenName": "MetaID",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "104842259",
+			"amountDisplay": "1.04842259",
+			"utxoOutpoint":  outpoint,
+		},
+		"sellerAddress": "1GrqX7K9jdnU36212f1ef726174af31f3b",
+		"rails": map[string]any{
+			"me": map[string]any{
+				"amountMilli": 2000,
+				"autoFulfill": true,
+			},
+		},
+		"createdAt": now,
+	})
+	if _, err := agg.HandleBlockPin(sellPin); err != nil {
+		t.Fatalf("HandleBlockPin sensibleId sellPin: %v", err)
+	}
+
+	r := setupRouter(agg)
+
+	// 1. GET /api/ft/market/tokens?keyword=METAID must have exactly 2 entries (BTC + 1 unified MVC, no 72-hex split!).
+	var tokResp struct {
+		Code int `json:"code"`
+		Data struct {
+			List  []TokenMarketSummary `json:"list"`
+			Total int                  `json:"total"`
+		} `json:"data"`
+	}
+	doJSONGet(t, r, "/api/ft/market/tokens?keyword=METAID", &tokResp)
+	if tokResp.Data.Total != 2 {
+		t.Fatalf("expected exactly 2 METAID entries (1 BTC + 1 MVC, no sensibleId split), got %d: %+v", tokResp.Data.Total, tokResp.Data.List)
+	}
+	for _, item := range tokResp.Data.List {
+		if !item.Asset.CaVerified {
+			t.Fatalf("expected caVerified=true on %s", item.Asset.AssetKey)
+		}
+		if item.Asset.Chain == "mvc" {
+			if item.Asset.AssetKey != AssetKeyMetaidMvc || item.ListedLotCount != 1 {
+				t.Fatalf("expected canonical MVC assetKey with listedLotCount=1, got %+v", item)
+			}
+			if item.Asset.SensibleId == nil || *item.Asset.SensibleId != SensibleIdMetaidMvc {
+				t.Fatalf("expected sensibleId preserved on MVC DTO, got %v", item.Asset.SensibleId)
+			}
+		}
+	}
+
+	// 2. Querying summary or listings by the legacy 72-hex assetKey transparently resolves to the canonical 40-hex bucket.
+	var sumLegacy struct {
+		Code int                `json:"code"`
+		Data TokenMarketSummary `json:"data"`
+	}
+	doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(legacyAssetKey)+"/summary", &sumLegacy)
+	if sumLegacy.Code != 0 || sumLegacy.Data.Asset.AssetKey != AssetKeyMetaidMvc || sumLegacy.Data.ListedLotCount != 1 {
+		t.Fatalf("expected legacy 72-hex summary query to resolve canonical MVC bucket, got %+v", sumLegacy)
+	}
+
+	// 3. Simulate pre-upgrade unnormalized PebbleDB records and verify Init() migrates & deduplicates them.
+	rawLegacyAsset, _ := json.Marshal(TokenCatalogRecord{
+		Asset: AssetInfo{
+			AssetKey:  legacyAssetKey,
+			Chain:     "mvc",
+			Standard:  "metacontract-ft",
+			Codehash:  ptrStr("c9cc7bbd1010b44873959a8b1a2bcedeb62302b7"),
+			Genesis:   ptrStr(SensibleIdMetaidMvc),
+			Symbol:    "METAID",
+			TokenName: "MetaID",
+			Decimals:  8,
+		},
+		UpdatedAt: now,
+	})
+	_ = store.Set(Namespace, assetStorageKey(legacyAssetKey), rawLegacyAsset)
+
+	aggReloaded := &Aggregator{}
+	if err := aggReloaded.Init(store, nil); err != nil {
+		t.Fatalf("re-init ftmarket: %v", err)
+	}
+	aggReloaded.SetBuiltinCertifiedTokens(DefaultMainnetCertifiedTokens())
+	r2 := setupRouter(aggReloaded)
+	doJSONGet(t, r2, "/api/ft/market/tokens?keyword=METAID", &tokResp)
+	if tokResp.Data.Total != 2 {
+		t.Fatalf("expected legacy PebbleDB bucket migrated into 2 METAID entries after Init, got %d", tokResp.Data.Total)
+	}
+}
+
+func ptrStr(s string) *string { return &s }

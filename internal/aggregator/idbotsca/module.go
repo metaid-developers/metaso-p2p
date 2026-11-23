@@ -109,16 +109,19 @@ type OfficialBadgeDTO struct {
 
 // TokenCertEntry is one certified fungible token entry in the CA registry.
 type TokenCertEntry struct {
-	AssetKey    string `json:"assetKey"`
-	Chain       string `json:"chain,omitempty"`
-	Standard    string `json:"standard,omitempty"`
-	Symbol      string `json:"symbol,omitempty"`
-	TokenName   string `json:"tokenName,omitempty"`
-	DisplayName string `json:"displayName,omitempty"`
-	Decimals    int    `json:"decimals,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-	Note        string `json:"note,omitempty"`
-	CertifiedAt int64  `json:"certifiedAt,omitempty"`
+	AssetKey            string `json:"assetKey"`
+	Chain               string `json:"chain,omitempty"`
+	Standard            string `json:"standard,omitempty"`
+	Symbol              string `json:"symbol,omitempty"`
+	TokenName           string `json:"tokenName,omitempty"`
+	DisplayName         string `json:"displayName,omitempty"`
+	Decimals            int    `json:"decimals,omitempty"`
+	Icon                string `json:"icon,omitempty"`
+	SensibleId          string `json:"sensibleId,omitempty"`
+	BridgedPeerAssetKey string `json:"bridgedPeerAssetKey,omitempty"`
+	BridgedDualChain    bool   `json:"bridgedDualChain,omitempty"`
+	Note                string `json:"note,omitempty"`
+	CertifiedAt         int64  `json:"certifiedAt,omitempty"`
 }
 
 // RegistrySnapshot is the latest active CA registry state.
@@ -411,6 +414,36 @@ func (a *Aggregator) IsTokenCertified(assetKey string) (bool, *TokenCertEntry) {
 	return true, &cp
 }
 
+// ListCertifiedTokens returns a safe copy of all certified FT entries in the active registry.
+func (a *Aggregator) ListCertifiedTokens() []TokenCertEntry {
+	if a == nil {
+		return nil
+	}
+	a.cleanupStaleMempoolIfNeeded()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.effective == nil || len(a.effective.CertifiedTokens) == 0 {
+		return nil
+	}
+	out := make([]TokenCertEntry, 0, len(a.effective.CertifiedTokens))
+	for _, tok := range a.effective.CertifiedTokens {
+		key := strings.ToLower(strings.TrimSpace(tok.AssetKey))
+		if key == "" {
+			continue
+		}
+		tok.AssetKey = key
+		if tok.BridgedPeerAssetKey != "" {
+			tok.BridgedPeerAssetKey = strings.ToLower(strings.TrimSpace(tok.BridgedPeerAssetKey))
+			tok.BridgedDualChain = true
+		}
+		if tok.SensibleId != "" {
+			tok.SensibleId = strings.ToLower(strings.TrimSpace(tok.SensibleId))
+		}
+		out = append(out, tok)
+	}
+	return out
+}
+
 // GetOfficialBotBadge returns the verified official badge for globalMetaId if active and valid-role.
 func (a *Aggregator) GetOfficialBotBadge(globalMetaId string) *OfficialBadgeDTO {
 	globalMetaId = strings.TrimSpace(globalMetaId)
@@ -495,6 +528,13 @@ func (a *Aggregator) rebuildEffectiveLocked() {
 			continue
 		}
 		tok.AssetKey = key
+		if tok.BridgedPeerAssetKey != "" {
+			tok.BridgedPeerAssetKey = strings.ToLower(strings.TrimSpace(tok.BridgedPeerAssetKey))
+			tok.BridgedDualChain = true
+		}
+		if tok.SensibleId != "" {
+			tok.SensibleId = strings.ToLower(strings.TrimSpace(tok.SensibleId))
+		}
 		a.tokenByAsset[key] = tok
 	}
 }

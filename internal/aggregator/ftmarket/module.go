@@ -45,16 +45,17 @@ var (
 
 // AssetInfo describes the fungible token asset in a listing or summary.
 type AssetInfo struct {
-	AssetKey  string  `json:"assetKey"`
-	Chain     string  `json:"chain"`
-	Standard  string  `json:"standard"`
-	Codehash  *string `json:"codehash"`
-	Genesis   *string `json:"genesis"`
-	Mrc20Id   *string `json:"mrc20Id"`
-	Symbol    string  `json:"symbol"`
-	TokenName string  `json:"tokenName"`
-	Decimals  int     `json:"decimals"`
-	Icon      string  `json:"icon,omitempty"`
+	AssetKey   string  `json:"assetKey"`
+	Chain      string  `json:"chain"`
+	Standard   string  `json:"standard"`
+	Codehash   *string `json:"codehash"`
+	Genesis    *string `json:"genesis"`
+	SensibleId *string `json:"sensibleId,omitempty"`
+	Mrc20Id    *string `json:"mrc20Id"`
+	Symbol     string  `json:"symbol"`
+	TokenName  string  `json:"tokenName"`
+	Decimals   int     `json:"decimals"`
+	Icon       string  `json:"icon,omitempty"`
 }
 
 // LotInfo describes the exact token UTXO lot declared by a listing.
@@ -148,17 +149,21 @@ type TokenCatalogRecord struct {
 
 // CertifiedTokenInfo carries CA certification details for a token assetKey.
 type CertifiedTokenInfo struct {
-	AssetKey    string
-	DisplayName string
-	Symbol      string
-	TokenName   string
-	Decimals    int
-	Icon        string
+	AssetKey            string
+	DisplayName         string
+	Symbol              string
+	TokenName           string
+	Decimals            int
+	Icon                string
+	SensibleId          string
+	BridgedPeerAssetKey string
+	BridgedDualChain    bool
 }
 
 // CAReader resolves official CA certification for FT assets and official bots.
 type CAReader interface {
 	IsTokenCertified(assetKey string) (certified bool, info *CertifiedTokenInfo)
+	ListCertifiedTokens() []CertifiedTokenInfo
 	GetOfficialBotRole(globalMetaId string) (verified bool, role string)
 }
 
@@ -190,6 +195,7 @@ type TokenChainMetadata struct {
 	TokenName   string
 	Decimals    int
 	Icon        string
+	SensibleId  string
 }
 
 // TokenMetadataProvider optionally resolves holder counts and token metadata from higun/man-p2p.
@@ -266,6 +272,12 @@ func (a *Aggregator) Init(store *storage.PebbleStore, _ *cache.CacheProvider) er
 	if a.nowFn == nil {
 		a.nowFn = func() int64 { return time.Now().Unix() }
 	}
+	if a.store != nil {
+		_, _ = a.store.OpenDB(Namespace)
+		a.mu.Lock()
+		a.migrateLegacyMvcSensibleKeysLocked()
+		a.mu.Unlock()
+	}
 	return nil
 }
 
@@ -290,13 +302,26 @@ func (a *Aggregator) SetBuiltinCertifiedTokens(tokens map[string]CertifiedTokenI
 	a.mu.Lock()
 	cp := make(map[string]CertifiedTokenInfo, len(tokens))
 	for k, v := range tokens {
-		key := strings.ToLower(strings.TrimSpace(k))
-		if key != "" {
-			v.AssetKey = key
-			cp[key] = v
+		rawKey := strings.ToLower(strings.TrimSpace(k))
+		if rawKey == "" {
+			rawKey = strings.ToLower(strings.TrimSpace(v.AssetKey))
 		}
+		if rawKey == "" {
+			continue
+		}
+		v.AssetKey = rawKey
+		v.SensibleId = strings.ToLower(strings.TrimSpace(v.SensibleId))
+		registerCertSensibleMapping(v)
+		key := NormalizeAssetKey(rawKey)
+		v.AssetKey = key
+		if v.BridgedPeerAssetKey != "" {
+			v.BridgedPeerAssetKey = NormalizeAssetKey(v.BridgedPeerAssetKey)
+			v.BridgedDualChain = true
+		}
+		cp[key] = v
 	}
 	a.builtinCA = cp
+	a.migrateLegacyMvcSensibleKeysLocked()
 	a.mu.Unlock()
 	a.invalidateMarketCache()
 }

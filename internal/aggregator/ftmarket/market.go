@@ -15,17 +15,20 @@ import (
 
 // MarketAssetDTO is the asset descriptor returned by Contract C2 endpoints.
 type MarketAssetDTO struct {
-	AssetKey   string  `json:"assetKey"`
-	Chain      string  `json:"chain"`
-	Standard   string  `json:"standard"`
-	Mrc20Id    *string `json:"mrc20Id"`
-	Codehash   *string `json:"codehash"`
-	Genesis    *string `json:"genesis"`
-	Symbol     string  `json:"symbol"`
-	TokenName  string  `json:"tokenName"`
-	Decimals   int     `json:"decimals"`
-	Icon       string  `json:"icon"`
-	CaVerified bool    `json:"caVerified"`
+	AssetKey            string  `json:"assetKey"`
+	Chain               string  `json:"chain"`
+	Standard            string  `json:"standard"`
+	Mrc20Id             *string `json:"mrc20Id"`
+	Codehash            *string `json:"codehash"`
+	Genesis             *string `json:"genesis"`
+	SensibleId          *string `json:"sensibleId,omitempty"`
+	Symbol              string  `json:"symbol"`
+	TokenName           string  `json:"tokenName"`
+	Decimals            int     `json:"decimals"`
+	Icon                string  `json:"icon"`
+	CaVerified          bool    `json:"caVerified"`
+	BridgedPeerAssetKey string  `json:"bridgedPeerAssetKey,omitempty"`
+	BridgedDualChain    bool    `json:"bridgedDualChain,omitempty"`
 }
 
 // MarketFloorsDTO carries the three-rail unit floor prices (Contract C2.1).
@@ -50,6 +53,17 @@ type TradeStats24hDTO struct {
 	LastTradeAt          *int64  `json:"lastTradeAt"`
 }
 
+// PeerTokenSummaryDTO projects the bridged peer asset's market snapshot on Octopus dual-chain tokens.
+type PeerTokenSummaryDTO struct {
+	Asset                    MarketAssetDTO       `json:"asset"`
+	HolderCount              int                  `json:"holderCount"`
+	ListedLotCount           int                  `json:"listedLotCount"`
+	ListedTotalAmountDisplay string               `json:"listedTotalAmountDisplay"`
+	Floors                   MarketFloorsDTO      `json:"floors"`
+	RecentGranularity        RecentGranularityDTO `json:"recentGranularity"`
+	TradeStats24h            TradeStats24hDTO     `json:"tradeStats24h"`
+}
+
 // TokenMarketSummary is the aggregated single-token market view (Contract C2.1).
 type TokenMarketSummary struct {
 	Asset                    MarketAssetDTO       `json:"asset"`
@@ -59,6 +73,7 @@ type TokenMarketSummary struct {
 	Floors                   MarketFloorsDTO      `json:"floors"`
 	RecentGranularity        RecentGranularityDTO `json:"recentGranularity"`
 	TradeStats24h            TradeStats24hDTO     `json:"tradeStats24h"`
+	PeerSummary              *PeerTokenSummaryDTO `json:"peerSummary,omitempty"`
 	VolumeBase24h            *big.Int             `json:"-"`
 }
 
@@ -104,14 +119,16 @@ type ListingDTO struct {
 
 // AmbiguousAssetInfo alerts callers when a symbol query matches multiple distinct assetKeys.
 type AmbiguousAssetInfo struct {
-	AssetKey       string `json:"assetKey"`
-	Chain          string `json:"chain"`
-	Standard       string `json:"standard"`
-	Symbol         string `json:"symbol"`
-	TokenName      string `json:"tokenName"`
-	Decimals       int    `json:"decimals"`
-	CaVerified     bool   `json:"caVerified"`
-	ListedLotCount int    `json:"listedLotCount"`
+	AssetKey            string `json:"assetKey"`
+	Chain               string `json:"chain"`
+	Standard            string `json:"standard"`
+	Symbol              string `json:"symbol"`
+	TokenName           string `json:"tokenName"`
+	Decimals            int    `json:"decimals"`
+	CaVerified          bool   `json:"caVerified"`
+	ListedLotCount      int    `json:"listedLotCount"`
+	BridgedPeerAssetKey string `json:"bridgedPeerAssetKey,omitempty"`
+	BridgedDualChain    bool   `json:"bridgedDualChain,omitempty"`
 }
 
 type marketCacheSnapshot struct {
@@ -181,7 +198,8 @@ func (a *Aggregator) computeAllTokenSummaries(ctx context.Context, nowSec int64,
 
 	accs := make(map[string]*assetAcc)
 	ensureAcc := func(asset AssetInfo) *assetAcc {
-		key := strings.ToLower(strings.TrimSpace(asset.AssetKey))
+		normalizeAssetInfoInPlace(&asset)
+		key := NormalizeAssetKey(asset.AssetKey)
 		if key == "" {
 			return nil
 		}
@@ -198,6 +216,10 @@ func (a *Aggregator) computeAllTokenSummaries(ctx context.Context, nowSec int64,
 			if existing.asset.Decimals == 0 && asset.Decimals > 0 {
 				existing.asset.Decimals = asset.Decimals
 			}
+			if (existing.asset.SensibleId == nil || *existing.asset.SensibleId == "") && asset.SensibleId != nil && *asset.SensibleId != "" {
+				s := *asset.SensibleId
+				existing.asset.SensibleId = &s
+			}
 			return existing
 		}
 		asset.AssetKey = key
@@ -210,15 +232,31 @@ func (a *Aggregator) computeAllTokenSummaries(ctx context.Context, nowSec int64,
 		return acc
 	}
 
-	// Seed from catalog so tokens with historical listings/trades or CA certs remain discoverable.
+	// Register CA sensibleId mappings first, then seed catalog + builtinCA + caReader.ListCertifiedTokens()
+	// so official certified tokens remain discoverable even before any local listing or trade pin exists.
+	a.mu.Lock()
+	caReader := a.caReader
+	builtins := make([]CertifiedTokenInfo, 0, len(a.builtinCA))
+	for _, cert := range a.builtinCA {
+		builtins = append(builtins, cert)
+	}
+	a.mu.Unlock()
+	var caCerts []CertifiedTokenInfo
+	if caReader != nil {
+		caCerts = caReader.ListCertifiedTokens()
+		for _, cert := range caCerts {
+			registerCertSensibleMapping(cert)
+		}
+	}
+	for _, cert := range builtins {
+		ensureAcc(assetInfoFromCert(cert))
+	}
+	for _, cert := range caCerts {
+		ensureAcc(assetInfoFromCert(cert))
+	}
 	for _, cat := range a.listTokenCatalog() {
 		ensureAcc(cat.Asset)
 	}
-	a.mu.Lock()
-	for _, cert := range a.builtinCA {
-		ensureAcc(assetInfoFromCert(cert))
-	}
-	a.mu.Unlock()
 
 	for _, rec := range listings {
 		if rec == nil || rec.Asset == nil || rec.Asset.AssetKey == "" {
@@ -328,8 +366,20 @@ func (a *Aggregator) computeAllTokenSummaries(ctx context.Context, nowSec int64,
 			if dtoAsset.TokenName == "" && meta.TokenName != "" {
 				dtoAsset.TokenName = meta.TokenName
 			}
+			if dtoAsset.Decimals == 0 && meta.Decimals > 0 {
+				dtoAsset.Decimals = meta.Decimals
+			}
 			if dtoAsset.Icon == "" && meta.Icon != "" {
 				dtoAsset.Icon = a.resolveIconURL(meta.Icon)
+			}
+			if meta.SensibleId != "" {
+				sid := strings.ToLower(strings.TrimSpace(meta.SensibleId))
+				if dtoAsset.SensibleId == nil || *dtoAsset.SensibleId == "" {
+					dtoAsset.SensibleId = &sid
+				}
+				if acc.asset.Chain == "mvc" && acc.asset.Codehash != nil && acc.asset.Genesis != nil && hex40Pattern.MatchString(*acc.asset.Genesis) {
+					RegisterMvcSensibleMapping(*acc.asset.Codehash, *acc.asset.Genesis, sid)
+				}
 			}
 		}
 
@@ -398,6 +448,24 @@ func (a *Aggregator) computeAllTokenSummaries(ctx context.Context, nowSec int64,
 		byKey[key] = summary
 	}
 
+	// Populate non-recursive PeerSummary for Octopus dual-chain bridged token pairs.
+	for _, s := range summaries {
+		if s == nil || s.Asset.BridgedPeerAssetKey == "" {
+			continue
+		}
+		if peer := byKey[NormalizeAssetKey(s.Asset.BridgedPeerAssetKey)]; peer != nil && peer.Asset.AssetKey != s.Asset.AssetKey {
+			s.PeerSummary = &PeerTokenSummaryDTO{
+				Asset:                    peer.Asset,
+				HolderCount:              peer.HolderCount,
+				ListedLotCount:           peer.ListedLotCount,
+				ListedTotalAmountDisplay: peer.ListedTotalAmountDisplay,
+				Floors:                   peer.Floors,
+				RecentGranularity:        peer.RecentGranularity,
+				TradeStats24h:            peer.TradeStats24h,
+			}
+		}
+	}
+
 	return summaries, byKey
 }
 
@@ -460,11 +528,19 @@ func interpolateQuantile(sorted []*big.Int, p float64, decimals int) string {
 }
 
 func (a *Aggregator) buildMarketAssetDTO(asset AssetInfo) MarketAssetDTO {
+	normalizeAssetInfoInPlace(&asset)
 	caVerified, cert := a.lookupTokenCA(asset.AssetKey)
 	symbol := asset.Symbol
 	tokenName := asset.TokenName
 	icon := asset.Icon
 	decimals := asset.Decimals
+	var sensibleIdPtr *string
+	if asset.SensibleId != nil && *asset.SensibleId != "" {
+		s := strings.ToLower(strings.TrimSpace(*asset.SensibleId))
+		sensibleIdPtr = &s
+	}
+	bridgedPeer := ""
+	bridgedDual := false
 	if cert != nil {
 		if cert.Symbol != "" {
 			symbol = cert.Symbol
@@ -480,24 +556,42 @@ func (a *Aggregator) buildMarketAssetDTO(asset AssetInfo) MarketAssetDTO {
 		if decimals == 0 && cert.Decimals > 0 {
 			decimals = cert.Decimals
 		}
+		if sensibleIdPtr == nil && cert.SensibleId != "" {
+			s := strings.ToLower(strings.TrimSpace(cert.SensibleId))
+			sensibleIdPtr = &s
+		}
+		if cert.BridgedPeerAssetKey != "" {
+			bridgedPeer = NormalizeAssetKey(cert.BridgedPeerAssetKey)
+			bridgedDual = true
+		} else if cert.BridgedDualChain {
+			bridgedDual = true
+		}
+	}
+	if sensibleIdPtr == nil && asset.Chain == "mvc" && asset.Codehash != nil && asset.Genesis != nil {
+		if _, sid := ResolveMvcGenesisAndSensibleId(*asset.Codehash, *asset.Genesis); sid != "" {
+			sensibleIdPtr = &sid
+		}
 	}
 	return MarketAssetDTO{
-		AssetKey:   strings.ToLower(strings.TrimSpace(asset.AssetKey)),
-		Chain:      asset.Chain,
-		Standard:   asset.Standard,
-		Mrc20Id:    asset.Mrc20Id,
-		Codehash:   asset.Codehash,
-		Genesis:    asset.Genesis,
-		Symbol:     symbol,
-		TokenName:  tokenName,
-		Decimals:   decimals,
-		Icon:       a.resolveIconURL(icon),
-		CaVerified: caVerified,
+		AssetKey:            NormalizeAssetKey(asset.AssetKey),
+		Chain:               asset.Chain,
+		Standard:            asset.Standard,
+		Mrc20Id:             asset.Mrc20Id,
+		Codehash:            asset.Codehash,
+		Genesis:             asset.Genesis,
+		SensibleId:          sensibleIdPtr,
+		Symbol:              symbol,
+		TokenName:           tokenName,
+		Decimals:            decimals,
+		Icon:                a.resolveIconURL(icon),
+		CaVerified:          caVerified,
+		BridgedPeerAssetKey: bridgedPeer,
+		BridgedDualChain:    bridgedDual,
 	}
 }
 
 func (a *Aggregator) lookupTokenCA(assetKey string) (bool, *CertifiedTokenInfo) {
-	key := strings.ToLower(strings.TrimSpace(assetKey))
+	key := NormalizeAssetKey(assetKey)
 	if key == "" {
 		return false, nil
 	}
@@ -507,7 +601,43 @@ func (a *Aggregator) lookupTokenCA(assetKey string) (bool, *CertifiedTokenInfo) 
 	a.mu.Unlock()
 	if ca != nil {
 		if ok, info := ca.IsTokenCertified(key); ok {
-			return true, info
+			if info == nil {
+				if hasBuiltin {
+					cp := builtin
+					return true, &cp
+				}
+				return true, nil
+			}
+			merged := *info
+			if hasBuiltin {
+				if merged.DisplayName == "" {
+					merged.DisplayName = builtin.DisplayName
+				}
+				if merged.Symbol == "" {
+					merged.Symbol = builtin.Symbol
+				}
+				if merged.TokenName == "" {
+					merged.TokenName = builtin.TokenName
+				}
+				if merged.Decimals == 0 {
+					merged.Decimals = builtin.Decimals
+				}
+				if merged.Icon == "" {
+					merged.Icon = builtin.Icon
+				}
+				if merged.SensibleId == "" {
+					merged.SensibleId = builtin.SensibleId
+				}
+				if merged.BridgedPeerAssetKey == "" && builtin.BridgedPeerAssetKey != "" {
+					merged.BridgedPeerAssetKey = builtin.BridgedPeerAssetKey
+					merged.BridgedDualChain = true
+				}
+			}
+			if merged.BridgedPeerAssetKey != "" {
+				merged.BridgedPeerAssetKey = NormalizeAssetKey(merged.BridgedPeerAssetKey)
+				merged.BridgedDualChain = true
+			}
+			return true, &merged
 		}
 	}
 	if hasBuiltin {
@@ -781,7 +911,7 @@ func (a *Aggregator) handleMarketTokenSummary(c *gin.Context) {
 	if decoded, err := url.PathUnescape(rawKey); err == nil && decoded != "" {
 		rawKey = decoded
 	}
-	assetKey := strings.ToLower(strings.TrimSpace(rawKey))
+	assetKey := a.normalizeQueryAssetKey(c.Request.Context(), rawKey)
 	if assetKey == "" {
 		respondMarketErr(c, 40000, "assetKey required")
 		return
@@ -814,7 +944,7 @@ func (a *Aggregator) handleMarketListings(c *gin.Context) {
 	}
 	offset := parseOffsetCursor(c.Query("cursor"))
 
-	assetKey := strings.ToLower(strings.TrimSpace(c.Query("assetKey")))
+	assetKey := a.normalizeQueryAssetKey(c.Request.Context(), c.Query("assetKey"))
 	symbol := strings.TrimSpace(c.Query("symbol"))
 	rail := strings.ToLower(strings.TrimSpace(c.DefaultQuery("rail", "any")))
 	if rail == "" {
@@ -966,14 +1096,16 @@ func (a *Aggregator) collectAmbiguousAssets(ctx context.Context, symbol, assetKe
 		}
 		if strings.EqualFold(s.Asset.Symbol, symbol) {
 			matches = append(matches, AmbiguousAssetInfo{
-				AssetKey:       s.Asset.AssetKey,
-				Chain:          s.Asset.Chain,
-				Standard:       s.Asset.Standard,
-				Symbol:         s.Asset.Symbol,
-				TokenName:      s.Asset.TokenName,
-				Decimals:       s.Asset.Decimals,
-				CaVerified:     s.Asset.CaVerified,
-				ListedLotCount: s.ListedLotCount,
+				AssetKey:            s.Asset.AssetKey,
+				Chain:               s.Asset.Chain,
+				Standard:            s.Asset.Standard,
+				Symbol:              s.Asset.Symbol,
+				TokenName:           s.Asset.TokenName,
+				Decimals:            s.Asset.Decimals,
+				CaVerified:          s.Asset.CaVerified,
+				ListedLotCount:      s.ListedLotCount,
+				BridgedPeerAssetKey: s.Asset.BridgedPeerAssetKey,
+				BridgedDualChain:    s.Asset.BridgedDualChain,
 			})
 		}
 	}
@@ -1144,6 +1276,9 @@ func tokenMatchesKeyword(s *TokenMarketSummary, kw string) bool {
 	if s.Asset.Genesis != nil && strings.Contains(strings.ToLower(*s.Asset.Genesis), kw) {
 		return true
 	}
+	if s.Asset.SensibleId != nil && strings.Contains(strings.ToLower(*s.Asset.SensibleId), kw) {
+		return true
+	}
 	return false
 }
 
@@ -1196,20 +1331,26 @@ func formatRat(r *big.Rat, maxFrac int) string {
 }
 
 func assetInfoFromCert(c CertifiedTokenInfo) AssetInfo {
+	registerCertSensibleMapping(c)
+	key := NormalizeAssetKey(c.AssetKey)
 	a := AssetInfo{
-		AssetKey:  c.AssetKey,
+		AssetKey:  key,
 		Symbol:    c.Symbol,
 		TokenName: firstNonEmpty(c.DisplayName, c.TokenName),
 		Decimals:  c.Decimals,
 		Icon:      c.Icon,
 	}
-	if strings.HasPrefix(c.AssetKey, "mrc20:") {
-		id := strings.TrimPrefix(c.AssetKey, "mrc20:")
+	if strings.TrimSpace(c.SensibleId) != "" {
+		sid := strings.ToLower(strings.TrimSpace(c.SensibleId))
+		a.SensibleId = &sid
+	}
+	if strings.HasPrefix(key, "mrc20:") {
+		id := strings.TrimPrefix(key, "mrc20:")
 		a.Chain = "btc"
 		a.Standard = "mrc20"
 		a.Mrc20Id = &id
-	} else if strings.HasPrefix(c.AssetKey, "mvc-ft:") {
-		parts := strings.Split(strings.TrimPrefix(c.AssetKey, "mvc-ft:"), ":")
+	} else if strings.HasPrefix(key, "mvc-ft:") {
+		parts := strings.Split(strings.TrimPrefix(key, "mvc-ft:"), ":")
 		a.Chain = "mvc"
 		a.Standard = "metacontract-ft"
 		if len(parts) == 2 {
@@ -1218,6 +1359,7 @@ func assetInfoFromCert(c CertifiedTokenInfo) AssetInfo {
 			a.Genesis = &gen
 		}
 	}
+	normalizeAssetInfoInPlace(&a)
 	return a
 }
 

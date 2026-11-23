@@ -109,8 +109,11 @@ func parseTradePayload(raw []byte) (*tradePayload, error) {
 	}
 
 	p.ListingKey, _ = getStringField(fields, "listingKey")
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.ListingKey)), "mvc-ft:") {
+		p.ListingKey = normalizeListingKeyAssetPrefix(p.ListingKey)
+	}
 	p.AssetKey, _ = getStringField(fields, "assetKey")
-	p.AssetKey = strings.ToLower(strings.TrimSpace(p.AssetKey))
+	p.AssetKey = NormalizeAssetKey(p.AssetKey)
 	p.Chain, _ = getStringField(fields, "chain")
 	p.Chain = strings.ToLower(strings.TrimSpace(p.Chain))
 	p.Symbol, _ = getStringField(fields, "symbol")
@@ -351,6 +354,17 @@ func (a *Aggregator) ingestTradePin(pin *aggregator.PinInscription) (bool, error
 		log.Printf("WARNING: ftmarket trade pin %s skipped: %v", strings.TrimSpace(pin.Id), err)
 		return false, nil
 	}
+	if strings.HasPrefix(payload.AssetKey, "mvc-ft:") {
+		parts := strings.Split(strings.TrimPrefix(payload.AssetKey, "mvc-ft:"), ":")
+		if len(parts) == 2 && hex40Pattern.MatchString(parts[0]) && !hex40Pattern.MatchString(parts[1]) {
+			if canonGen, _ := a.resolveMvcSensibleIfNeededLocked(nil, parts[0], parts[1]); hex40Pattern.MatchString(canonGen) {
+				payload.AssetKey = "mvc-ft:" + parts[0] + ":" + canonGen
+				if strings.HasPrefix(strings.ToLower(payload.ListingKey), "mvc-ft:") {
+					payload.ListingKey = normalizeListingKeyAssetPrefix(payload.ListingKey)
+				}
+			}
+		}
+	}
 
 	pub := extractTradePublisher(pin)
 	if !a.isAuthorizedTradePublisherLocked(pub, payload.SellerAddress, payload.BuyerAddress) {
@@ -405,6 +419,10 @@ func (a *Aggregator) listAllTrades(includeOverlay bool) ([]*TradeRecord, error) 
 			return nil
 		}
 		rec.Confirmed = true
+		rec.AssetKey = NormalizeAssetKey(rec.AssetKey)
+		if strings.HasPrefix(strings.ToLower(rec.ListingKey), "mvc-ft:") {
+			rec.ListingKey = normalizeListingKeyAssetPrefix(rec.ListingKey)
+		}
 		k := strings.ToLower(rec.TxId) + ":" + rec.ListingKey
 		byKey[k] = len(trades)
 		trades = append(trades, &rec)
@@ -448,7 +466,7 @@ func (a *Aggregator) handleMarketTrades(c *gin.Context) {
 		return
 	}
 	offset := parseOffsetCursor(c.Query("cursor"))
-	assetKey := strings.ToLower(strings.TrimSpace(c.Query("assetKey")))
+	assetKey := a.normalizeQueryAssetKey(c.Request.Context(), c.Query("assetKey"))
 	rail := strings.ToLower(strings.TrimSpace(c.Query("rail")))
 	party := strings.TrimSpace(c.Query("party"))
 	var partyAddrs map[string]struct{}

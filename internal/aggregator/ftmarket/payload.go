@@ -114,10 +114,9 @@ func parseSellPayload(raw []byte) (*sellPayload, error) {
 				p.Lot = lot
 			}
 		}
+		p.ListingKey = normalizeListingKeyAssetPrefix(p.ListingKey)
 		if p.Asset != nil && p.Lot != nil {
 			p.ListingKey = canonicalizeListingKey(p.ListingKey, p.Asset.AssetKey, p.Lot.UtxoOutpoint)
-		} else {
-			p.ListingKey = strings.ToLower(p.ListingKey)
 		}
 		return p, nil
 	}
@@ -167,23 +166,24 @@ func parseSellPayload(raw []byte) (*sellPayload, error) {
 	}
 
 	// Normalize listingKey lowercase for the assetKey prefix if formatted cleanly.
-	p.ListingKey = canonicalizeListingKey(p.ListingKey, asset.AssetKey, lot.UtxoOutpoint)
+	p.ListingKey = canonicalizeListingKey(normalizeListingKeyAssetPrefix(p.ListingKey), asset.AssetKey, lot.UtxoOutpoint)
 
 	return p, nil
 }
 
 func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 	var in struct {
-		AssetKey  string  `json:"assetKey"`
-		Chain     string  `json:"chain"`
-		Standard  string  `json:"standard"`
-		Codehash  *string `json:"codehash"`
-		Genesis   *string `json:"genesis"`
-		Mrc20Id   *string `json:"mrc20Id"`
-		Symbol    string  `json:"symbol"`
-		TokenName string  `json:"tokenName"`
-		Decimals  *int    `json:"decimals"`
-		Icon      string  `json:"icon"`
+		AssetKey   string  `json:"assetKey"`
+		Chain      string  `json:"chain"`
+		Standard   string  `json:"standard"`
+		Codehash   *string `json:"codehash"`
+		Genesis    *string `json:"genesis"`
+		SensibleId *string `json:"sensibleId"`
+		Mrc20Id    *string `json:"mrc20Id"`
+		Symbol     string  `json:"symbol"`
+		TokenName  string  `json:"tokenName"`
+		Decimals   *int    `json:"decimals"`
+		Icon       string  `json:"icon"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 		}
 	}
 
-	var codehashPtr, genesisPtr, mrc20IdPtr *string
+	var codehashPtr, genesisPtr, sensibleIdPtr, mrc20IdPtr *string
 	var canonicalKey string
 	switch chain {
 	case "btc":
@@ -242,11 +242,15 @@ func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 		}
 		codehash := ""
 		genesis := ""
+		rawSensible := ""
 		if in.Codehash != nil {
 			codehash = strings.ToLower(strings.TrimSpace(*in.Codehash))
 		}
 		if in.Genesis != nil {
 			genesis = strings.ToLower(strings.TrimSpace(*in.Genesis))
+		}
+		if in.SensibleId != nil {
+			rawSensible = strings.ToLower(strings.TrimSpace(*in.SensibleId))
 		}
 		if (codehash == "" || genesis == "") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(in.AssetKey)), "mvc-ft:") {
 			parts := strings.Split(strings.TrimSpace(in.AssetKey[len("mvc-ft:"):]), ":")
@@ -259,15 +263,29 @@ func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 				}
 			}
 		}
+		if genesis == "" && rawSensible != "" {
+			genesis = rawSensible
+		}
 		if !hex40Pattern.MatchString(codehash) || genesis == "" || !isValidHex(genesis) {
 			return nil, fmt.Errorf("invalid mvc codehash/genesis")
 		}
+		canonGenesis, resolvedSensible := ResolveMvcGenesisAndSensibleId(codehash, genesis)
+		if rawSensible != "" && (hex72Pattern.MatchString(rawSensible) || hex64Pattern.MatchString(rawSensible)) {
+			if hex40Pattern.MatchString(canonGenesis) {
+				RegisterMvcSensibleMapping(codehash, canonGenesis, rawSensible)
+			}
+			resolvedSensible = rawSensible
+		}
+		genesis = canonGenesis
 		canonicalKey = "mvc-ft:" + codehash + ":" + genesis
 		codehashPtr = &codehash
 		genesisPtr = &genesis
+		if resolvedSensible != "" {
+			sensibleIdPtr = &resolvedSensible
+		}
 	}
 
-	if supplied := strings.ToLower(strings.TrimSpace(in.AssetKey)); supplied != "" && supplied != canonicalKey {
+	if supplied := strings.ToLower(strings.TrimSpace(in.AssetKey)); supplied != "" && NormalizeAssetKey(supplied) != canonicalKey {
 		return nil, fmt.Errorf("assetKey %q does not match canonical key %q", in.AssetKey, canonicalKey)
 	}
 
@@ -284,16 +302,17 @@ func parseAssetInfo(raw json.RawMessage) (*AssetInfo, error) {
 	}
 
 	return &AssetInfo{
-		AssetKey:  canonicalKey,
-		Chain:     chain,
-		Standard:  standard,
-		Codehash:  codehashPtr,
-		Genesis:   genesisPtr,
-		Mrc20Id:   mrc20IdPtr,
-		Symbol:    symbol,
-		TokenName: strings.TrimSpace(in.TokenName),
-		Decimals:  decimals,
-		Icon:      strings.TrimSpace(in.Icon),
+		AssetKey:   canonicalKey,
+		Chain:      chain,
+		Standard:   standard,
+		Codehash:   codehashPtr,
+		Genesis:    genesisPtr,
+		SensibleId: sensibleIdPtr,
+		Mrc20Id:    mrc20IdPtr,
+		Symbol:     symbol,
+		TokenName:  strings.TrimSpace(in.TokenName),
+		Decimals:   decimals,
+		Icon:       strings.TrimSpace(in.Icon),
 	}, nil
 }
 

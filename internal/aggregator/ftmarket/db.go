@@ -93,6 +93,9 @@ func (a *Aggregator) loadListing(listingKey string) (*SellListingRecord, error) 
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return nil, fmt.Errorf("corrupt ft listing %s: %w", listingKey, err)
 	}
+	if rec.Asset != nil {
+		normalizeAssetInfoInPlace(rec.Asset)
+	}
 	return &rec, nil
 }
 
@@ -169,8 +172,9 @@ func (a *Aggregator) saveTokenCatalogLocked(asset *AssetInfo, ts int64) {
 	if a.store == nil || asset == nil || asset.AssetKey == "" {
 		return
 	}
-	existing := a.loadTokenCatalog(asset.AssetKey)
 	merged := *asset
+	normalizeAssetInfoInPlace(&merged)
+	existing := a.loadTokenCatalog(merged.AssetKey)
 	if existing != nil {
 		if merged.TokenName == "" {
 			merged.TokenName = existing.Asset.TokenName
@@ -180,6 +184,9 @@ func (a *Aggregator) saveTokenCatalogLocked(asset *AssetInfo, ts int64) {
 		}
 		if merged.Decimals == 0 && existing.Asset.Decimals > 0 {
 			merged.Decimals = existing.Asset.Decimals
+		}
+		if (merged.SensibleId == nil || *merged.SensibleId == "") && existing.Asset.SensibleId != nil {
+			merged.SensibleId = existing.Asset.SensibleId
 		}
 	}
 	raw, err := json.Marshal(TokenCatalogRecord{
@@ -214,6 +221,7 @@ func (a *Aggregator) listTokenCatalog() []TokenCatalogRecord {
 	err := a.store.ScanPrefix(Namespace, []byte(keyAsset), func(_, val []byte) error {
 		var rec TokenCatalogRecord
 		if err := json.Unmarshal(val, &rec); err == nil && rec.Asset.AssetKey != "" {
+			normalizeAssetInfoInPlace(&rec.Asset)
 			out = append(out, rec)
 		}
 		return nil
@@ -242,6 +250,20 @@ func (a *Aggregator) ingestSellPin(pin *aggregator.PinInscription) (bool, error)
 	if err != nil {
 		log.Printf("WARNING: ftmarket sell pin %s skipped: %v", sellPinId, err)
 		return false, nil
+	}
+	if payload.Asset != nil && payload.Asset.Chain == "mvc" && payload.Asset.Codehash != nil && payload.Asset.Genesis != nil && !hex40Pattern.MatchString(*payload.Asset.Genesis) {
+		canonGen, sid := a.resolveMvcSensibleIfNeededLocked(context.Background(), *payload.Asset.Codehash, *payload.Asset.Genesis)
+		if canonGen != *payload.Asset.Genesis {
+			payload.Asset.Genesis = &canonGen
+			payload.Asset.AssetKey = "mvc-ft:" + *payload.Asset.Codehash + ":" + canonGen
+			if sid != "" {
+				payload.Asset.SensibleId = &sid
+			}
+			payload.ListingKey = normalizeListingKeyAssetPrefix(payload.ListingKey)
+			if payload.Lot != nil {
+				payload.ListingKey = canonicalizeListingKey(payload.ListingKey, payload.Asset.AssetKey, payload.Lot.UtxoOutpoint)
+			}
+		}
 	}
 
 	existing, err := a.loadListing(payload.ListingKey)
@@ -389,6 +411,9 @@ func (a *Aggregator) listConfirmedListings() ([]*SellListingRecord, error) {
 		var rec SellListingRecord
 		if err := json.Unmarshal(val, &rec); err != nil {
 			return nil
+		}
+		if rec.Asset != nil {
+			normalizeAssetInfoInPlace(rec.Asset)
 		}
 		out = append(out, &rec)
 		return nil

@@ -203,6 +203,7 @@ func TestMainWiresFtMarketAggregator(t *testing.T) {
 	for _, required := range []string{
 		`"github.com/metaid-developers/metaso-p2p/internal/aggregator/ftmarket"`,
 		`aggRegistry.Register(ftmarketCandidate)`,
+		`ftmarketAgg.SetBuiltinCertifiedTokens(ftmarket.DefaultMainnetCertifiedTokens())`,
 		`ftmarketAgg.SetCAReader(&ftmarketCAAdapter{ca: idbotscaAgg})`,
 		`ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})`,
 		`ftmarketAgg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})`,
