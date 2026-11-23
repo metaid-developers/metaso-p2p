@@ -34,13 +34,24 @@ type Config struct {
 
 // FtMarketConfig configures the FT token sell-listing index & three-rail market aggregator.
 type FtMarketConfig struct {
-	Enabled             bool          `json:"enabled"`
-	ZeroConfTrade       bool          `json:"zeroConfTrade"`
-	HigunBaseURL        string        `json:"higunBaseUrl"`
-	MvcOpenAPIBaseURL   string        `json:"mvcOpenApiBaseUrl"`
-	ManBaseURL          string        `json:"manBaseUrl"`
-	MetaidMarketBaseURL string        `json:"metaidMarketBaseUrl"`
-	UTXOSweepInterval   time.Duration `json:"utxoSweepInterval"`
+	Enabled             bool                   `json:"enabled"`
+	ZeroConfTrade       bool                   `json:"zeroConfTrade"`
+	HigunBaseURL        string                 `json:"higunBaseUrl"`
+	MvcOpenAPIBaseURL   string                 `json:"mvcOpenApiBaseUrl"`
+	ManBaseURL          string                 `json:"manBaseUrl"`
+	MetaidMarketBaseURL string                 `json:"metaidMarketBaseUrl"`
+	UTXOSweepInterval   time.Duration          `json:"utxoSweepInterval"`
+	Backfill            FtMarketBackfillConfig `json:"backfill"`
+}
+
+// FtMarketBackfillConfig configures idempotent startup MANAPI replay for
+// /protocols/ft-sell and /protocols/ft-trade pins.
+type FtMarketBackfillConfig struct {
+	Enabled       bool          `json:"enabled"`
+	Lookback      time.Duration `json:"lookback"`
+	Timeout       time.Duration `json:"timeout"`
+	PageSize      int           `json:"pageSize"`
+	MANAPIBaseURL string        `json:"manapiBaseUrl"`
 }
 
 // Mrc721Config groups the MRC-721 business-index knobs (docs/specs/
@@ -523,6 +534,13 @@ func Default() Config {
 			ManBaseURL:          "https://manapi.metaid.io",
 			MetaidMarketBaseURL: "https://api.metaid.market",
 			UTXOSweepInterval:   60 * time.Second,
+			Backfill: FtMarketBackfillConfig{
+				Enabled:       true,
+				Lookback:      1440 * time.Hour,
+				Timeout:       2 * time.Minute,
+				PageSize:      100,
+				MANAPIBaseURL: "https://manapi.metaid.io",
+			},
 		},
 	}
 }
@@ -691,6 +709,11 @@ func Load() (Config, error) {
 	applyOptionalStringEnv("METASO_P2P_FT_MARKET_MAN_BASE_URL", &cfg.FtMarket.ManBaseURL)
 	applyOptionalStringEnv("METASO_P2P_FT_MARKET_METAID_MARKET_BASE_URL", &cfg.FtMarket.MetaidMarketBaseURL)
 	applyDurationEnv("METASO_P2P_FT_MARKET_UTXO_SWEEP_INTERVAL", &cfg.FtMarket.UTXOSweepInterval)
+	applyBoolEnv("METASO_P2P_FT_MARKET_BACKFILL_ENABLED", &cfg.FtMarket.Backfill.Enabled)
+	applyDurationEnv("METASO_P2P_FT_MARKET_BACKFILL_LOOKBACK", &cfg.FtMarket.Backfill.Lookback)
+	applyDurationEnv("METASO_P2P_FT_MARKET_BACKFILL_TIMEOUT", &cfg.FtMarket.Backfill.Timeout)
+	applyIntEnv("METASO_P2P_FT_MARKET_BACKFILL_PAGE_SIZE", &cfg.FtMarket.Backfill.PageSize)
+	applyStringEnv("METASO_P2P_FT_MARKET_BACKFILL_MANAPI_BASE_URL", &cfg.FtMarket.Backfill.MANAPIBaseURL)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -749,6 +772,26 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateMrc721(); err != nil {
 		return err
+	}
+	if err := c.validateFtMarket(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) validateFtMarket() error {
+	bf := c.FtMarket.Backfill
+	if bf.Lookback <= 0 {
+		return errors.New("ftMarket.backfill.lookback must be greater than zero")
+	}
+	if bf.Timeout <= 0 {
+		return errors.New("ftMarket.backfill.timeout must be greater than zero")
+	}
+	if bf.PageSize <= 0 {
+		return errors.New("ftMarket.backfill.pageSize must be greater than zero")
+	}
+	if c.FtMarket.Enabled && bf.Enabled && strings.TrimSpace(bf.MANAPIBaseURL) == "" {
+		return errors.New("ftMarket.backfill.manapiBaseUrl is required when backfill is enabled")
 	}
 	return nil
 }

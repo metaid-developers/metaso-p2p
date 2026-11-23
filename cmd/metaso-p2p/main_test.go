@@ -210,6 +210,7 @@ func TestMainWiresFtMarketAggregator(t *testing.T) {
 		`ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})`,
 		`ftmarketAgg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})`,
 		`ftmarketAgg.RefreshMarketCache()`,
+		`ftAgg.Backfill(ftmarket.BackfillOptions{`,
 		`docSources = append(docSources, ftmarketAgg)`,
 	} {
 		if !strings.Contains(source, required) {

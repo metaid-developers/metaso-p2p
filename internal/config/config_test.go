@@ -785,3 +785,45 @@ func TestDefaultFtMarketMvcOpenAPIAndEnv(t *testing.T) {
 		t.Fatalf("expected empty MvcOpenAPIBaseURL override, got %q", cleared.FtMarket.MvcOpenAPIBaseURL)
 	}
 }
+
+func TestFtMarketBackfillConfigDefaultEnvAndValidation(t *testing.T) {
+	cfg := Default()
+	if !cfg.FtMarket.Backfill.Enabled {
+		t.Fatal("expected ftMarket.backfill enabled by default")
+	}
+	if cfg.FtMarket.Backfill.Lookback != 1440*time.Hour {
+		t.Fatalf("default lookback = %s, want 1440h", cfg.FtMarket.Backfill.Lookback)
+	}
+	if cfg.FtMarket.Backfill.Timeout != 2*time.Minute {
+		t.Fatalf("default timeout = %s, want 2m", cfg.FtMarket.Backfill.Timeout)
+	}
+	if cfg.FtMarket.Backfill.PageSize != 100 {
+		t.Fatalf("default pageSize = %d, want 100", cfg.FtMarket.Backfill.PageSize)
+	}
+	if cfg.FtMarket.Backfill.MANAPIBaseURL != "https://manapi.metaid.io" {
+		t.Fatalf("default MANAPIBaseURL = %q", cfg.FtMarket.Backfill.MANAPIBaseURL)
+	}
+
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_ENABLED", "false")
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_LOOKBACK", "720h")
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_TIMEOUT", "45s")
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_PAGE_SIZE", "50")
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_MANAPI_BASE_URL", "https://manapi.ft.example")
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.FtMarket.Backfill.Enabled ||
+		loaded.FtMarket.Backfill.Lookback != 720*time.Hour ||
+		loaded.FtMarket.Backfill.Timeout != 45*time.Second ||
+		loaded.FtMarket.Backfill.PageSize != 50 ||
+		loaded.FtMarket.Backfill.MANAPIBaseURL != "https://manapi.ft.example" {
+		t.Fatalf("unexpected loaded FtMarket.Backfill: %+v", loaded.FtMarket.Backfill)
+	}
+
+	t.Setenv("METASO_P2P_FT_MARKET_BACKFILL_PAGE_SIZE", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected validation error for non-positive ftMarket.backfill.pageSize")
+	}
+}

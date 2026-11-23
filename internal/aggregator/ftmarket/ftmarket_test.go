@@ -1662,3 +1662,234 @@ func TestMvcOpenAPIFallbackUtxoMetadataAndSensibleResolver(t *testing.T) {
 		t.Fatalf("expected sensibleId=%s, got %v", customSensible, sumResp.Data.Asset.SensibleId)
 	}
 }
+
+func TestFtMarketBackfillHydratesTruncatedSummaryAndIsIdempotent(t *testing.T) {
+	agg, _ := newTestAggregator(t)
+	now := int64(1798001000)
+	agg.nowFn = func() int64 { return now }
+	agg.SetBuiltinCertifiedTokens(DefaultMainnetCertifiedTokens())
+	agg.SetCAReader(&fakeCAReader{
+		roles: map[string]string{testEscrowBotGid: "escrow_guarantor"},
+	})
+
+	// Build a >1150-byte /protocols/ft-sell payload (mirroring live pin c8f7c3c2... with tokenSellJson + 72-hex sensibleId)
+	// whose MANAPI /pin/path/list contentSummary is truncated at 1024 bytes.
+	sellPinID := testPinId("bfsell1", 0)
+	sellTx := testHex64("bfselltx1")
+	seedTx := testHex64("bfseedtx1")
+	longTokenSellJSON := fmt.Sprintf(
+		`{"version":2,"codehash":"c9cc7bbd1010b44873959a8b1a2bcedeb62302b7","genesis":%q,"sell_txid":%q,"sell_output_index":0,"seed_txid":%q,"seed_vout":1,"price":50000000,"padding":%q}`,
+		SensibleIdMetaidMvc, sellTx, seedTx, strings.Repeat("x", 600),
+	)
+	fullSellBytes, _ := json.Marshal(map[string]any{
+		"active":     true,
+		"listingKey": "mvc-ft:c9cc7bbd1010b44873959a8b1a2bcedeb62302b7:" + SensibleIdMetaidMvc + ":" + sellTx + ":0",
+		"asset": map[string]any{
+			"assetKey":  "mvc-ft:c9cc7bbd1010b44873959a8b1a2bcedeb62302b7:" + SensibleIdMetaidMvc,
+			"chain":     "mvc",
+			"standard":  "mvc-ft",
+			"codehash":  "c9cc7bbd1010b44873959a8b1a2bcedeb62302b7",
+			"genesis":   SensibleIdMetaidMvc,
+			"symbol":    "METAID",
+			"tokenName": "MetaID",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "200000000",
+			"amountDisplay": "2",
+			"utxoOutpoint":  sellTx + ":0",
+		},
+		"sellerAddress": testSellerMvcAddr,
+		"rails": map[string]any{
+			"mvcTokenSell": map[string]any{
+				"txid":          sellTx,
+				"priceSats":     50000000,
+				"sellerAddress": testSellerMvcAddr,
+				"tokenSellJson": longTokenSellJSON,
+			},
+		},
+		"createdAt": now - 120,
+	})
+	if len(fullSellBytes) <= 1024 {
+		t.Fatalf("expected fullSellBytes > 1024, got %d", len(fullSellBytes))
+	}
+	truncatedSummary := string(fullSellBytes[:1024])
+
+	// Also include a second listing that gets canceled by a newer pin (returned newest-first by MANAPI).
+	cancelTx := testHex64("bfcanceltx")
+	cancelListingKey := AssetKeyMetaidMvc + ":" + cancelTx + ":0"
+	openPinID := testPinId("bfsellopen", 0)
+	openBytes, _ := json.Marshal(map[string]any{
+		"active":     true,
+		"listingKey": cancelListingKey,
+		"asset": map[string]any{
+			"assetKey":  AssetKeyMetaidMvc,
+			"chain":     "mvc",
+			"standard":  "metacontract-ft",
+			"codehash":  "c9cc7bbd1010b44873959a8b1a2bcedeb62302b7",
+			"genesis":   "28a481ecdae9499a599a9457ae70b5cf234ef417",
+			"symbol":    "METAID",
+			"tokenName": "MetaID",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "100000000",
+			"amountDisplay": "1",
+			"utxoOutpoint":  cancelTx + ":0",
+		},
+		"sellerAddress": testSellerMvcAddr,
+		"rails": map[string]any{
+			"me": map[string]any{"amountMilli": 3000, "autoFulfill": true},
+		},
+		"createdAt": now - 100,
+	})
+	closePinID := testPinId("bfsellclose", 0)
+	closeBytes, _ := json.Marshal(map[string]any{
+		"active":        false,
+		"listingKey":    cancelListingKey,
+		"sellerAddress": testSellerMvcAddr,
+	})
+
+	// And one official escrow /protocols/ft-trade receipt using legacy 72-hex assetKey + lowercase "metaid".
+	tradePinID := testPinId("bftrade1", 0)
+	tradeTx := testHex64("bftradetx1")
+	tradeBytes, _ := json.Marshal(map[string]any{
+		"txId":          tradeTx,
+		"listingKey":    cancelListingKey,
+		"assetKey":      "mvc-ft:c9cc7bbd1010b44873959a8b1a2bcedeb62302b7:" + SensibleIdMetaidMvc,
+		"chain":         "mvc",
+		"symbol":        "METAID",
+		"decimals":      8,
+		"amountBase":    "100000000",
+		"rail":          "me-escrow",
+		"amountMilli":   3000,
+		"sellerAddress": testSellerMvcAddr,
+		"buyerAddress":  testBuyerMvcAddr,
+		"settledAt":     now - 50,
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pin/path/list":
+			switch r.URL.Query().Get("path") {
+			case PathFtSell:
+				// Returned newest-first: closePin (h=602) -> openPin (h=601) -> truncated sellPin (h=600)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 1,
+					"data": map[string]any{
+						"list": []map[string]any{
+							{
+								"id":             closePinID,
+								"path":           PathFtSell,
+								"operation":      "create",
+								"contentBody":    "",
+								"contentSummary": string(closeBytes),
+								"contentLength":  len(closeBytes),
+								"address":        testSellerMvcAddr,
+								"chainName":      "mvc",
+								"genesisHeight":  602,
+								"timestamp":      now - 80,
+							},
+							{
+								"id":             openPinID,
+								"path":           PathFtSell,
+								"operation":      "create",
+								"contentBody":    "",
+								"contentSummary": string(openBytes),
+								"contentLength":  len(openBytes),
+								"address":        testSellerMvcAddr,
+								"chainName":      "mvc",
+								"genesisHeight":  601,
+								"timestamp":      now - 100,
+							},
+							{
+								"id":             sellPinID,
+								"path":           PathFtSell,
+								"operation":      "create",
+								"contentBody":    "",
+								"contentSummary": truncatedSummary,
+								"contentLength":  len(fullSellBytes),
+								"address":        testSellerMvcAddr,
+								"chainName":      "mvc",
+								"genesisHeight":  600,
+								"timestamp":      now - 120,
+							},
+						},
+					},
+				})
+			case PathFtTrade:
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 1,
+					"data": map[string]any{
+						"list": []map[string]any{
+							{
+								"id":             tradePinID,
+								"path":           PathFtTrade,
+								"operation":      "create",
+								"contentSummary": string(tradeBytes),
+								"contentLength":  len(tradeBytes),
+								"metaid":         "escrowmetaid",
+								"globalMetaId":   testEscrowBotGid,
+								"chainName":      "mvc",
+								"genesisHeight":  603,
+								"timestamp":      now - 50,
+							},
+						},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		case "/content/" + sellPinID:
+			_, _ = w.Write(fullSellBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewBackfillClient(srv.URL, srv.Client())
+	stats1 := &BackfillStats{}
+	if err := agg.Backfill(BackfillOptions{
+		Context:  context.Background(),
+		Client:   client,
+		Since:    time.Unix(now-3600, 0),
+		PageSize: 50,
+		Stats:    stats1,
+	}); err != nil {
+		t.Fatalf("first Backfill failed: %v", err)
+	}
+	if stats1.SellFetched != 3 || stats1.SellApplied != 3 || stats1.Hydrated != 1 {
+		t.Fatalf("unexpected first sell backfill stats: %+v", stats1)
+	}
+	if stats1.TradeFetched != 1 || stats1.TradeApplied != 1 {
+		t.Fatalf("unexpected first trade backfill stats: %+v", stats1)
+	}
+
+	// Verify active listing count = 1 (hydrated listing normalized to canonical 40-hex genesis; canceled listing inactive)
+	// and trade count = 1 under canonical MVC METAID bucket.
+	r := setupRouter(agg)
+	var sumResp struct {
+		Code int                `json:"code"`
+		Data TokenMarketSummary `json:"data"`
+	}
+	doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(AssetKeyMetaidMvc)+"/summary", &sumResp)
+	if sumResp.Code != 0 || sumResp.Data.ListedLotCount != 1 || sumResp.Data.TradeStats24h.TradeCount != 1 {
+		t.Fatalf("unexpected summary after backfill: %+v", sumResp)
+	}
+
+	// Re-run Backfill to assert strict idempotency (zero re-applications, zero duplicate records).
+	stats2 := &BackfillStats{}
+	if err := agg.Backfill(BackfillOptions{
+		Context:  context.Background(),
+		Client:   client,
+		Since:    time.Unix(now-3600, 0),
+		PageSize: 50,
+		Stats:    stats2,
+	}); err != nil {
+		t.Fatalf("second Backfill failed: %v", err)
+	}
+	if stats2.SellApplied != 0 || stats2.SellSkipped != 3 || stats2.TradeApplied != 0 || stats2.TradeSkipped != 1 {
+		t.Fatalf("expected idempotent second Backfill (0 applied), got %+v", stats2)
+	}
+}

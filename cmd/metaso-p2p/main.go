@@ -519,6 +519,36 @@ func main() {
 				}()
 			}
 		}
+		if cfg.FtMarket.Enabled && cfg.FtMarket.Backfill.Enabled {
+			if ftmarketAgg == nil {
+				log.Printf("WARNING: ftmarket backfill requested but aggregator is unavailable")
+			} else {
+				go func(ftAgg *ftmarket.Aggregator, caAgg *idbotsca.Aggregator, bfCfg config.FtMarketBackfillConfig) {
+					ctx, cancel := context.WithTimeout(context.Background(), bfCfg.Timeout)
+					defer cancel()
+					if caAgg != nil && !caAgg.HasConfirmedRegistry() {
+						caCtx, caCancel := context.WithTimeout(ctx, 15*time.Second)
+						_ = caAgg.SyncFromMANAPI(caCtx, bfCfg.MANAPIBaseURL, nil)
+						caCancel()
+					}
+					stats := &ftmarket.BackfillStats{}
+					err := ftAgg.Backfill(ftmarket.BackfillOptions{
+						Context:  ctx,
+						Client:   ftmarket.NewBackfillClient(bfCfg.MANAPIBaseURL, nil),
+						Since:    time.Now().Add(-bfCfg.Lookback),
+						PageSize: bfCfg.PageSize,
+						Stats:    stats,
+					})
+					if err != nil {
+						log.Printf("WARNING: ftmarket backfill failed: %v", err)
+					}
+					log.Printf("ftmarket backfill done: sell_fetched=%d sell_applied=%d sell_skipped=%d trade_fetched=%d trade_applied=%d trade_skipped=%d hydrated=%d errors=%d",
+						stats.SellFetched, stats.SellApplied, stats.SellSkipped,
+						stats.TradeFetched, stats.TradeApplied, stats.TradeSkipped,
+						stats.Hydrated, stats.Errors)
+				}(ftmarketAgg, idbotscaAgg, cfg.FtMarket.Backfill)
+			}
+		}
 		if cfg.Mrc721.Collection.Enabled {
 			if mrc721Agg == nil {
 				log.Printf("WARNING: mrc721 collection sync requested but aggregator is unavailable")
