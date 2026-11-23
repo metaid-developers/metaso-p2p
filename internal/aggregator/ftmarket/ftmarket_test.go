@@ -1552,6 +1552,12 @@ func TestMvcOpenAPIFallbackUtxoMetadataAndSensibleResolver(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// Verify auto-routing when HIGUN_BASE_URL is configured to an /open-api-mvc URL (production env compat).
+	autoRouted := NewUpstreamUTXOVerifier(srv.URL+"/open-api-mvc", "", srv.Client())
+	if autoRouted.HigunBaseURL != "" || autoRouted.MvcOpenAPIBaseURL != srv.URL+"/open-api-mvc" {
+		t.Fatalf("expected /open-api-mvc HigunBaseURL auto-routed to MvcOpenAPIBaseURL, got higun=%q mvcOpen=%q", autoRouted.HigunBaseURL, autoRouted.MvcOpenAPIBaseURL)
+	}
+
 	// 1. UTXO Verifier with HigunBaseURL == "" and MvcOpenAPIBaseURL == srv.URL.
 	verifier := NewUpstreamUTXOVerifier("", "", srv.Client()).WithMvcOpenAPIBaseURL(srv.URL)
 	baseAsset := &AssetInfo{

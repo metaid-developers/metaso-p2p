@@ -48,15 +48,29 @@ type UpstreamUTXOVerifier struct {
 }
 
 // NewUpstreamUTXOVerifier builds an UpstreamUTXOVerifier for higun and man-p2p.
+// When higunBaseURL points directly at an MVC OpenAPI endpoint (/open-api-mvc),
+// it is routed straight to MvcOpenAPIBaseURL to avoid wasted Higun 404 calls.
 func NewUpstreamUTXOVerifier(higunBaseURL, manBaseURL string, httpClient *http.Client) *UpstreamUTXOVerifier {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &UpstreamUTXOVerifier{
-		HigunBaseURL: strings.TrimRight(strings.TrimSpace(higunBaseURL), "/"),
-		ManBaseURL:   strings.TrimRight(strings.TrimSpace(manBaseURL), "/"),
-		HTTPClient:   httpClient,
+	trimmedHigun := strings.TrimRight(strings.TrimSpace(higunBaseURL), "/")
+	mvcOpenURL := ""
+	if isMvcOpenAPIBaseURL(trimmedHigun) {
+		mvcOpenURL = trimmedHigun
+		trimmedHigun = ""
 	}
+	return &UpstreamUTXOVerifier{
+		HigunBaseURL:      trimmedHigun,
+		MvcOpenAPIBaseURL: mvcOpenURL,
+		ManBaseURL:        strings.TrimRight(strings.TrimSpace(manBaseURL), "/"),
+		HTTPClient:        httpClient,
+	}
+}
+
+func isMvcOpenAPIBaseURL(u string) bool {
+	lower := strings.ToLower(strings.TrimSpace(u))
+	return strings.Contains(lower, "/open-api-mvc") || strings.Contains(lower, "api.microvisionchain.com")
 }
 
 // WithMvcOpenAPIBaseURL configures the public MVC OpenAPI fallback endpoint used
@@ -65,7 +79,9 @@ func (v *UpstreamUTXOVerifier) WithMvcOpenAPIBaseURL(mvcOpenAPIBaseURL string) *
 	if v == nil {
 		return nil
 	}
-	v.MvcOpenAPIBaseURL = strings.TrimRight(strings.TrimSpace(mvcOpenAPIBaseURL), "/")
+	if trimmed := strings.TrimRight(strings.TrimSpace(mvcOpenAPIBaseURL), "/"); trimmed != "" {
+		v.MvcOpenAPIBaseURL = trimmed
+	}
 	return v
 }
 
@@ -658,14 +674,23 @@ type UpstreamTokenMetadataProvider struct {
 }
 
 // NewUpstreamTokenMetadataProvider creates a TokenMetadataProvider backed by higun & man-p2p.
+// When higunBaseURL points directly at an MVC OpenAPI endpoint (/open-api-mvc),
+// it is routed straight to MvcOpenAPIBaseURL to avoid wasted Higun 404 calls.
 func NewUpstreamTokenMetadataProvider(higunBaseURL, manBaseURL string, httpClient *http.Client) *UpstreamTokenMetadataProvider {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 4 * time.Second}
 	}
+	trimmedHigun := strings.TrimRight(strings.TrimSpace(higunBaseURL), "/")
+	mvcOpenURL := ""
+	if isMvcOpenAPIBaseURL(trimmedHigun) {
+		mvcOpenURL = trimmedHigun
+		trimmedHigun = ""
+	}
 	return &UpstreamTokenMetadataProvider{
-		HigunBaseURL: strings.TrimRight(strings.TrimSpace(higunBaseURL), "/"),
-		ManBaseURL:   strings.TrimRight(strings.TrimSpace(manBaseURL), "/"),
-		HTTPClient:   httpClient,
+		HigunBaseURL:      trimmedHigun,
+		MvcOpenAPIBaseURL: mvcOpenURL,
+		ManBaseURL:        strings.TrimRight(strings.TrimSpace(manBaseURL), "/"),
+		HTTPClient:        httpClient,
 	}
 }
 
@@ -675,8 +700,12 @@ func (p *UpstreamTokenMetadataProvider) WithFallbackURLs(mvcOpenAPIBaseURL, meta
 	if p == nil {
 		return nil
 	}
-	p.MvcOpenAPIBaseURL = strings.TrimRight(strings.TrimSpace(mvcOpenAPIBaseURL), "/")
-	p.MetaidMarketBaseURL = strings.TrimRight(strings.TrimSpace(metaidMarketBaseURL), "/")
+	if trimmed := strings.TrimRight(strings.TrimSpace(mvcOpenAPIBaseURL), "/"); trimmed != "" {
+		p.MvcOpenAPIBaseURL = trimmed
+	}
+	if trimmed := strings.TrimRight(strings.TrimSpace(metaidMarketBaseURL), "/"); trimmed != "" {
+		p.MetaidMarketBaseURL = trimmed
+	}
 	return p
 }
 
