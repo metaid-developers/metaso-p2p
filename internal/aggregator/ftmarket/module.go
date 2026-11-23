@@ -404,6 +404,7 @@ func (a *Aggregator) NotifyChannel() <-chan *aggregator.NotifyEvent {
 
 // HandleBlockPin implements aggregator.Aggregator.
 func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	a.preResolvePinSensibleMapping(pin)
 	a.mu.Lock()
 	sellChanged, err := a.ingestSellPin(pin)
 	if err != nil {
@@ -427,6 +428,7 @@ func (a *Aggregator) HandleBlockPin(pin *aggregator.PinInscription) (*aggregator
 
 // HandleMempoolPin implements aggregator.Aggregator.
 func (a *Aggregator) HandleMempoolPin(pin *aggregator.PinInscription) (*aggregator.NotifyEvent, error) {
+	a.preResolvePinSensibleMapping(pin)
 	a.mu.Lock()
 	changed := a.recordMempoolDeclarationLocked(pin)
 	a.mu.Unlock()

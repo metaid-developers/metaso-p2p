@@ -204,6 +204,8 @@ func TestMainWiresFtMarketAggregator(t *testing.T) {
 		`"github.com/metaid-developers/metaso-p2p/internal/aggregator/ftmarket"`,
 		`aggRegistry.Register(ftmarketCandidate)`,
 		`ftmarketAgg.SetBuiltinCertifiedTokens(ftmarket.DefaultMainnetCertifiedTokens())`,
+		`WithMvcOpenAPIBaseURL(mvcOpenURL)`,
+		`WithFallbackURLs(mvcOpenURL, mmURL)`,
 		`ftmarketAgg.SetCAReader(&ftmarketCAAdapter{ca: idbotscaAgg})`,
 		`ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})`,
 		`ftmarketAgg.SetPresenceReader(&mrc721PresenceAdapter{srv: socketServer})`,

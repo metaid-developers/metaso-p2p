@@ -756,3 +756,32 @@ func assertChainRPCConfig(t *testing.T, cfg ChainRPCConfig, host, user, pass str
 		t.Fatalf("expected initial height %d, got %d", height, cfg.InitialHeight)
 	}
 }
+
+func TestDefaultFtMarketMvcOpenAPIAndEnv(t *testing.T) {
+	cfg := Default()
+	if cfg.FtMarket.MvcOpenAPIBaseURL != "https://api.microvisionchain.com/open-api-mvc" {
+		t.Fatalf("default MvcOpenAPIBaseURL = %q", cfg.FtMarket.MvcOpenAPIBaseURL)
+	}
+	if cfg.FtMarket.MetaidMarketBaseURL != "https://api.metaid.market" {
+		t.Fatalf("default MetaidMarketBaseURL = %q", cfg.FtMarket.MetaidMarketBaseURL)
+	}
+
+	t.Setenv("METASO_P2P_FT_MARKET_MVC_OPEN_API_BASE_URL", "https://mvc-open.example/open-api-mvc")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.FtMarket.MvcOpenAPIBaseURL != "https://mvc-open.example/open-api-mvc" {
+		t.Fatalf("env MvcOpenAPIBaseURL = %q", loaded.FtMarket.MvcOpenAPIBaseURL)
+	}
+
+	// Verify explicit empty override disables fallback URL when needed.
+	t.Setenv("METASO_P2P_FT_MARKET_MVC_OPEN_API_BASE_URL", "")
+	cleared, err := Load()
+	if err != nil {
+		t.Fatalf("Load cleared: %v", err)
+	}
+	if cleared.FtMarket.MvcOpenAPIBaseURL != "" {
+		t.Fatalf("expected empty MvcOpenAPIBaseURL override, got %q", cleared.FtMarket.MvcOpenAPIBaseURL)
+	}
+}

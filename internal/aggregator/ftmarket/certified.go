@@ -6,6 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/metaid-developers/metaso-p2p/internal/aggregator"
 )
 
 const (
@@ -252,21 +255,76 @@ type MvcSensibleResolver interface {
 	ResolveMvcSensibleId(ctx context.Context, codehash, sensibleId string) (genesis40 string, ok bool)
 }
 
-func (a *Aggregator) resolveMvcSensibleIfNeededLocked(ctx context.Context, codehash, rawGen string) (string, string) {
-	canonGen, sid := ResolveMvcGenesisAndSensibleId(codehash, rawGen)
-	if hex40Pattern.MatchString(canonGen) {
-		return canonGen, sid
+func (a *Aggregator) resolveMvcSensibleIfNeededLocked(_ context.Context, codehash, rawGen string) (string, string) {
+	return ResolveMvcGenesisAndSensibleId(codehash, rawGen)
+}
+
+// preResolvePinSensibleMapping dynamically resolves any unknown 64/72-hex MVC
+// sensibleId in a pin payload BEFORE a.mu is acquired so write paths never block
+// on upstream HTTP calls while holding the aggregator mutex.
+func (a *Aggregator) preResolvePinSensibleMapping(pin *aggregator.PinInscription) {
+	if a == nil || pin == nil || pin.Operation != OperationCreate {
+		return
 	}
-	if !hex72Pattern.MatchString(rawGen) && !hex64Pattern.MatchString(rawGen) {
-		return canonGen, sid
+	path := normalisedPinPath(pin.Path)
+	if path != PathFtSell && path != PathFtTrade {
+		return
 	}
-	if resolver, ok := a.metaProvider.(MvcSensibleResolver); ok && resolver != nil {
-		if gen40, found := resolver.ResolveMvcSensibleId(ctx, codehash, rawGen); found && hex40Pattern.MatchString(gen40) {
-			RegisterMvcSensibleMapping(codehash, gen40, rawGen)
-			return strings.ToLower(gen40), strings.ToLower(rawGen)
+	rawBody := pin.ContentBody
+	if len(rawBody) == 0 && pin.ContentSummary != "" {
+		rawBody = []byte(pin.ContentSummary)
+	}
+	if len(rawBody) == 0 {
+		return
+	}
+	var probe struct {
+		AssetKey string `json:"assetKey"`
+		Asset    *struct {
+			Codehash string `json:"codehash"`
+			Genesis  string `json:"genesis"`
+			AssetKey string `json:"assetKey"`
+		} `json:"asset"`
+	}
+	if err := json.Unmarshal(rawBody, &probe); err != nil {
+		return
+	}
+
+	var ch, rawGen string
+	if probe.Asset != nil {
+		ch = strings.ToLower(strings.TrimSpace(probe.Asset.Codehash))
+		rawGen = strings.ToLower(strings.TrimSpace(probe.Asset.Genesis))
+		if (ch == "" || rawGen == "") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(probe.Asset.AssetKey)), "mvc-ft:") {
+			parts := strings.Split(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(probe.Asset.AssetKey)), "mvc-ft:"), ":")
+			if len(parts) == 2 {
+				ch, rawGen = parts[0], parts[1]
+			}
 		}
 	}
-	return canonGen, sid
+	if (ch == "" || rawGen == "") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(probe.AssetKey)), "mvc-ft:") {
+		parts := strings.Split(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(probe.AssetKey)), "mvc-ft:"), ":")
+		if len(parts) == 2 {
+			ch, rawGen = parts[0], parts[1]
+		}
+	}
+	if !hex40Pattern.MatchString(ch) || (!hex72Pattern.MatchString(rawGen) && !hex64Pattern.MatchString(rawGen)) {
+		return
+	}
+	if gen, _ := ResolveMvcGenesisAndSensibleId(ch, rawGen); hex40Pattern.MatchString(gen) {
+		return
+	}
+
+	a.mu.Lock()
+	prov := a.metaProvider
+	a.mu.Unlock()
+	resolver, ok := prov.(MvcSensibleResolver)
+	if !ok || resolver == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if gen40, found := resolver.ResolveMvcSensibleId(ctx, ch, rawGen); found && hex40Pattern.MatchString(gen40) {
+		RegisterMvcSensibleMapping(ch, gen40, rawGen)
+	}
 }
 
 func (a *Aggregator) normalizeQueryAssetKey(ctx context.Context, rawKey string) string {

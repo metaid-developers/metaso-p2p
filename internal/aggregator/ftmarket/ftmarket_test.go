@@ -1417,3 +1417,248 @@ func TestMvcSensibleIdNormalizationAndLegacyBucketMigration(t *testing.T) {
 }
 
 func ptrStr(s string) *string { return &s }
+
+func TestMetaidMarketFloorAndBtcMetadataFallback(t *testing.T) {
+	var requestedPaths []string
+	var reqMu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqMu.Lock()
+		requestedPaths = append(requestedPaths, r.URL.Path+"?"+r.URL.RawQuery)
+		reqMu.Unlock()
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/mrc20/tick/info/"):
+			// Simulate live manapi.metaid.io returning code=100 no result found.
+			_, _ = w.Write([]byte(`{"code":100,"message":"no result found","data":null}`))
+		case r.URL.Path == "/api-market/api/v1/common/mrc20/tick/info":
+			tickId := r.URL.Query().Get("tickId")
+			switch tickId {
+			case "8ce590918a3d493631ab9d9e3bbc89e322f3dd08354af87f97c07218818b78f4i0":
+				_, _ = w.Write([]byte(`{
+					"code":0,
+					"message":"ok",
+					"data":{
+						"tick":"METAID",
+						"tokenName":"",
+						"decimals":"8",
+						"holders":728,
+						"metaData":"{\"tick\":\"METAID\"}",
+						"deployerUserInfo":{"avatar":"/content/ae28eedfc956e742f1f05aebbe0118916f2848fafa0e86e2f5d20781d628415bi0"},
+						"floorPrice":"18.50"
+					}
+				}`))
+			case "644dba0433aced0ec4cecef9baa951eccabb1751f222d48d33e7a309738ff0d2i0":
+				_, _ = w.Write([]byte(`{
+					"code":0,
+					"message":"ok",
+					"data":{
+						"tick":"MC",
+						"tokenName":"MetaCoin",
+						"decimals":"8",
+						"holders":243,
+						"metaData":"{\"icon\":\"metafile://1763f42c089e0b81637d5843676dfe4272e6f5a46be8a96306ea1b696ed1e48fi0\"}",
+						"floorPrice":"0"
+					}
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	// 1. MetaidMarketFloorProvider with host-only BaseURL AND /api-market BaseURL.
+	for _, base := range []string{srv.URL, srv.URL + "/api-market"} {
+		fp := NewMetaidMarketFloorProvider(base, srv.Client())
+		floor, ok := fp.FetchBtcUnitFloorSats(context.Background(), "8ce590918a3d493631ab9d9e3bbc89e322f3dd08354af87f97c07218818b78f4i0")
+		if !ok || floor == nil || *floor != "18.5" {
+			t.Fatalf("base=%s expected floor=18.5, got ok=%v floor=%v", base, ok, floor)
+		}
+		zeroFloor, okZero := fp.FetchBtcUnitFloorSats(context.Background(), "644dba0433aced0ec4cecef9baa951eccabb1751f222d48d33e7a309738ff0d2i0")
+		if okZero || zeroFloor != nil {
+			t.Fatalf("base=%s expected zero floor rejected, got ok=%v floor=%v", base, okZero, zeroFloor)
+		}
+	}
+
+	// 2. UpstreamTokenMetadataProvider falls back from ManBaseURL (code=100) to MetaidMarketBaseURL.
+	metaProv := NewUpstreamTokenMetadataProvider("", srv.URL, srv.Client()).WithFallbackURLs("", srv.URL)
+	metaidMrc := "8ce590918a3d493631ab9d9e3bbc89e322f3dd08354af87f97c07218818b78f4i0"
+	meta1, ok := metaProv.FetchTokenMetadata(context.Background(), AssetInfo{
+		AssetKey: AssetKeyMetaidBtc,
+		Chain:    "btc",
+		Standard: "mrc20",
+		Mrc20Id:  &metaidMrc,
+	})
+	if !ok || meta1 == nil {
+		t.Fatalf("expected BTC metadata fallback success")
+	}
+	if meta1.HolderCount != 728 || meta1.Symbol != "METAID" || meta1.Decimals != 8 || meta1.Icon != IconMetaid {
+		t.Fatalf("unexpected BTC METAID fallback metadata: %+v", meta1)
+	}
+
+	mcMrc := "644dba0433aced0ec4cecef9baa951eccabb1751f222d48d33e7a309738ff0d2i0"
+	meta2, ok := metaProv.FetchTokenMetadata(context.Background(), AssetInfo{
+		AssetKey: AssetKeyMcBtc,
+		Chain:    "btc",
+		Standard: "mrc20",
+		Mrc20Id:  &mcMrc,
+	})
+	if !ok || meta2 == nil || meta2.HolderCount != 243 || meta2.TokenName != "MetaCoin" || meta2.Icon != IconMc {
+		t.Fatalf("unexpected BTC MC fallback metadata: %+v", meta2)
+	}
+
+	reqMu.Lock()
+	defer reqMu.Unlock()
+	foundCommonPath := false
+	for _, p := range requestedPaths {
+		if strings.HasPrefix(p, "/api-market/api/v1/common/mrc20/tick/info?tickId=") {
+			foundCommonPath = true
+			break
+		}
+	}
+	if !foundCommonPath {
+		t.Fatalf("expected /api-market/api/v1/common/mrc20/tick/info request, got %v", requestedPaths)
+	}
+}
+
+func TestMvcOpenAPIFallbackUtxoMetadataAndSensibleResolver(t *testing.T) {
+	customCodehash := "a2421f1e90c6048c36745edd44fad682e8644693"
+	customGenesis := "11223344556677889900aabbccddeeff00112233"
+	customSensible := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef00000000"
+	aliveTx := testHex64("mvcaliveutxo")
+	spentTx := testHex64("mvcspentutxo")
+	sellerAddr := testSellerMvcAddr
+	contractAddr := "1MvcContractAddr111111111111111111"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/contract/ft/address/" + sellerAddr + "/utxo":
+			_, _ = fmt.Fprintf(w, `[{"txid":%q,"txIndex":0,"valueString":"100000000"}]`, aliveTx)
+		case "/contract/ft/address/" + contractAddr + "/utxo":
+			_, _ = fmt.Fprintf(w, `[{"txid":%q,"txIndex":2,"valueString":"500000000"}]`, aliveTx)
+		case "/contract/ft/" + customCodehash + "/" + customGenesis + "/owners":
+			_, _ = w.Write([]byte(`{"count":857,"records":[{"name":"","symbol":"CUST","decimal":8}]}`))
+		case "/contract/ft/" + customCodehash + "/" + customGenesis + "/genesis":
+			_, _ = fmt.Fprintf(w, `{"name":"Custom FT","symbol":"CUST","decimal":8,"sensibleId":%q}`, customSensible)
+		case "/contract/ft/summary":
+			_, _ = fmt.Fprintf(w, `{"total":1,"records":[{"codeHash":%q,"genesis":%q,"sensibleId":%q,"name":"Custom FT","symbol":"CUST","decimal":8}]}`,
+				customCodehash, customGenesis, customSensible)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	// 1. UTXO Verifier with HigunBaseURL == "" and MvcOpenAPIBaseURL == srv.URL.
+	verifier := NewUpstreamUTXOVerifier("", "", srv.Client()).WithMvcOpenAPIBaseURL(srv.URL)
+	baseAsset := &AssetInfo{
+		AssetKey: "mvc-ft:" + customCodehash + ":" + customGenesis,
+		Chain:    "mvc",
+		Standard: "metacontract-ft",
+		Codehash: &customCodehash,
+		Genesis:  &customGenesis,
+	}
+
+	aliveRes := verifier.CheckListingUTXO(context.Background(), &SellListingRecord{
+		Asset:         baseAsset,
+		Lot:           &LotInfo{UtxoOutpoint: aliveTx + ":0"},
+		SellerAddress: sellerAddr,
+		Rails:         &SellRails{Me: &MeRail{AmountMilli: 1000}},
+	})
+	if !aliveRes.Checked || !aliveRes.Alive {
+		t.Fatalf("expected wallet UTXO alive via MVC OpenAPI, got %+v", aliveRes)
+	}
+
+	spentRes := verifier.CheckListingUTXO(context.Background(), &SellListingRecord{
+		Asset:         baseAsset,
+		Lot:           &LotInfo{UtxoOutpoint: spentTx + ":0"},
+		SellerAddress: sellerAddr,
+		Rails:         &SellRails{Me: &MeRail{AmountMilli: 1000}},
+	})
+	if !spentRes.Checked || spentRes.Alive || spentRes.Reason != "utxo_spent" {
+		t.Fatalf("expected wallet UTXO spent via MVC OpenAPI, got %+v", spentRes)
+	}
+
+	// Contract rail without ContractAddress degrades safely (Checked:false, Alive:true).
+	contractNoAddr := verifier.CheckListingUTXO(context.Background(), &SellListingRecord{
+		Asset:         baseAsset,
+		Lot:           &LotInfo{UtxoOutpoint: spentTx + ":0"},
+		SellerAddress: sellerAddr,
+		Rails:         &SellRails{MvcTokenSell: &MvcTokenSellRail{SellTxid: spentTx, PriceSats: 1000}},
+	})
+	if contractNoAddr.Checked || !contractNoAddr.Alive {
+		t.Fatalf("expected contract rail without contractAddress to degrade safely, got %+v", contractNoAddr)
+	}
+
+	// Contract rail WITH ContractAddress verifies against contract address UTXOs.
+	contractWithAddr := verifier.CheckListingUTXO(context.Background(), &SellListingRecord{
+		Asset:         baseAsset,
+		Lot:           &LotInfo{UtxoOutpoint: aliveTx + ":2"},
+		SellerAddress: sellerAddr,
+		Rails: &SellRails{MvcTokenSell: &MvcTokenSellRail{
+			SellTxid:        aliveTx,
+			PriceSats:       1000,
+			ContractAddress: contractAddr,
+		}},
+	})
+	if !contractWithAddr.Checked || !contractWithAddr.Alive {
+		t.Fatalf("expected contract rail with contractAddress alive, got %+v", contractWithAddr)
+	}
+
+	// 2. Metadata & dynamic sensibleId resolution when HigunBaseURL == "".
+	metaProv := NewUpstreamTokenMetadataProvider("", "", srv.Client()).WithFallbackURLs(srv.URL, "")
+	agg, _ := newTestAggregator(t)
+	now := int64(1798000500)
+	agg.nowFn = func() int64 { return now }
+	agg.SetUTXOVerifier(verifier)
+	agg.SetTokenMetadataProvider(metaProv)
+
+	// Ingest a custom MVC FT pin that supplies only the 72-hex sensibleId; HandleBlockPin
+	// must dynamically resolve it via /contract/ft/summary BEFORE acquiring a.mu!
+	customPin := makeSellPin(testPinId("custsens", 0), 500, now, "mvc", map[string]any{
+		"active":     true,
+		"listingKey": "mvc-ft:" + customCodehash + ":" + customSensible + ":" + aliveTx + ":0",
+		"asset": map[string]any{
+			"assetKey":  "mvc-ft:" + customCodehash + ":" + customSensible,
+			"chain":     "mvc",
+			"standard":  "mvc-ft",
+			"codehash":  customCodehash,
+			"genesis":   customSensible,
+			"symbol":    "CUST",
+			"tokenName": "Custom FT",
+			"decimals":  8,
+		},
+		"lot": map[string]any{
+			"amountBase":    "100000000",
+			"amountDisplay": "1",
+			"utxoOutpoint":  aliveTx + ":0",
+		},
+		"sellerAddress": sellerAddr,
+		"rails": map[string]any{
+			"me": map[string]any{"amountMilli": 5000, "autoFulfill": true},
+		},
+	})
+	if _, err := agg.HandleBlockPin(customPin); err != nil {
+		t.Fatalf("HandleBlockPin customPin: %v", err)
+	}
+
+	r := setupRouter(agg)
+	var sumResp struct {
+		Code int                `json:"code"`
+		Data TokenMarketSummary `json:"data"`
+	}
+	canonCustomKey := "mvc-ft:" + customCodehash + ":" + customGenesis
+	httpCode := doJSONGet(t, r, "/api/ft/market/token/"+url.PathEscape(canonCustomKey)+"/summary", &sumResp)
+	if httpCode != http.StatusOK || sumResp.Code != 0 {
+		t.Fatalf("expected canonical 40-hex summary 200 code=0, got http=%d code=%d", httpCode, sumResp.Code)
+	}
+	if sumResp.Data.HolderCount != 857 || sumResp.Data.ListedLotCount != 1 {
+		t.Fatalf("expected holderCount=857 and listedLotCount=1, got %+v", sumResp.Data)
+	}
+	if sumResp.Data.Asset.SensibleId == nil || *sumResp.Data.Asset.SensibleId != customSensible {
+		t.Fatalf("expected sensibleId=%s, got %v", customSensible, sumResp.Data.Asset.SensibleId)
+	}
+}

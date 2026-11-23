@@ -292,18 +292,28 @@ func main() {
 				}
 				ftmarketAgg.SetProfileReader(&ftmarketProfileAdapter{ui: userinfoAgg})
 				higunURL := strings.TrimSpace(cfg.FtMarket.HigunBaseURL)
+				mvcOpenURL := strings.TrimSpace(cfg.FtMarket.MvcOpenAPIBaseURL)
 				manURL := strings.TrimSpace(cfg.FtMarket.ManBaseURL)
 				if manURL == "" {
 					manURL = strings.TrimSpace(cfg.Mrc721.Nft.MANAPIBaseURL)
 				}
-				if higunURL != "" || manURL != "" {
-					ftmarketAgg.SetUTXOVerifier(ftmarket.NewUpstreamUTXOVerifier(higunURL, manURL, nil))
-					ftmarketAgg.SetTokenMetadataProvider(ftmarket.NewUpstreamTokenMetadataProvider(higunURL, manURL, nil))
+				mmURL := strings.TrimSpace(cfg.FtMarket.MetaidMarketBaseURL)
+				if higunURL != "" || mvcOpenURL != "" || manURL != "" {
+					ftmarketAgg.SetUTXOVerifier(
+						ftmarket.NewUpstreamUTXOVerifier(higunURL, manURL, nil).
+							WithMvcOpenAPIBaseURL(mvcOpenURL),
+					)
 				}
-				if mmURL := strings.TrimSpace(cfg.FtMarket.MetaidMarketBaseURL); mmURL != "" {
+				if higunURL != "" || mvcOpenURL != "" || manURL != "" || mmURL != "" {
+					ftmarketAgg.SetTokenMetadataProvider(
+						ftmarket.NewUpstreamTokenMetadataProvider(higunURL, manURL, nil).
+							WithFallbackURLs(mvcOpenURL, mmURL),
+					)
+				}
+				if mmURL != "" {
 					ftmarketAgg.SetBtcFloorProvider(ftmarket.NewMetaidMarketFloorProvider(mmURL, nil))
 				}
-				if cfg.FtMarket.UTXOSweepInterval > 0 && (higunURL != "" || manURL != "") {
+				if cfg.FtMarket.UTXOSweepInterval > 0 && (higunURL != "" || mvcOpenURL != "" || manURL != "") {
 					ftSweepStop := make(chan struct{})
 					defer close(ftSweepStop)
 					ftmarketAgg.StartUTXOSweeper(cfg.FtMarket.UTXOSweepInterval, ftSweepStop)
